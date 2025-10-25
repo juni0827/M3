@@ -223,6 +223,14 @@ class Scope:
     glitch: GlitchEncoder = field(default_factory=lambda: GlitchEncoder((768, 1024), True))
     def encode(self, frame: np.ndarray, drivers: Optional[Dict[str, float]] = None):
         retina = self.retina(frame)
+        if retina.ndim == 3:
+            if retina.shape[2] >= 3:
+                # Convert RGB(A) inputs to luminance preserving 0-1 range.
+                coeffs = np.array([0.2989, 0.5870, 0.1140], dtype=np.float32)
+                retina = np.tensordot(retina[..., :3], coeffs, axes=([-1], [0]))
+            else:
+                retina = retina.mean(axis=-1)
+        retina = np.asarray(retina, dtype=np.float32)
         # fixed bug: use correct slicing for block_mag; compute features
         H, W = retina.shape
         gy, gx = np.gradient(retina)
