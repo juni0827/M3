@@ -14,6 +14,8 @@ import tqdm
 from numpy.random import default_rng, SeedSequence
 import cv2
 
+from transition_store import UnifiedTransitionStore
+
 class RNGRegistry:
     def __init__(self, root_seed: int | None):
         self.root_seed = int(root_seed) if root_seed is not None else None
@@ -32,240 +34,11 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
-class CauseEffectStructure:
-
-    def __init__(self, n_elements: int, history_length: int=20):
-        self.n_elements = n_elements
-        self.history_length = history_length
-        self.state_history: deque = deque(maxlen=history_length)
-        self.causal_graph = np.zeros((n_elements, n_elements))
-        self.causal_strength_history: deque = deque(maxlen=100)
-        self.cpt: Dict[int, Dict[tuple, float]] = {i: {} for i in range(n_elements)}
-        self.cpt_counts: Dict[int, Dict[tuple, List[int]]] = {i: {} for i in range(n_elements)}
-        self.transition_counts = np.zeros((2 ** n_elements, 2 ** n_elements))
-        self.tpm = None
-        self.tpm_confidence = 0.0
-        self.structural_coherence = 0.5
-        self.tpm_stability = 0.5
-        self.causal_density = 0.0
-
-    def update(self, state: np.ndarray):
-        if len(state) != self.n_elements:
-            self._resize_structures(len(state))
-        if len(state) == 0:
-            return
-        median = np.median(state)
-        binary_state = (state > median).astype(int)
-        state_idx = self._state_to_index(binary_state)
-        max_state_idx = 2 ** self.n_elements - 1
-        if state_idx > max_state_idx:
-            print(f'ERROR: State index {state_idx} exceeds max {max_state_idx}')
-            return
-        if len(self.state_history) > 0:
-            prev_state = self.state_history[-1]
-            if len(prev_state) == len(binary_state):
-                prev_idx = self._state_to_index(prev_state)
-                if prev_idx <= max_state_idx and state_idx <= max_state_idx:
-                    self.transition_counts[prev_idx, state_idx] += 1
-                    self._update_causal_graph(prev_state, binary_state)
-                    self._update_cpt(prev_state, binary_state)
-        self.state_history.append(binary_state)
-        if len(self.state_history) >= 5:
-            self._update_tpm()
-            self._update_structural_metrics()
-
-    def _resize_structures(self, new_size: int):
-        if new_size == self.n_elements:
-            return
-        old_size = self.n_elements
-        self.n_elements = new_size
-        old_graph = self.causal_graph.copy()
-        self.causal_graph = np.zeros((new_size, new_size))
-        min_size = min(old_size, new_size)
-        if min_size > 0:
-            self.causal_graph[:min_size, :min_size] = old_graph[:min_size, :min_size]
-        old_cpt = self.cpt.copy()
-        old_cpt_counts = self.cpt_counts.copy()
-        self.cpt = {i: {} for i in range(new_size)}
-        self.cpt_counts = {i: {} for i in range(new_size)}
-        for i in range(min_size):
-            if i in old_cpt:
-                self.cpt[i] = old_cpt[i]
-            if i in old_cpt_counts:
-                self.cpt_counts[i] = old_cpt_counts[i]
-        new_max_states = 2 ** new_size
-        old_transition_counts = self.transition_counts.copy()
-        self.transition_counts = np.zeros((new_max_states, new_max_states))
-        if old_size <= new_size:
-            old_max_states = 2 ** old_size
-            self.transition_counts[:old_max_states, :old_max_states] = old_transition_counts
-        self.tpm = None
-        self.tpm_confidence = 0.0
-
-    def _update_causal_graph(self, prev_state: np.ndarray, current_state: np.ndarray):
-        for i in range(self.n_elements):
-            for j in range(self.n_elements):
-                if i == j:
-                    continue
-                if prev_state[i] == 1:
-                    if current_state[j] == 1:
-                        self.causal_graph[i, j] += 0.1
-                    else:
-                        self.causal_graph[i, j] -= 0.05
-                self.causal_graph[i, j] *= 0.98
-                self.causal_graph[i, j] = np.clip(self.causal_graph[i, j], -2.0, 2.0)
-        total_strength = np.sum(np.abs(self.causal_graph))
-        self.causal_strength_history.append(total_strength)
-
-
-    def _update_cpt(self, prev_state: np.ndarray, current_state: np.ndarray):
-        for i in range(self.n_elements):
-            parents = []
-            for j in range(self.n_elements):
-                if j != i and abs(self.causal_graph[j, i]) > 0.3:
-                    parents.append(j)
-            if not parents:
-                parents = [idx for idx in range(self.n_elements) if idx != i]
-            parent_state = tuple(prev_state[parents].tolist())
-            if parent_state not in self.cpt_counts[i]:
-                self.cpt_counts[i][parent_state] = [0, 0]
-            if current_state[i] == 1:
-                self.cpt_counts[i][parent_state][1] += 1
-            else:
-                self.cpt_counts[i][parent_state][0] += 1
-            counts = self.cpt_counts[i][parent_state]
-            total = counts[0] + counts[1]
-            if total > 0:
-                self.cpt[i][parent_state] = counts[1] / total
-
-    def _state_to_index(self, binary_state: np.ndarray) -> int:
-        state = binary_state[:self.n_elements] if len(binary_state) > self.n_elements else binary_state
-        if len(state) < self.n_elements:
-            padded_state = np.zeros(self.n_elements)
-            padded_state[:len(state)] = state
-            state = padded_state
-        index = int(np.dot(state, 2 ** np.arange(len(state))[::-1]))
-        max_index = 2 ** self.n_elements - 1
-        return min(index, max_index)
-
-    def _index_to_state(self, index: Union[int, np.integer]) -> np.ndarray:
-        max_index = 2 ** self.n_elements - 1
-        safe_index = min(max(index, 0), max_index)
-        binary_str = format(safe_index, f'0{self.n_elements}b')
-        return np.array([int(b) for b in binary_str])
-
-    def _update_tpm(self):
-        row_sums = self.transition_counts.sum(axis=1, keepdims=True)
-        observed_rows = row_sums.flatten() > 0
-        self.tpm = np.zeros_like(self.transition_counts)
-        self.tpm[observed_rows] = self.transition_counts[observed_rows] / row_sums[observed_rows]
-        unobserved_rows = ~observed_rows
-        if np.any(unobserved_rows):
-            for i in np.where(unobserved_rows)[0]:
-                current_state = self._index_to_state(i)
-                predicted_probs = self._predict_from_cpt(current_state)
-                if predicted_probs is not None:
-                    self.tpm[i, :] = predicted_probs
-                else:
-                    self.tpm[i, :] = 1.0 / 2 ** self.n_elements
-        total_states = 2 ** self.n_elements
-        observed_count = np.sum(observed_rows)
-        self.tpm_confidence = observed_count / total_states
-
-    def _predict_from_cpt(self, current_state: np.ndarray) -> Optional[np.ndarray]:
-        element_probs = []
-        for i in range(self.n_elements):
-            parents = []
-            for j in range(self.n_elements):
-                if j != i and abs(self.causal_graph[j, i]) > 0.3:
-                    parents.append(j)
-            if not parents:
-                parents = [idx for idx in range(self.n_elements) if idx != i]
-            parent_state = tuple(current_state[parents].tolist())
-            if parent_state in self.cpt[i]:
-                prob_1 = self.cpt[i][parent_state]
-            else:
-                prob_1 = 0.5
-            element_probs.append(prob_1)
-        state_probs = np.zeros(2 ** self.n_elements)
-        for state_idx in range(2 ** self.n_elements):
-            next_state = self._index_to_state(state_idx)
-            prob = 1.0
-            for i, val in enumerate(next_state):
-                if val == 1:
-                    prob *= element_probs[i]
-                else:
-                    prob *= 1 - element_probs[i]
-            state_probs[state_idx] = prob
-        total_prob = state_probs.sum()
-        if total_prob > 0:
-            return state_probs / total_prob
-        else:
-            return None
-
-    def _update_structural_metrics(self):
-        significant_edges = np.sum(np.abs(self.causal_graph) > 0.5)
-        total_edges = self.n_elements * (self.n_elements - 1)
-        self.causal_density = significant_edges / max(total_edges, 1)
-        if len(self.causal_strength_history) >= 10:
-            recent = list(self.causal_strength_history)[-10:]
-            stability = 1.0 - min(1.0, np.std(recent) / (np.mean(recent) + 1e-10))
-            self.tpm_stability = stability
-        if self.tpm is not None:
-            coherence_scores = []
-            for i in range(min(10, 2 ** self.n_elements)):
-                state = self._index_to_state(i)
-                state_idx = i
-                expected_activity = self.causal_graph @ state
-                actual_probs = self.tpm[state_idx, :]
-                if actual_probs.sum() > 0:
-                    most_likely_next = self._index_to_state(np.argmax(actual_probs))
-                    coherence = 1.0 - np.mean(np.abs((expected_activity > 0).astype(float) - most_likely_next))
-                    coherence_scores.append(coherence)
-            if coherence_scores:
-                self.structural_coherence = np.mean(coherence_scores)
-
-    def get_cause_repertoire(self, current_state: np.ndarray) -> np.ndarray:
-        if self.tpm is None:
-            return np.ones(2 ** self.n_elements) / 2 ** self.n_elements
-        current_idx = self._state_to_index(current_state)
-        likelihood = self.tpm[:, current_idx]
-        if len(self.state_history) >= 20:
-            state_counts = np.zeros(2 ** self.n_elements)
-            for past_state in self.state_history:
-                past_idx = self._state_to_index(past_state)
-                state_counts[past_idx] += 1
-            prior = state_counts / state_counts.sum()
-        else:
-            prior = np.ones(2 ** self.n_elements) / 2 ** self.n_elements
-        posterior = likelihood * prior
-        posterior_sum = posterior.sum()
-        if posterior_sum > 1e-10:
-            cause_rep = posterior / posterior_sum
-        else:
-            cause_rep = prior
-        return cause_rep
-
-    def get_effect_repertoire(self, current_state: np.ndarray) -> np.ndarray:
-        if self.tpm is None:
-            return np.ones(2 ** self.n_elements) / 2 ** self.n_elements
-        current_idx = self._state_to_index(current_state)
-        effect_rep = self.tpm[current_idx, :].copy()
-        effect_sum = effect_rep.sum()
-        if effect_sum > 1e-10:
-            effect_rep = effect_rep / effect_sum
-        else:
-            effect_rep = np.ones(2 ** self.n_elements) / 2 ** self.n_elements
-        return effect_rep
-
-    def get_structural_health(self) -> Dict[str, float]:
-        return {'structural_coherence': float(self.structural_coherence), 'tpm_stability': float(self.tpm_stability), 'causal_density': float(self.causal_density), 'tpm_confidence': float(self.tpm_confidence), 'overall_health': float(np.mean([float(self.structural_coherence), float(self.tpm_stability), float(self.causal_density * 0.5), float(self.tpm_confidence)]))}
-
 class IITPhiCalculator:
 
     def __init__(self, n_elements: int):
         self.n_elements = n_elements
-        self.ces = CauseEffectStructure(n_elements)
+        self.ces = UnifiedTransitionStore(n_elements)
         self.current_mip = None
         self.mip_history: deque = deque(maxlen=50)
         self.phi_history: deque = deque(maxlen=100)
@@ -305,7 +78,7 @@ class IITPhiCalculator:
     def compute_phi(self, cause_repertoire: Optional[np.ndarray]=None, effect_repertoire: Optional[np.ndarray]=None, state: Optional[np.ndarray]=None, method: str='integrated') -> float:
         if method == 'integrated' and state is not None:
             self.update_state(state)
-            if self.ces.tpm is None:
+            if not self.ces.has_effect_model():
                 method = 'simple'
             else:
                 binary_state = (state > np.median(state)).astype(int)
@@ -361,8 +134,8 @@ class IITPhiCalculator:
         if state_key in self.mics_cache:
             return {'phi': self.mics_cache[state_key], 'cached': True}
         self.update_state(state)
-        if self.ces.tpm is None:
-            return {'phi': 0.0, 'error': 'No TPM available'}
+        if not self.ces.has_effect_model():
+            return {'phi': 0.0, 'error': 'No transition model available'}
         binary_state = (state > np.median(state)).astype(int)
         cause_rep = self.ces.get_cause_repertoire(binary_state)
         effect_rep = self.ces.get_effect_repertoire(binary_state)
@@ -664,9 +437,9 @@ class IITPhiCalculator:
                 for j in subset1:
                     if i < self.n_elements and j < self.n_elements:
                         cross_causal_loss += abs(self.ces.causal_graph[i, j])
-    partitioned_info = subset1_entropy + subset2_entropy - cross_causal_loss * 0.5
-    # ensure we return a plain python float for precise typing
-    return float(max(0.0, float(partitioned_info)))
+        partitioned_info = subset1_entropy + subset2_entropy - cross_causal_loss * 0.5
+        # ensure we return a plain python float for precise typing
+        return float(max(0.0, float(partitioned_info)))
 
     def _compute_partition_loss(self, cause_rep: np.ndarray, effect_rep: np.ndarray, subset1: set, subset2: set) -> float:
         full_entropy = self._repertoire_entropy(cause_rep) + self._repertoire_entropy(effect_rep)
