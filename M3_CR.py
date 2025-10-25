@@ -5078,9 +5078,6 @@ class M3ConsciousnessCore:
         if hasattr(self, 'long_term_planner') and self.long_term_planner.current_goal is None:
             initial_goal = self.long_term_planner.create_goal(description='Achieve Basic Consciousness', mode=PlanningMode.EXPLORATION, success_criteria={'phi': 0.1, 'consciousness': 0.3, 'growth_rate': 0.01, 'memory_count': 10}, max_duration=10000.0)
             self.t = 0
-        self.world_state = self._get_current_world_state()
-        if hasattr(self, 'long_term_planner') and self.long_term_planner.current_goal is None:
-            initial_goal = self.long_term_planner.create_goal(description='Achieve Basic Consciousness', mode=PlanningMode.EXPLORATION, success_criteria={'phi': 0.1, 'consciousness': 0.3, 'growth_rate': 0.01, 'memory_count': 10}, max_duration=10000.0)
 
     def _get_current_world_state(self) -> Dict[str, Union[int, float, bool]]:
         if len(self.P_obs_history) > 0:
