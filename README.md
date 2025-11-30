@@ -145,7 +145,7 @@ print_config_summary()
 | `LLM_ADAPTER_DEBUG` | Enable debug logging | `0` |
 | `LLM_AUTONOMY` | Enable autonomy loop | `0` |
 | `LLM_ADAPTER_KNN_TAU` | kNN temperature | `0.07` |
-| `LLM_ADAPTER_KNN_CAP` | kNN max items | `500000000` |
+| `LLM_ADAPTER_KNN_CAP` | kNN max items (500M default for large-scale memory) | `500000000` |
 
 ### License
 
@@ -294,7 +294,7 @@ print_config_summary()
 | `LLM_ADAPTER_DEBUG` | 디버그 로깅 활성화 | `0` |
 | `LLM_AUTONOMY` | 자율 루프 활성화 | `0` |
 | `LLM_ADAPTER_KNN_TAU` | kNN 온도 | `0.07` |
-| `LLM_ADAPTER_KNN_CAP` | kNN 최대 항목 수 | `500000000` |
+| `LLM_ADAPTER_KNN_CAP` | kNN 최대 항목 수 (대규모 메모리용 5억 기본값) | `500000000` |
 
 ### 아키텍처 다이어그램
 
