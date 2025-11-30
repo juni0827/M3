@@ -1,0 +1,282 @@
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
+
+import numpy as np
+
+from llm_adapter.config import KNNIndexConfig, M3EpisodicMemoryConfig, get_global_config
+
+logger = logging.getLogger('llm_adapter')
+
+
+class M3EpisodicMemoryRetriever:
+    """
+    M3-aware episodic memory retrieval.
+
+    - similarity: core.episodic_memory.entropy * engagement
+    - top_k: episodic_memory.size / divisor (config.top_k_divisor)
+    -  m3_param: (config.m3_param)
+    """
+    def __init__(self, config: Optional[M3EpisodicMemoryConfig] = None):
+        self.config = config or get_global_config().episodic_memory
+
+    def _compute_similarity_scores(self, episodes, current_embedding: np.ndarray):
+        """
+        Compute similarity scores between the current embedding and episodic memory episodes.
+
+        Args:
+            episodes: core.episodic_memory.episodes
+            current_embedding: (D,) current context embedding from FeatureBank
+        Returns:
+            List[(episode, similarity_score)]
+        """
+        scored_episodes = []
+
+        # Normalize current embedding
+        current_norm = current_embedding / (np.linalg.norm(current_embedding) + 1e-8)
+
+        for episode in episodes:
+            try:
+                # Episode embedding  (core.episodic_memory.episodes[i].embedding)
+                if hasattr(episode, 'embedding'):
+                    episode_emb = episode.embedding
+                elif hasattr(episode, 'qualia_state'):
+                    # qualia_state: arousal, valence, entropy, engagement, frustration
+                    episode_emb = np.array([
+                        getattr(episode.qualia_state, 'arousal', 0.0),
+                        getattr(episode.qualia_state, 'valence', 0.0),
+                        getattr(episode.qualia_state, 'entropy', 0.0),
+                        getattr(episode.qualia_state, 'engagement', 0.0),
+                        getattr(episode.qualia_state, 'frustration', 0.0)
+                    ])
+                else:
+                    continue
+
+                # Cosine similarity
+                episode_norm = episode_emb / (np.linalg.norm(episode_emb) + 1e-8)
+                similarity = float(np.dot(current_norm, episode_norm))
+
+                scored_episodes.append((episode, similarity))
+            except Exception as e:
+                logger.debug(f"Exception occurred: {e}")
+                continue
+
+        return scored_episodes
+
+    def _infer_top_k(self, core) -> int:
+        """
+        Infer top_k for episodic memory retrieval.
+
+        : memory_size / divisor (config.top_k_divisor)
+        """
+        try:
+            if hasattr(core, 'episodic_memory') and hasattr(core.episodic_memory, 'episodes'):
+                mem_size = len(core.episodic_memory.episodes)
+                top_k = max(
+                    self.config.top_k_min,
+                    min(self.config.top_k_max, mem_size // self.config.memory_size_divisor)
+                )
+                return top_k
+        except Exception as e:
+            logger.debug(f"Exception occurred: {e}")
+        return self.config.top_k_default  # Fallback: reasonable default
+
+    def retrieve_relevant_episodes(self, core, current_context_embedding: np.ndarray):
+        """
+        Retrieve relevant episodes from episodic memory.
+
+        Filtering criteria:
+        - similarity > (1.0 - entropy) * engagement
+        - (1.0 - entropy) + (0.5 * engagement) > similarity
+        - (0.5 * entropy) + (0.5 * engagement) > similarity
+
+        Args:
+            core: M3ConsciousnessCore
+            current_context_embedding: (D,) context embedding from FeatureBank
+
+        Returns:
+            List of similar episodes (sorted by similarity, top_k)
+        """
+        if core is None or not hasattr(core, 'episodic_memory'):
+            return []
+
+        try:
+            # 1. Compute all similarity scores
+            if not hasattr(core.episodic_memory, 'episodes'):
+                return []
+
+            scored_episodes = self._compute_similarity_scores(
+                core.episodic_memory.episodes,
+                current_context_embedding
+            )
+
+            if not scored_episodes:
+                return []
+
+            # 2. Dynamic filtering: similarity > (1 - entropy) * engagement
+            entropy = getattr(core.qualia, 'entropy', 0.5)
+            engagement = getattr(core.qualia, 'engagement', 0.5)
+
+            # Adaptive similarity cutoff (NO MAGIC NUMBER)
+
+            min_similarity = (1.0 - entropy) * engagement
+
+            # Filter episodes
+            filtered = [
+                (ep, score) for ep, score in scored_episodes
+                if score > min_similarity
+            ]
+
+            # 3. Sort by similarity (descending)
+            filtered.sort(key=lambda x: x[1], reverse=True)
+
+            # 4. Take top_k
+            top_k = self._infer_top_k(core)
+            top_episodes = [ep for ep, _ in filtered[:top_k]]
+
+            return top_episodes
+
+        except Exception:
+            return []
+
+
+# === kNN-LM: Conditional Index ===
+@dataclass
+class KNNItem:
+    key: np.ndarray        # (Kdim,)
+    value: np.ndarray      # (Vocab,)  softmaxed next-token distribution
+
+
+class ConditionalKNNIndex:
+    """Simple cosine + temperature scaled kNN index with conditional keys.
+
+    Features:
+    - LRU eviction when max_items exceeded
+    - Periodic downsampling for memory control
+    - Logging of KDIM, TAU, and other parameters
+    - All parameters configurable via KNNIndexConfig
+    """
+    def __init__(self, config: Optional[KNNIndexConfig] = None):
+        cfg = config or get_global_config().knn_index
+        self.tau = float(cfg.tau)
+        self.max_items = int(cfg.max_items)
+        self.key_dim = int(cfg.key_dim)
+        self._keys = []     # List[np.ndarray]
+        self._vals = []     # List[np.ndarray]
+        self._access_counts = []  # LRU tracking
+        self._total_queries = 0
+        self._last_downsample_size = 0
+
+        # Log configuration
+        logger = logging.getLogger('llm_adapter.knn')
+        logger.info(f'ConditionalKNNIndex initialized: KDIM={self.key_dim}, tau={self.tau}, max_items={self.max_items}')
+
+    def _norm(self, x: np.ndarray) -> np.ndarray:
+        x = x.astype(np.float32, copy=False)
+        n = np.linalg.norm(x) + 1e-8
+        return x / n
+
+    def _softmax(self, x: np.ndarray, T: float = 1.0) -> np.ndarray:
+        z = (x / (T + 1e-8)) - np.max(x)
+        e = np.exp(z)
+        return e / (np.sum(e) + 1e-8)
+
+    def add(self, key: np.ndarray, value_logits: np.ndarray):
+        """key: (Kdim,), value_logits: (V,) raw logits for next token at teacher-forcing."""
+        if key.ndim != 1:
+            key = key.reshape(-1)
+        k = self._norm(key)
+        p = self._softmax(value_logits)  # store as prob dist
+        self._keys.append(k)
+        self._vals.append(p.astype(np.float32))
+        self._access_counts.append(0)
+
+        # Cap enforcement with LRU eviction
+        if len(self._keys) > self.max_items:
+            evict_idx = int(np.argmin(self._access_counts))
+            del self._keys[evict_idx]
+            del self._vals[evict_idx]
+            del self._access_counts[evict_idx]
+
+        # Periodic downsampling: every 10k items, downsample by 50%
+        downsample_interval = int(os.getenv('KNN_DOWNSAMPLE_INTERVAL', '10000'))
+        if len(self._keys) > self._last_downsample_size + downsample_interval:
+            self._downsample()
+
+    def _downsample(self):
+        """Hybrid downsample: keep ~75% (hot + random) to preserve diversity."""
+        if len(self._keys) < 100:
+            return
+
+        n = len(self._keys)
+
+        # Keep fraction (default 0.75); override via env KNN_DOWNSAMPLE_KEEP_FRACTION
+        try:
+            keep_frac = float(os.getenv('KNN_DOWNSAMPLE_KEEP_FRACTION', '0.75'))
+        except Exception:
+            keep_frac = 0.75
+        keep_frac = min(max(keep_frac, 0.0), 1.0)
+        keep_n = max(1, int(n * keep_frac))
+
+        # Split kept set into hot(top by access) and random remainder
+        access = np.asarray(self._access_counts, dtype=np.int64)
+        order = np.argsort(access)
+        top_n = max(1, int(keep_n * 0.5))
+        top_idx = order[-top_n:]
+
+        # Candidates excluding top
+        mask = np.ones(n, dtype=bool)
+        mask[top_idx] = False
+        rest_idx = np.nonzero(mask)[0]
+        rnd_n = max(0, keep_n - top_n)
+        if rnd_n > 0 and rest_idx.size > 0:
+            choose_n = min(rnd_n, rest_idx.size)
+            rnd_pick = np.random.choice(rest_idx, size=choose_n, replace=False)
+            sel_idx = np.concatenate([top_idx, rnd_pick])
+        else:
+            sel_idx = top_idx
+
+        sel_idx = sel_idx.tolist()
+        self._keys = [self._keys[i] for i in sel_idx]
+        self._vals = [self._vals[i] for i in sel_idx]
+        self._access_counts = [self._access_counts[i] for i in sel_idx]
+
+        # Move the trigger baseline forward by interval to reduce oscillation
+        try:
+            downsample_interval = int(os.getenv('KNN_DOWNSAMPLE_INTERVAL', '10000'))
+        except Exception:
+            downsample_interval = 10000
+        self._last_downsample_size += max(1, downsample_interval)
+
+        logger = logging.getLogger('llm_adapter.knn')
+        kept = len(self._keys)
+        logger.info(f'kNN downsampled: {n} -> {kept} items (top={min(top_n, kept)}, rand={max(0, kept - min(top_n, kept))})')
+
+    def query(self, qkey: np.ndarray, k: int = 8) -> np.ndarray | None:
+        if not self._keys:
+            return None
+
+        self._total_queries += 1
+        q = self._norm(qkey.reshape(-1))
+
+        # cosine similarities
+        sims = np.array([float(np.dot(q, kk)) for kk in self._keys], dtype=np.float32)
+        idx = np.argsort(-sims)[:max(1, int(k))]
+        top = sims[idx]
+
+        # Update access counts for LRU
+        for i in idx:
+            self._access_counts[i] += 1
+
+        w = self._softmax(top / (self.tau + 1e-8))
+        P = np.stack([self._vals[i] for i in idx], axis=0)  # (k, V)
+
+        # Log usage stats every 1000 queries
+        if self._total_queries % 1000 == 0:
+            logger = logging.getLogger('llm_adapter.knn')
+            logger.debug(f'kNN stats: queries={self._total_queries}, items={len(self._keys)}, tau={self.tau:.4f}')
+
+        return (w[:, None] * P).sum(axis=0)  # (V,)
