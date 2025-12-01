@@ -3,7 +3,7 @@
 import argparse, os, time, math, json
 import re
 import os as _os
-from m3.config import QUALIA_CFG, QUALIA_LOG_PATH, _CESConfig
+from m3.config import QUALIA_CFG, QUALIA_LOG_PATH, CESConfig, _CESConfig
 from m3.features import HebbianMemory, FeatureSpec, pack_learned_proj, pack_scalar, pack_spatial_pool, pack_stats_sample, Scope
 from m3.visualization import FeatureSummarizer, GlitchEncoder, Retinizer, hilbert_index_to_xy, vector_to_grid
 
