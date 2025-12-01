@@ -320,17 +320,18 @@ def _load_from_env(prefix: str, config_class: type) -> Dict[str, Any]:
 
         if env_val is not None:
             try:
-                # Get the actual type (handle string annotations from __future__.annotations)
+                # Get the type as a string for comparison
+                # (handles both actual types and string annotations from __future__.annotations)
                 field_type = field_info.type
-                if isinstance(field_type, str):
-                    field_type = field_type.lower()
+                type_name = field_type.__name__ if hasattr(field_type, '__name__') else str(field_type)
+                type_name = type_name.lower()
 
                 # Type conversion based on field type
-                if field_type in (bool, 'bool'):
+                if type_name == 'bool':
                     result[field_info.name] = env_val.lower() in ('true', '1', 'yes', 'on')
-                elif field_type in (int, 'int'):
+                elif type_name == 'int':
                     result[field_info.name] = int(env_val)
-                elif field_type in (float, 'float'):
+                elif type_name == 'float':
                     result[field_info.name] = float(env_val)
                 else:
                     result[field_info.name] = env_val
