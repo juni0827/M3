@@ -1,0 +1,123 @@
+2025-11-08 03:16:49,692 ERROR llm_adapter: Failed to attach LLM adapter to core
+Traceback (most recent call last):
+  File "c:\Users\조승준\OneDrive\바탕 화면\M3-main\llm_adapter.py", line 3373, in attach_llm_to_core
+    adapter = TorchConversationalPolicy(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: TorchConversationalPolicy.__init__() got an unexpected keyword argument 'embed_dim'
+2025-11-08 03:16:49,693 ERROR llm_adapter: Failed to attach LLM adapter to core
+Traceback (most recent call last):
+  File "c:\Users\조승준\OneDrive\바탕 화면\M3-main\llm_adapter.py", line 3373, in attach_llm_to_core
+    adapter = TorchConversationalPolicy(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: TorchConversationalPolicy.__init__() got an unexpected keyword argument 'embed_dim'
+2025-11-08 03:57:51,959 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 03:57:51,960 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 03:57:51,960 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 03:57:51,961 INFO llm_adapter: Autonomy loop started (LLM_AUTONOMY enabled)
+2025-11-08 03:57:51,962 INFO llm_adapter: Starting synchronous train_all_from_data_set (LLM_AUTO_TRAIN enabled)
+2025-11-08 04:09:37,562 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:09:37,562 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:09:37,562 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:09:37,594 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:09:37,594 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:09:37,594 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:09:37,595 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:13:13,243 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:13:13,243 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:13:13,243 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:13:13,275 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:13:13,275 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:13:13,276 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:13:13,276 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:14:22,494 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:14:22,494 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:14:22,495 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:14:22,528 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:14:22,528 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:14:22,529 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:14:22,529 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:16:52,965 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:16:52,965 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:16:52,965 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:16:52,995 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:16:52,995 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:16:52,996 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:16:52,996 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:19:09,616 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:19:09,616 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:19:09,617 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:19:51,760 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:19:51,761 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:19:51,761 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:20:17,291 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:20:17,292 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:20:17,292 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:20:52,130 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:20:52,130 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:20:52,132 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:23:19,687 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:23:19,687 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:23:19,688 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:27:55,740 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:27:55,741 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:27:55,741 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:27:55,772 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:27:55,774 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:27:55,775 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:27:55,775 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:29:25,721 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:29:25,722 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:29:25,722 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:29:25,751 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:29:25,751 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:29:25,752 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:29:25,752 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:34:47,320 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:34:47,321 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:34:47,321 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:34:47,351 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:34:47,352 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:34:47,352 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:34:47,352 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:38:42,175 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:38:42,175 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:38:42,176 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:38:42,207 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:38:42,208 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:38:42,208 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:38:42,209 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:39:16,107 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:39:16,107 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:39:16,107 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:39:16,138 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:39:16,139 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:39:16,139 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:39:16,139 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:53:31,778 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:53:31,779 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:53:31,779 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:53:31,811 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:53:31,811 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:53:31,812 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:53:31,812 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:57:06,280 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:57:06,280 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:57:06,280 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:57:06,313 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:57:06,314 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:57:06,314 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:57:06,314 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:57:59,461 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:57:59,461 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:57:59,461 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:57:59,493 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:57:59,493 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:57:59,494 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:57:59,494 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:58:48,902 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:58:48,903 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:58:48,903 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2025-11-08 04:58:48,935 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2025-11-08 04:58:48,935 INFO llm_adapter: Created LLM adapter with device=cpu
+2025-11-08 04:58:48,935 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2025-11-08 04:58:48,936 INFO llm_adapter: LLM adapter attached to core with training data recording enabled

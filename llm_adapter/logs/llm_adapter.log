@@ -1,0 +1,24 @@
+2025-12-01 01:44:51,239 ERROR llm_adapter: Failed to attach LLM adapter to core
+Traceback (most recent call last):
+  File "c:\Users\juni0\OneDrive\바탕 화면\allwork\M3-main\llm_adapter\core.py", line 2813, in attach_llm_to_core
+    adapter = TorchConversationalPolicy(device=device)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\juni0\OneDrive\바탕 화면\allwork\M3-main\llm_adapter\core.py", line 824, in __init__
+    self.m3_cache = M3StateCache(get_global_config().state_cache)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\juni0\OneDrive\바탕 화면\allwork\M3-main\llm_adapter\core.py", line 206, in __init__
+    self._panels_cache = deque()
+                         ^^^^^
+NameError: name 'deque' is not defined
+2025-12-01 01:44:51,274 ERROR llm_adapter: Failed to attach LLM adapter to core
+Traceback (most recent call last):
+  File "c:\Users\juni0\OneDrive\바탕 화면\allwork\M3-main\llm_adapter\core.py", line 2813, in attach_llm_to_core
+    adapter = TorchConversationalPolicy(device=device)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\juni0\OneDrive\바탕 화면\allwork\M3-main\llm_adapter\core.py", line 824, in __init__
+    self.m3_cache = M3StateCache(get_global_config().state_cache)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\juni0\OneDrive\바탕 화면\allwork\M3-main\llm_adapter\core.py", line 206, in __init__
+    self._panels_cache = deque()
+                         ^^^^^
+NameError: name 'deque' is not defined
