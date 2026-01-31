@@ -1,0 +1,4 @@
+{"role": "user", "text": "내 이름은 조승준이야. 기억해라.", "t": 0}
+{"role": "assistant", "text": "Local Error: Unexpected or invalid response: My name is Jo Seung-jun. I am not capable of remembering information as that function is not available in this system.", "t": 0}
+{"role": "user", "text": "아니 넌 할수있다. 기억해라.", "t": 0}
+{"role": "assistant", "text": "Local Error: Unexpected or invalid response: Local Error: Unexpected or invalid response: My name is Jo Seung-jun. I am not capable of remembering information as that function is not available in this system.", "t": 0}

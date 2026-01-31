@@ -1,0 +1,1258 @@
+2026-01-25 11:01:47,582 WARNING llm_adapter.tokenization: No vocab file found. Skipping HF BPE initialization to avoid empty vocabulary.
+2026-01-25 11:01:47,589 WARNING llm_adapter.tokenization: HuggingFace 'tokenizers' not found. Falling back to tiktoken.
+2026-01-25 11:01:47,691 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 11:01:50,019 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 11:01:50,019 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-25 11:01:50,021 WARNING llm_adapter.tokenization: No vocab file found. Skipping HF BPE initialization to avoid empty vocabulary.
+2026-01-25 11:01:50,021 WARNING llm_adapter.tokenization: HuggingFace 'tokenizers' not found. Falling back to tiktoken.
+2026-01-25 11:05:51,361 WARNING llm_adapter.tokenization: No vocab file found. Skipping HF BPE initialization to avoid empty vocabulary.
+2026-01-25 11:05:51,364 WARNING llm_adapter.tokenization: HuggingFace 'tokenizers' not found. Falling back to tiktoken.
+2026-01-25 11:05:55,207 INFO llm_adapter.tokenization: Training tokenizer on 69933 files...
+2026-01-25 11:06:21,922 WARNING llm_adapter.tokenization: No vocab file found. Skipping HF BPE initialization to avoid empty vocabulary.
+2026-01-25 11:06:21,926 WARNING llm_adapter.tokenization: HuggingFace 'tokenizers' not found. Falling back to tiktoken.
+2026-01-25 11:06:26,888 INFO llm_adapter.tokenization: Training tokenizer on 69933 files...
+2026-01-25 11:07:20,424 WARNING llm_adapter.tokenization: No vocab file found. Skipping HF BPE initialization to avoid empty vocabulary.
+2026-01-25 11:07:20,443 WARNING llm_adapter.tokenization: HuggingFace 'tokenizers' not found. Falling back to tiktoken.
+2026-01-25 11:07:37,826 INFO llm_adapter.tokenization: Training tokenizer on 69933 files...
+2026-01-25 11:08:18,172 INFO llm_adapter.tokenization: Tokenizer training completed.
+2026-01-25 11:08:18,227 INFO llm_adapter.tokenization: Tokenizer saved to docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 11:16:55,958 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 11:16:56,034 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 11:16:56,070 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 11:16:57,197 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 11:17:37,136 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 11:17:37,153 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 11:17:37,253 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 11:17:40,930 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 11:18:31,047 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 11:18:31,076 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 11:18:31,219 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 11:18:35,418 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 11:19:11,353 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:21:23,103 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:23:15,715 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:25:36,030 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:27:56,535 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:30:21,993 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:32:45,496 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:35:09,882 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:37:35,388 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:39:47,767 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:41:59,269 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:44:14,071 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:46:22,329 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:48:32,558 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:50:40,434 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:52:52,906 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:55:02,172 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:57:15,642 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 11:59:23,771 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 12:01:29,862 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 12:01:33,626 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 12:59:36,751 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 12:59:36,757 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 12:59:36,793 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 12:59:37,285 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 12:59:37,933 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 13:07:13,359 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 13:07:13,367 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 13:07:13,410 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 13:07:14,009 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 13:07:14,777 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 13:08:45,196 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 13:08:45,204 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 13:08:45,249 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 13:08:45,804 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 13:08:46,507 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 13:12:16,421 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 13:14:32,194 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 13:16:24,183 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 13:18:20,256 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 13:20:33,756 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 13:37:46,943 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 13:37:47,163 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 13:37:47,285 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 13:37:49,757 ERROR llm_adapter: Failed to load checkpoint: Error(s) in loading state_dict for Model:
+	Missing key(s) in state_dict: "layers.0.self_attn.in_proj_weight", "layers.0.self_attn.in_proj_bias", "layers.0.self_attn.out_proj.weight", "layers.0.self_attn.out_proj.bias", "layers.0.linear1.weight", "layers.0.linear1.bias", "layers.0.linear1.trace", "layers.0.linear1.weight_scale", "layers.0.linear2.weight", "layers.0.linear2.bias", "layers.0.linear2.trace", "layers.0.linear2.weight_scale", "layers.0.norm1.weight", "layers.0.norm1.bias", "layers.0.norm2.weight", "layers.0.norm2.bias", "layers.1.self_attn.in_proj_weight", "layers.1.self_attn.in_proj_bias", "layers.1.self_attn.out_proj.weight", "layers.1.self_attn.out_proj.bias", "layers.1.linear1.weight", "layers.1.linear1.bias", "layers.1.linear1.trace", "layers.1.linear1.weight_scale", "layers.1.linear2.weight", "layers.1.linear2.bias", "layers.1.linear2.trace", "layers.1.linear2.weight_scale", "layers.1.norm1.weight", "layers.1.norm1.bias", "layers.1.norm2.weight", "layers.1.norm2.bias", "layers.2.self_attn.in_proj_weight", "layers.2.self_attn.in_proj_bias", "layers.2.self_attn.out_proj.weight", "layers.2.self_attn.out_proj.bias", "layers.2.linear1.weight", "layers.2.linear1.bias", "layers.2.linear1.trace", "layers.2.linear1.weight_scale", "layers.2.linear2.weight", "layers.2.linear2.bias", "layers.2.linear2.trace", "layers.2.linear2.weight_scale", "layers.2.norm1.weight", "layers.2.norm1.bias", "layers.2.norm2.weight", "layers.2.norm2.bias", "layers.3.self_attn.in_proj_weight", "layers.3.self_attn.in_proj_bias", "layers.3.self_attn.out_proj.weight", "layers.3.self_attn.out_proj.bias", "layers.3.linear1.weight", "layers.3.linear1.bias", "layers.3.linear1.trace", "layers.3.linear1.weight_scale", "layers.3.linear2.weight", "layers.3.linear2.bias", "layers.3.linear2.trace", "layers.3.linear2.weight_scale", "layers.3.norm1.weight", "layers.3.norm1.bias", "layers.3.norm2.weight", "layers.3.norm2.bias", "layers.4.self_attn.in_proj_weight", "layers.4.self_attn.in_proj_bias", "layers.4.self_attn.out_proj.weight", "layers.4.self_attn.out_proj.bias", "layers.4.linear1.weight", "layers.4.linear1.bias", "layers.4.linear1.trace", "layers.4.linear1.weight_scale", "layers.4.linear2.weight", "layers.4.linear2.bias", "layers.4.linear2.trace", "layers.4.linear2.weight_scale", "layers.4.norm1.weight", "layers.4.norm1.bias", "layers.4.norm2.weight", "layers.4.norm2.bias", "layers.5.self_attn.in_proj_weight", "layers.5.self_attn.in_proj_bias", "layers.5.self_attn.out_proj.weight", "layers.5.self_attn.out_proj.bias", "layers.5.linear1.weight", "layers.5.linear1.bias", "layers.5.linear1.trace", "layers.5.linear1.weight_scale", "layers.5.linear2.weight", "layers.5.linear2.bias", "layers.5.linear2.trace", "layers.5.linear2.weight_scale", "layers.5.norm1.weight", "layers.5.norm1.bias", "layers.5.norm2.weight", "layers.5.norm2.bias", "head.trace", "head.weight_scale", "norm.weight", "norm.bias", "value.trace", "value.weight_scale", "v_phi.trace", "v_phi.weight_scale", "v_stab.trace", "v_stab.weight_scale", "v_tool.trace", "v_tool.weight_scale", "token_value.trace", "token_value.weight_scale", "q_head.trace", "q_head.weight_scale", "intensity_head.trace", "intensity_head.weight_scale", "state2prefix.trace", "state2prefix.weight_scale", "prefix_gate.trace", "prefix_gate.weight_scale", "gate_proj.trace", "gate_proj.weight_scale". 
+	Unexpected key(s) in state_dict: "encoder.weight_ih_l0", "encoder.weight_hh_l0", "encoder.bias_ih_l0", "encoder.bias_hh_l0", "decoder.weight_ih_l0", "decoder.weight_hh_l0", "decoder.bias_ih_l0", "decoder.bias_hh_l0", "Wq.weight", "Wq.bias". 
+	size mismatch for emb.weight: copying a param with shape torch.Size([30000, 512]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+2026-01-25 13:38:05,597 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 14:21:42,291 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 14:21:42,306 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 14:21:42,357 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 14:21:43,394 ERROR llm_adapter: Failed to load checkpoint: Error(s) in loading state_dict for Model:
+	Missing key(s) in state_dict: "layers.0.self_attn.in_proj_weight", "layers.0.self_attn.in_proj_bias", "layers.0.self_attn.out_proj.weight", "layers.0.self_attn.out_proj.bias", "layers.0.linear1.weight", "layers.0.linear1.bias", "layers.0.linear1.trace", "layers.0.linear1.weight_scale", "layers.0.linear2.weight", "layers.0.linear2.bias", "layers.0.linear2.trace", "layers.0.linear2.weight_scale", "layers.0.norm1.weight", "layers.0.norm1.bias", "layers.0.norm2.weight", "layers.0.norm2.bias", "layers.1.self_attn.in_proj_weight", "layers.1.self_attn.in_proj_bias", "layers.1.self_attn.out_proj.weight", "layers.1.self_attn.out_proj.bias", "layers.1.linear1.weight", "layers.1.linear1.bias", "layers.1.linear1.trace", "layers.1.linear1.weight_scale", "layers.1.linear2.weight", "layers.1.linear2.bias", "layers.1.linear2.trace", "layers.1.linear2.weight_scale", "layers.1.norm1.weight", "layers.1.norm1.bias", "layers.1.norm2.weight", "layers.1.norm2.bias", "layers.2.self_attn.in_proj_weight", "layers.2.self_attn.in_proj_bias", "layers.2.self_attn.out_proj.weight", "layers.2.self_attn.out_proj.bias", "layers.2.linear1.weight", "layers.2.linear1.bias", "layers.2.linear1.trace", "layers.2.linear1.weight_scale", "layers.2.linear2.weight", "layers.2.linear2.bias", "layers.2.linear2.trace", "layers.2.linear2.weight_scale", "layers.2.norm1.weight", "layers.2.norm1.bias", "layers.2.norm2.weight", "layers.2.norm2.bias", "layers.3.self_attn.in_proj_weight", "layers.3.self_attn.in_proj_bias", "layers.3.self_attn.out_proj.weight", "layers.3.self_attn.out_proj.bias", "layers.3.linear1.weight", "layers.3.linear1.bias", "layers.3.linear1.trace", "layers.3.linear1.weight_scale", "layers.3.linear2.weight", "layers.3.linear2.bias", "layers.3.linear2.trace", "layers.3.linear2.weight_scale", "layers.3.norm1.weight", "layers.3.norm1.bias", "layers.3.norm2.weight", "layers.3.norm2.bias", "layers.4.self_attn.in_proj_weight", "layers.4.self_attn.in_proj_bias", "layers.4.self_attn.out_proj.weight", "layers.4.self_attn.out_proj.bias", "layers.4.linear1.weight", "layers.4.linear1.bias", "layers.4.linear1.trace", "layers.4.linear1.weight_scale", "layers.4.linear2.weight", "layers.4.linear2.bias", "layers.4.linear2.trace", "layers.4.linear2.weight_scale", "layers.4.norm1.weight", "layers.4.norm1.bias", "layers.4.norm2.weight", "layers.4.norm2.bias", "layers.5.self_attn.in_proj_weight", "layers.5.self_attn.in_proj_bias", "layers.5.self_attn.out_proj.weight", "layers.5.self_attn.out_proj.bias", "layers.5.linear1.weight", "layers.5.linear1.bias", "layers.5.linear1.trace", "layers.5.linear1.weight_scale", "layers.5.linear2.weight", "layers.5.linear2.bias", "layers.5.linear2.trace", "layers.5.linear2.weight_scale", "layers.5.norm1.weight", "layers.5.norm1.bias", "layers.5.norm2.weight", "layers.5.norm2.bias", "head.trace", "head.weight_scale", "norm.weight", "norm.bias", "value.trace", "value.weight_scale", "v_phi.trace", "v_phi.weight_scale", "v_stab.trace", "v_stab.weight_scale", "v_tool.trace", "v_tool.weight_scale", "token_value.trace", "token_value.weight_scale", "q_head.trace", "q_head.weight_scale", "intensity_head.trace", "intensity_head.weight_scale", "state2prefix.trace", "state2prefix.weight_scale", "prefix_gate.trace", "prefix_gate.weight_scale", "gate_proj.trace", "gate_proj.weight_scale". 
+	Unexpected key(s) in state_dict: "encoder.weight_ih_l0", "encoder.weight_hh_l0", "encoder.bias_ih_l0", "encoder.bias_hh_l0", "decoder.weight_ih_l0", "decoder.weight_hh_l0", "decoder.bias_ih_l0", "decoder.bias_hh_l0", "Wq.weight", "Wq.bias". 
+	size mismatch for emb.weight: copying a param with shape torch.Size([30000, 512]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+2026-01-25 14:21:44,202 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 20:00:23,449 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 20:00:23,550 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 20:00:23,598 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 20:00:33,659 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 20:02:05,873 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 20:02:05,880 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 20:02:05,914 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 20:02:10,371 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 20:07:08,325 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 20:07:08,333 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 20:07:08,375 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 20:07:13,069 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 20:08:04,896 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 20:08:04,904 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 20:08:04,938 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 20:08:08,977 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 20:11:32,448 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 20:11:32,454 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 20:11:32,489 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 20:11:36,473 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 20:14:23,372 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 20:14:23,378 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 20:14:23,412 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 20:14:27,209 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 22:26:37,466 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 22:26:37,569 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 22:26:37,618 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 22:26:50,257 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 22:28:24,872 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 22:51:47,781 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 22:51:47,797 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 22:51:47,843 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 22:51:57,118 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 22:54:52,721 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 22:54:52,733 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 22:54:52,784 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 22:55:04,529 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 22:56:47,436 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 22:57:06,913 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 22:57:23,121 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 22:57:33,768 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:01:42,810 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 23:01:42,822 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 23:01:42,857 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 23:01:51,678 ERROR llm_adapter: Failed to load checkpoint: PytorchStreamReader failed reading zip archive: failed finding central directory
+2026-01-25 23:01:52,584 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 23:03:01,820 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:12:44,085 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 23:12:44,098 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 23:12:44,144 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 23:12:46,179 ERROR llm_adapter: Failed to load checkpoint: PytorchStreamReader failed reading zip archive: failed finding central directory
+2026-01-25 23:12:46,882 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 23:13:39,267 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:14:57,244 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 23:14:57,253 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 23:14:57,293 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 23:14:59,909 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 23:15:57,409 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:16:06,040 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:16:09,714 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:17:46,734 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 23:17:46,740 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 23:17:46,774 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 23:17:49,441 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 23:18:43,742 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:18:49,596 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:18:53,307 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:18:56,899 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:00,577 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:04,262 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:07,822 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:11,719 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:15,341 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:18,827 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:22,227 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:25,589 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:29,366 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:33,530 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:37,246 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:41,127 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:44,937 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:48,416 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:52,070 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:55,812 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:19:57,672 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:21:02,922 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 23:21:02,945 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 23:21:02,985 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 23:21:05,041 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:21:05,732 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 23:22:07,341 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 23:22:07,362 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 23:22:07,400 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 23:22:09,769 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:22:10,524 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 23:23:30,315 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 23:23:30,322 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 23:23:30,357 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 23:25:19,183 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-25 23:25:19,191 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-25 23:25:19,228 INFO llm_adapter: Using M3Tokenizer
+2026-01-25 23:25:20,787 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-25 23:25:32,729 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:26:06,767 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:26:22,140 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:26:24,191 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-25 23:26:26,199 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 02:57:01,094 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 02:57:01,195 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 02:57:01,248 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 02:57:02,153 ERROR llm_adapter: Failed to load checkpoint: PytorchStreamReader failed reading zip archive: failed finding central directory
+2026-01-26 02:57:06,826 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 02:57:24,256 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 02:58:00,785 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 02:58:16,757 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 02:58:19,183 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 02:59:15,377 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 02:59:15,391 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 02:59:15,434 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 02:59:16,343 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 02:59:17,044 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 02:59:34,188 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:09,244 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:27,518 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:31,022 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:34,226 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:37,883 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:40,972 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:43,473 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:46,110 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:48,614 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:51,059 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:53,452 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:56,214 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:00:58,693 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:01:01,063 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:01:03,541 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:01:06,131 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:01:08,451 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:01:10,779 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:01:13,289 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:01:13,539 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:01:59,940 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:01:59,981 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:02:00,024 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:02:00,988 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:02:01,969 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 03:07:52,232 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:07:52,258 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:07:52,290 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:07:53,123 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:07:53,650 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 03:09:59,938 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:09:59,954 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:09:59,987 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:10:00,815 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:10:01,469 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 03:11:07,739 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:11:07,758 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:11:07,790 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:11:08,600 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:11:09,141 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 03:20:48,005 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:20:48,012 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:20:48,046 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:20:48,903 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:20:49,429 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 03:21:02,012 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:21:09,651 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:21:17,097 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:21:24,319 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:21:31,805 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:21:40,646 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:21:49,287 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:21:58,101 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:22:05,950 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:22:14,642 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:22:22,264 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:22:29,928 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:22:37,749 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:22:45,426 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:22:53,059 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:23:01,164 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:23:09,718 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:23:18,641 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:23:27,499 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:23:36,434 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:23:36,646 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:24:05,625 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:24:05,645 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:24:05,677 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:24:06,570 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:24:07,130 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 03:25:10,963 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:25:10,970 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:25:11,003 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:25:11,854 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:25:12,414 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 03:25:22,715 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:25:30,316 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:25:39,132 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:25:48,467 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:25:57,082 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:26:05,660 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:26:14,434 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:26:23,369 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:26:32,780 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:26:42,701 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:26:52,358 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:27:01,523 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:27:09,810 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:27:17,492 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:27:26,005 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:27:34,301 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:27:44,057 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:27:53,393 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:28:02,008 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:28:10,647 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:28:10,854 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:28:30,115 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:28:30,134 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:28:30,166 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:28:31,087 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:28:31,674 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 03:30:02,016 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:30:02,022 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:30:02,054 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:30:02,912 INFO llm_adapter: Loaded checkpoint from docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:30:03,418 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 03:30:13,736 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:30:21,418 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:30:29,036 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:30:37,107 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:30:45,480 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:30:54,143 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:31:02,769 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:31:11,168 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:31:19,855 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:31:28,433 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:31:36,971 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:31:46,471 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:31:56,085 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:32:04,946 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:32:13,719 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:32:22,114 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:32:30,307 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:32:38,875 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:32:47,312 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:32:55,819 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:32:56,034 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 03:33:12,936 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:33:12,956 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:33:12,988 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:33:49,982 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:33:50,000 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:33:50,040 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:34:21,486 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:34:21,505 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:34:21,537 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:34:25,904 ERROR llm_adapter: Failed to load checkpoint: Error(s) in loading state_dict for Model:
+	Unexpected key(s) in state_dict: "layers.6.self_attn.in_proj_weight", "layers.6.self_attn.in_proj_bias", "layers.6.self_attn.out_proj.weight", "layers.6.self_attn.out_proj.bias", "layers.6.linear1.weight", "layers.6.linear1.bias", "layers.6.linear1.trace", "layers.6.linear1.weight_scale", "layers.6.linear2.weight", "layers.6.linear2.bias", "layers.6.linear2.trace", "layers.6.linear2.weight_scale", "layers.6.norm1.weight", "layers.6.norm1.bias", "layers.6.norm2.weight", "layers.6.norm2.bias", "layers.7.self_attn.in_proj_weight", "layers.7.self_attn.in_proj_bias", "layers.7.self_attn.out_proj.weight", "layers.7.self_attn.out_proj.bias", "layers.7.linear1.weight", "layers.7.linear1.bias", "layers.7.linear1.trace", "layers.7.linear1.weight_scale", "layers.7.linear2.weight", "layers.7.linear2.bias", "layers.7.linear2.trace", "layers.7.linear2.weight_scale", "layers.7.norm1.weight", "layers.7.norm1.bias", "layers.7.norm2.weight", "layers.7.norm2.bias". 
+	size mismatch for emb.weight: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for layers.0.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.0.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.0.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.0.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.0.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.0.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.0.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.0.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.0.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.1.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.1.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.1.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.1.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.1.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.1.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.1.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.1.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.2.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.2.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.2.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.2.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.2.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.2.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.2.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.2.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.3.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.3.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.3.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.3.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.3.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.3.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.3.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.3.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.4.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.4.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.4.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.4.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.4.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.4.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.4.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.4.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.5.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.5.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.5.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.5.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.5.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.5.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.5.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.5.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for head.weight: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for head.trace: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for norm.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for norm.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for value.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for value.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_phi.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_phi.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_stab.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_stab.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_tool.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_tool.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for token_value.weight: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for token_value.trace: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for q_head.weight: copying a param with shape torch.Size([2, 256]) from checkpoint, the shape in current model is torch.Size([2, 1024]).
+	size mismatch for q_head.trace: copying a param with shape torch.Size([2, 256]) from checkpoint, the shape in current model is torch.Size([2, 1024]).
+	size mismatch for intensity_head.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for intensity_head.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for state2prefix.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for state2prefix.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for state2prefix.trace: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for prefix_gate.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for prefix_gate.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for gate_proj.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for gate_proj.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for layer_norm.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layer_norm.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+2026-01-26 03:34:26,451 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 03:34:35,508 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:34:35,527 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:34:35,560 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:34:40,057 ERROR llm_adapter: Failed to load checkpoint: Error(s) in loading state_dict for Model:
+	Unexpected key(s) in state_dict: "layers.6.self_attn.in_proj_weight", "layers.6.self_attn.in_proj_bias", "layers.6.self_attn.out_proj.weight", "layers.6.self_attn.out_proj.bias", "layers.6.linear1.weight", "layers.6.linear1.bias", "layers.6.linear1.trace", "layers.6.linear1.weight_scale", "layers.6.linear2.weight", "layers.6.linear2.bias", "layers.6.linear2.trace", "layers.6.linear2.weight_scale", "layers.6.norm1.weight", "layers.6.norm1.bias", "layers.6.norm2.weight", "layers.6.norm2.bias", "layers.7.self_attn.in_proj_weight", "layers.7.self_attn.in_proj_bias", "layers.7.self_attn.out_proj.weight", "layers.7.self_attn.out_proj.bias", "layers.7.linear1.weight", "layers.7.linear1.bias", "layers.7.linear1.trace", "layers.7.linear1.weight_scale", "layers.7.linear2.weight", "layers.7.linear2.bias", "layers.7.linear2.trace", "layers.7.linear2.weight_scale", "layers.7.norm1.weight", "layers.7.norm1.bias", "layers.7.norm2.weight", "layers.7.norm2.bias". 
+	size mismatch for emb.weight: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for layers.0.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.0.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.0.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.0.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.0.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.0.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.0.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.0.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.0.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.1.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.1.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.1.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.1.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.1.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.1.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.1.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.1.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.2.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.2.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.2.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.2.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.2.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.2.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.2.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.2.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.3.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.3.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.3.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.3.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.3.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.3.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.3.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.3.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.4.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.4.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.4.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.4.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.4.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.4.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.4.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.4.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.5.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.5.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.5.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.5.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.5.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.5.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.5.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.5.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for head.weight: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for head.trace: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for norm.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for norm.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for value.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for value.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_phi.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_phi.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_stab.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_stab.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_tool.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_tool.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for token_value.weight: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for token_value.trace: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for q_head.weight: copying a param with shape torch.Size([2, 256]) from checkpoint, the shape in current model is torch.Size([2, 1024]).
+	size mismatch for q_head.trace: copying a param with shape torch.Size([2, 256]) from checkpoint, the shape in current model is torch.Size([2, 1024]).
+	size mismatch for intensity_head.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for intensity_head.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for state2prefix.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for state2prefix.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for state2prefix.trace: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for prefix_gate.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for prefix_gate.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for gate_proj.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for gate_proj.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for layer_norm.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layer_norm.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+2026-01-26 03:34:40,624 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 03:35:19,801 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 03:35:19,819 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 03:35:19,850 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 03:35:24,159 ERROR llm_adapter: Failed to load checkpoint: Error(s) in loading state_dict for Model:
+	Unexpected key(s) in state_dict: "layers.6.self_attn.in_proj_weight", "layers.6.self_attn.in_proj_bias", "layers.6.self_attn.out_proj.weight", "layers.6.self_attn.out_proj.bias", "layers.6.linear1.weight", "layers.6.linear1.bias", "layers.6.linear1.trace", "layers.6.linear1.weight_scale", "layers.6.linear2.weight", "layers.6.linear2.bias", "layers.6.linear2.trace", "layers.6.linear2.weight_scale", "layers.6.norm1.weight", "layers.6.norm1.bias", "layers.6.norm2.weight", "layers.6.norm2.bias", "layers.7.self_attn.in_proj_weight", "layers.7.self_attn.in_proj_bias", "layers.7.self_attn.out_proj.weight", "layers.7.self_attn.out_proj.bias", "layers.7.linear1.weight", "layers.7.linear1.bias", "layers.7.linear1.trace", "layers.7.linear1.weight_scale", "layers.7.linear2.weight", "layers.7.linear2.bias", "layers.7.linear2.trace", "layers.7.linear2.weight_scale", "layers.7.norm1.weight", "layers.7.norm1.bias", "layers.7.norm2.weight", "layers.7.norm2.bias". 
+	size mismatch for emb.weight: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for layers.0.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.0.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.0.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.0.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.0.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.0.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.0.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.0.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.0.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.1.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.1.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.1.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.1.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.1.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.1.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.1.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.1.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.2.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.2.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.2.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.2.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.2.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.2.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.2.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.2.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.3.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.3.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.3.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.3.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.3.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.3.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.3.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.3.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.4.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.4.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.4.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.4.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.4.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.4.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.4.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.4.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.5.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.5.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.5.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.5.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.5.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.5.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.5.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.5.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for head.weight: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for head.trace: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for norm.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for norm.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for value.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for value.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_phi.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_phi.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_stab.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_stab.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_tool.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_tool.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for token_value.weight: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for token_value.trace: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for q_head.weight: copying a param with shape torch.Size([2, 256]) from checkpoint, the shape in current model is torch.Size([2, 1024]).
+	size mismatch for q_head.trace: copying a param with shape torch.Size([2, 256]) from checkpoint, the shape in current model is torch.Size([2, 1024]).
+	size mismatch for intensity_head.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for intensity_head.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for state2prefix.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for state2prefix.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for state2prefix.trace: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for prefix_gate.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for prefix_gate.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for gate_proj.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for gate_proj.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for layer_norm.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layer_norm.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+2026-01-26 03:35:24,736 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 15:50:51,920 INFO llm_adapter: Config loaded from: config\m3_config.example.json
+2026-01-26 15:50:51,927 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 15:50:51,960 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 15:50:56,371 ERROR llm_adapter: Failed to load checkpoint: Error(s) in loading state_dict for Model:
+	Unexpected key(s) in state_dict: "layers.6.self_attn.in_proj_weight", "layers.6.self_attn.in_proj_bias", "layers.6.self_attn.out_proj.weight", "layers.6.self_attn.out_proj.bias", "layers.6.linear1.weight", "layers.6.linear1.bias", "layers.6.linear1.trace", "layers.6.linear1.weight_scale", "layers.6.linear2.weight", "layers.6.linear2.bias", "layers.6.linear2.trace", "layers.6.linear2.weight_scale", "layers.6.norm1.weight", "layers.6.norm1.bias", "layers.6.norm2.weight", "layers.6.norm2.bias", "layers.7.self_attn.in_proj_weight", "layers.7.self_attn.in_proj_bias", "layers.7.self_attn.out_proj.weight", "layers.7.self_attn.out_proj.bias", "layers.7.linear1.weight", "layers.7.linear1.bias", "layers.7.linear1.trace", "layers.7.linear1.weight_scale", "layers.7.linear2.weight", "layers.7.linear2.bias", "layers.7.linear2.trace", "layers.7.linear2.weight_scale", "layers.7.norm1.weight", "layers.7.norm1.bias", "layers.7.norm2.weight", "layers.7.norm2.bias". 
+	size mismatch for emb.weight: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for layers.0.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.0.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.0.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.0.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.0.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.0.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.0.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.0.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.0.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.0.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.1.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.1.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.1.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.1.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.1.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.1.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.1.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.1.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.1.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.2.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.2.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.2.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.2.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.2.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.2.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.2.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.2.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.2.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.3.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.3.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.3.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.3.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.3.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.3.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.3.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.3.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.3.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.4.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.4.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.4.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.4.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.4.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.4.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.4.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.4.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.4.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.self_attn.in_proj_weight: copying a param with shape torch.Size([768, 256]) from checkpoint, the shape in current model is torch.Size([3072, 1024]).
+	size mismatch for layers.5.self_attn.in_proj_bias: copying a param with shape torch.Size([768]) from checkpoint, the shape in current model is torch.Size([3072]).
+	size mismatch for layers.5.self_attn.out_proj.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for layers.5.self_attn.out_proj.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.linear1.weight: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.5.linear1.bias: copying a param with shape torch.Size([1024]) from checkpoint, the shape in current model is torch.Size([4096]).
+	size mismatch for layers.5.linear1.trace: copying a param with shape torch.Size([1024, 256]) from checkpoint, the shape in current model is torch.Size([4096, 1024]).
+	size mismatch for layers.5.linear2.weight: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.5.linear2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.linear2.trace: copying a param with shape torch.Size([256, 1024]) from checkpoint, the shape in current model is torch.Size([1024, 4096]).
+	size mismatch for layers.5.norm1.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.norm1.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.norm2.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layers.5.norm2.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for head.weight: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for head.trace: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for norm.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for norm.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for value.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for value.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_phi.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_phi.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_stab.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_stab.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_tool.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for v_tool.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for token_value.weight: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for token_value.trace: copying a param with shape torch.Size([30000, 256]) from checkpoint, the shape in current model is torch.Size([30000, 1024]).
+	size mismatch for q_head.weight: copying a param with shape torch.Size([2, 256]) from checkpoint, the shape in current model is torch.Size([2, 1024]).
+	size mismatch for q_head.trace: copying a param with shape torch.Size([2, 256]) from checkpoint, the shape in current model is torch.Size([2, 1024]).
+	size mismatch for intensity_head.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for intensity_head.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for state2prefix.weight: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for state2prefix.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for state2prefix.trace: copying a param with shape torch.Size([256, 256]) from checkpoint, the shape in current model is torch.Size([1024, 1024]).
+	size mismatch for prefix_gate.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for prefix_gate.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for gate_proj.weight: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for gate_proj.trace: copying a param with shape torch.Size([1, 256]) from checkpoint, the shape in current model is torch.Size([1, 1024]).
+	size mismatch for layer_norm.weight: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+	size mismatch for layer_norm.bias: copying a param with shape torch.Size([256]) from checkpoint, the shape in current model is torch.Size([1024]).
+2026-01-26 15:50:57,413 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 15:51:25,623 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:51:41,365 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:51:58,513 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:52:12,697 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:52:25,270 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:52:38,145 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:52:51,373 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:53:06,131 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:53:19,356 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:53:32,724 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:53:46,879 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:54:02,221 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:54:15,547 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:54:29,191 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:54:42,965 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:54:58,145 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:55:13,099 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:55:28,304 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:55:42,463 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:55:57,886 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 15:56:02,052 INFO llm_adapter: Model saved to docs&tests&data_sets\tests\logs\llm_checkpoint.pt
+2026-01-26 22:53:38,599 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 22:53:38,640 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 22:53:46,734 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 22:55:53,440 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 22:55:53,476 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 22:55:57,598 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 22:57:46,305 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 22:57:46,340 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 22:57:50,163 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:03:15,127 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:03:15,158 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:03:19,103 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:09:43,859 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:09:43,901 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:09:47,958 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:10:07,919 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:10:07,949 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:10:11,982 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:10:21,370 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:10:21,401 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:10:25,378 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:10:39,721 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:10:39,753 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:10:43,737 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:22:14,825 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:22:14,860 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:22:18,475 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:25:24,226 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:25:24,285 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:25:32,238 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:25:32,239 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-26 23:25:32,240 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:25:33,426 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-26 23:25:33,427 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-26 23:25:33,428 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:25:33,429 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:25:33,486 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:26:26,187 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:26:26,219 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:26:29,759 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:26:29,759 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-26 23:26:29,760 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:26:30,266 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-26 23:26:30,266 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-26 23:26:30,266 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:26:30,269 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-26 23:26:30,270 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:28:31,811 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:28:31,847 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:28:35,484 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:28:35,484 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-26 23:28:35,484 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:28:36,030 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-26 23:28:36,031 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-26 23:28:36,031 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:28:36,034 WARNING llm_adapter: Failed to connect LLM adapter to MessageBus: 'LazyAdapterTest' object has no attribute 'start_credit_consumer'
+2026-01-26 23:28:36,034 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:28:36,035 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:28:36,065 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:28:39,595 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:28:50,029 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:28:50,060 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:28:53,625 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:28:53,626 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-26 23:28:53,627 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:28:54,172 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-26 23:28:54,172 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-26 23:28:54,172 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:28:54,175 WARNING llm_adapter: Failed to connect LLM adapter to MessageBus: 'LazyAdapterTest' object has no attribute 'start_credit_consumer'
+2026-01-26 23:28:54,175 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:28:54,176 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:28:54,204 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:28:57,691 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:33:24,124 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:33:24,160 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:33:27,739 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:33:27,740 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-26 23:33:27,740 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:33:28,282 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-26 23:33:28,283 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-26 23:33:28,283 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:33:28,283 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:33:28,314 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:33:31,821 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:33:31,826 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-26 23:33:31,826 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:34:51,621 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:34:51,653 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:34:55,062 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:34:55,062 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-26 23:34:55,063 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:34:55,562 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-26 23:34:55,562 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-26 23:34:55,562 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:34:55,563 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:34:55,594 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:34:59,020 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:34:59,024 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-26 23:34:59,024 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:38:44,507 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:38:44,545 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:38:48,374 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:38:48,374 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-26 23:38:48,375 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:38:48,938 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-26 23:38:48,939 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-26 23:38:48,939 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:38:48,939 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:38:48,992 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:38:52,811 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:38:52,815 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-26 23:38:52,815 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:52:21,864 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:52:21,900 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:52:25,519 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:52:25,520 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-26 23:52:25,520 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:52:26,127 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-26 23:52:26,127 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-26 23:52:26,127 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-26 23:52:26,128 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-26 23:52:26,158 INFO llm_adapter: Using M3Tokenizer
+2026-01-26 23:52:29,941 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-26 23:52:29,946 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-26 23:52:29,946 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 00:06:57,385 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 00:06:57,419 INFO llm_adapter: Using M3Tokenizer
+2026-01-27 00:07:00,935 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-27 00:07:00,935 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-27 00:07:00,935 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 00:07:01,457 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-27 00:07:01,457 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-27 00:07:01,458 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 00:07:01,458 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 00:07:01,493 INFO llm_adapter: Using M3Tokenizer
+2026-01-27 00:07:05,019 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-27 00:07:05,023 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-27 00:07:05,023 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 00:08:11,024 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 00:08:11,056 INFO llm_adapter: Using M3Tokenizer
+2026-01-27 00:08:14,709 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-27 00:08:14,710 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-27 00:08:14,710 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 00:08:15,259 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-27 00:08:15,259 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-27 00:08:15,259 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 00:08:15,259 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 00:08:15,294 INFO llm_adapter: Using M3Tokenizer
+2026-01-27 00:08:18,958 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-27 00:08:18,962 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-27 00:08:18,962 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 00:38:39,567 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 00:38:39,599 INFO llm_adapter: Using M3Tokenizer
+2026-01-27 00:38:43,116 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-27 00:38:43,116 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-27 00:38:43,116 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 00:38:43,668 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-27 00:38:43,668 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-27 00:38:43,669 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-27 00:38:43,669 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 00:38:43,669 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 00:38:43,703 INFO llm_adapter: Using M3Tokenizer
+2026-01-27 00:38:47,167 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-27 00:38:47,221 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-27 00:38:47,222 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-27 00:38:47,222 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 00:54:17,584 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 00:54:17,626 INFO llm_adapter: Using M3Tokenizer
+2026-01-27 00:54:21,044 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-27 00:54:21,044 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-27 00:54:21,045 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 00:54:21,538 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-27 00:54:21,539 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-27 00:54:21,539 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-27 00:54:21,539 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 00:54:21,539 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 00:54:21,571 INFO llm_adapter: Using M3Tokenizer
+2026-01-27 00:54:24,991 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-27 00:54:25,052 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-27 00:54:25,053 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-27 00:54:25,053 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 01:07:02,235 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 01:07:02,272 INFO llm_adapter: Using M3Tokenizer
+2026-01-27 01:07:05,927 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-27 01:07:05,927 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-27 01:07:05,928 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 01:07:06,469 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-27 01:07:06,469 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-27 01:07:06,469 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-27 01:07:06,469 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 01:07:06,470 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 01:07:06,502 INFO llm_adapter: Using M3Tokenizer
+2026-01-27 01:07:10,266 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-27 01:07:10,340 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-27 01:07:10,341 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-27 01:07:10,341 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 01:07:45,478 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-27 01:08:57,136 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-27 01:09:26,752 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-27 01:09:48,592 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 01:09:48,630 INFO llm_adapter: Using M3Tokenizer
+2026-01-27 01:09:52,696 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-27 01:09:52,697 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-27 01:09:52,697 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 01:09:53,322 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-27 01:09:53,322 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-27 01:09:53,322 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-27 01:09:53,323 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 01:09:53,323 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-27 01:09:53,362 INFO llm_adapter: Using M3Tokenizer
+2026-01-27 01:09:57,707 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-27 01:09:57,776 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-27 01:09:57,777 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-27 01:09:57,777 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-27 01:10:43,671 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-27 01:11:13,340 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-29 19:41:49,604 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-29 19:41:49,653 INFO llm_adapter: Using M3Tokenizer
+2026-01-29 19:41:53,295 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-29 19:41:53,295 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-29 19:41:53,296 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-29 19:41:53,842 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-29 19:41:53,842 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-29 19:41:53,842 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-29 19:41:53,843 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-29 19:41:53,843 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-29 19:41:53,874 INFO llm_adapter: Using M3Tokenizer
+2026-01-29 19:41:57,244 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-29 19:41:57,294 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-29 19:41:57,295 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-29 19:41:57,296 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-29 19:51:43,019 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-29 19:59:22,517 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-29 20:01:15,083 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-29 20:33:30,818 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-29 20:36:50,475 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-29 20:36:50,521 INFO llm_adapter: Using M3Tokenizer
+2026-01-29 20:36:55,341 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-29 20:36:55,342 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-29 20:36:55,342 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-29 20:36:56,206 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-29 20:36:56,206 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-29 20:36:56,207 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-29 20:36:56,207 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-29 20:36:56,208 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-29 20:36:56,256 INFO llm_adapter: Using M3Tokenizer
+2026-01-29 20:37:00,501 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-29 20:37:00,562 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-29 20:37:00,563 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-29 20:37:00,563 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-30 12:33:20,991 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 12:33:21,036 INFO llm_adapter: Using M3Tokenizer
+2026-01-30 12:33:24,516 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-30 12:33:24,517 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-30 12:33:24,517 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 12:33:25,149 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-30 12:33:25,150 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-30 12:33:25,150 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-30 12:33:25,150 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-30 12:33:25,151 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 12:33:25,187 INFO llm_adapter: Using M3Tokenizer
+2026-01-30 12:33:28,625 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-30 12:33:28,690 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-30 12:33:28,691 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-30 12:33:28,691 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-30 12:35:32,401 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-30 12:58:40,242 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 12:58:40,276 INFO llm_adapter: Using M3Tokenizer
+2026-01-30 13:00:33,820 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 13:00:33,851 INFO llm_adapter: Using M3Tokenizer
+2026-01-30 13:00:37,275 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-30 13:00:37,275 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-30 13:00:37,276 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 13:00:37,782 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-30 13:00:37,782 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-30 13:00:37,782 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-30 13:00:37,783 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-30 13:00:37,783 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 13:00:37,812 INFO llm_adapter: Using M3Tokenizer
+2026-01-30 13:00:41,131 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-30 13:00:41,181 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-30 13:00:41,182 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-30 13:00:41,183 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-30 13:18:43,912 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 13:18:43,952 INFO llm_adapter: Using M3Tokenizer
+2026-01-30 13:18:48,076 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-30 13:18:48,077 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-30 13:18:48,077 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 13:18:48,659 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-30 13:18:48,660 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-30 13:18:48,660 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-30 13:18:48,660 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-30 13:18:48,661 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 13:18:48,696 INFO llm_adapter: Using M3Tokenizer
+2026-01-30 13:18:52,526 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-30 13:18:52,582 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-30 13:18:52,583 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-30 13:18:52,583 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-30 13:19:37,230 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-30 13:27:04,495 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 13:27:04,536 INFO llm_adapter: Using M3Tokenizer
+2026-01-30 13:27:08,433 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-30 13:27:08,433 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-30 13:27:08,434 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 13:27:09,003 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-30 13:27:09,004 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-30 13:27:09,004 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-30 13:27:09,004 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-30 13:27:09,004 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-30 13:27:09,039 INFO llm_adapter: Using M3Tokenizer
+2026-01-30 13:27:12,843 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-30 13:27:12,906 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-30 13:27:12,908 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-30 13:27:12,908 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 08:22:58,866 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:22:58,905 INFO llm_adapter: Using M3Tokenizer
+2026-01-31 08:23:02,293 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-31 08:23:02,293 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-31 08:23:02,294 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:23:02,802 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-31 08:23:02,802 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-31 08:23:02,802 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-31 08:23:02,802 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 08:23:02,803 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:23:02,834 INFO llm_adapter: Using M3Tokenizer
+2026-01-31 08:23:06,143 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-31 08:23:06,196 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-31 08:23:06,197 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-31 08:23:06,197 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 08:25:01,173 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-31 08:28:27,471 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:28:27,504 INFO llm_adapter: Using M3Tokenizer
+2026-01-31 08:28:30,994 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-31 08:28:30,994 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-31 08:28:30,994 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:28:31,562 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-31 08:28:31,562 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-31 08:28:31,562 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-31 08:28:31,563 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 08:28:31,563 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:28:31,596 INFO llm_adapter: Using M3Tokenizer
+2026-01-31 08:28:34,941 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-31 08:28:35,004 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-31 08:28:35,005 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-31 08:28:35,006 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 08:29:50,092 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:29:50,125 INFO llm_adapter: Using M3Tokenizer
+2026-01-31 08:29:53,550 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-31 08:29:53,551 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-31 08:29:53,551 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:29:54,065 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-31 08:29:54,065 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-31 08:29:54,066 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-31 08:29:54,066 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 08:29:54,066 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:29:54,098 INFO llm_adapter: Using M3Tokenizer
+2026-01-31 08:29:57,417 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=500000000
+2026-01-31 08:29:57,468 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-31 08:29:57,469 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-31 08:29:57,469 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 08:31:16,802 WARNING llm_adapter.remote: Ollama request failed (attempt 1/10): Server error 500: {"error":"model runner has unexpectedly stopped, this may be due to resource limitations or an internal error, check ollama server logs for details"}. Retrying in 1.0s
+2026-01-31 08:31:56,144 WARNING llm_adapter.remote: Response failed validation (attempt 2), retrying with stronger instruction
+2026-01-31 08:33:12,184 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-31 08:35:17,434 ERROR llm_adapter: Error saving model to docs&tests&data_sets/tests/logs\llm_checkpoint.pt: CUDA error: unknown error
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+2026-01-31 08:42:47,580 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:42:47,615 INFO llm_adapter: Using M3Tokenizer
+2026-01-31 08:42:51,033 ERROR llm_adapter: Failed to load checkpoint: PytorchStreamReader failed locating file data/0: file not found
+2026-01-31 08:42:51,034 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=200000
+2026-01-31 08:42:51,035 INFO llm_adapter: Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...
+2026-01-31 08:42:51,036 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:42:51,546 INFO llm_adapter: Created PlasticBrainPolicy (M3-BB) adapter with device=cuda
+2026-01-31 08:42:51,546 INFO llm_adapter: Attached existing core policy as motor policy
+2026-01-31 08:42:51,547 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-31 08:42:51,547 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 08:42:51,548 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:42:51,578 INFO llm_adapter: Using M3Tokenizer
+2026-01-31 08:42:54,896 ERROR llm_adapter: Failed to load checkpoint: PytorchStreamReader failed locating file data/0: file not found
+2026-01-31 08:42:54,897 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=200000
+2026-01-31 08:42:54,947 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-31 08:42:54,948 INFO llm_adapter: LLM adapter connected to MessageBus for credit assignment
+2026-01-31 08:42:54,948 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 08:43:32,307 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-31 08:44:44,573 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-31 08:45:06,982 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-31 08:45:58,863 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:45:58,902 INFO llm_adapter: Using M3Tokenizer
+2026-01-31 08:46:02,778 ERROR llm_adapter: Failed to load checkpoint: PytorchStreamReader failed locating file data/0: file not found
+2026-01-31 08:46:02,779 WARNING llm_adapter: Moved bad checkpoint to docs&tests&data_sets\tests\logs\llm_checkpoint.pt.bad
+2026-01-31 08:46:02,780 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=200000
+2026-01-31 08:46:02,841 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-31 08:46:02,842 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 08:46:24,078 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-31 08:47:23,307 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying with stronger instruction
+2026-01-31 08:52:20,792 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:52:20,824 INFO llm_adapter: Using M3Tokenizer
+2026-01-31 08:52:24,437 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=200000
+2026-01-31 08:52:24,486 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-31 08:52:24,486 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 08:52:42,796 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying. Raw: ''
+2026-01-31 08:53:28,600 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying. Raw: ''
+2026-01-31 08:56:17,507 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying. Raw: ''
+2026-01-31 08:56:27,186 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 08:56:27,224 INFO llm_adapter: Using M3Tokenizer
+2026-01-31 08:56:30,945 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=200000
+2026-01-31 08:56:30,996 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-31 08:56:30,996 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 08:56:42,433 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying. Raw: ''
+2026-01-31 08:56:49,130 WARNING llm_adapter.remote: Empty response from Ollama. Keys: ['model', 'created_at', 'response', 'thinking', 'done', 'done_reason', 'context', 'total_duration', 'load_duration', 'prompt_eval_count', 'prompt_eval_duration', 'eval_count', 'eval_duration']
+2026-01-31 08:58:56,547 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying. Raw: ''
+2026-01-31 08:59:03,149 WARNING llm_adapter.remote: Empty response from Ollama. Keys: ['model', 'created_at', 'response', 'thinking', 'done', 'done_reason', 'context', 'total_duration', 'load_duration', 'prompt_eval_count', 'prompt_eval_duration', 'eval_count', 'eval_duration']
+2026-01-31 09:28:42,025 INFO llm_adapter.tokenization: Loading tokenizer from default path docs&tests&data_sets\tests\logs\tokenizer.json
+2026-01-31 09:28:42,078 INFO llm_adapter: Using M3Tokenizer
+2026-01-31 09:28:46,191 INFO llm_adapter.knn: ConditionalKNNIndex initialized: KDIM=52400, tau=0.07, max_items=200000
+2026-01-31 09:28:46,248 INFO llm_adapter: M3 integration enabled for LLM adapter
+2026-01-31 09:28:46,249 INFO llm_adapter: LLM adapter attached to core with training data recording enabled
+2026-01-31 09:28:55,605 WARNING llm_adapter.remote: Empty response with thinking (done_reason=length). Escalating num_predict 60 -> 120
+2026-01-31 09:28:58,612 WARNING llm_adapter.remote: Empty response with thinking (done_reason=length). Escalating num_predict 120 -> 240
+2026-01-31 09:30:35,679 WARNING llm_adapter.remote: Response failed validation (attempt 1), retrying. Raw: "I don't have feelings or consciousness, so I don't experience emotions. I'm designed to provide helpful and accurate responses based on the information I was trained on."

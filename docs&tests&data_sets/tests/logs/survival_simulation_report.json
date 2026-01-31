@@ -1,0 +1,99 @@
+{
+  "config": {
+    "num_days": 15,
+    "events_per_day": 30,
+    "learning_rate": 0.05
+  },
+  "daily_stats": [
+    {
+      "day": 1,
+      "predator_reaction": 30.49798583984375,
+      "safe_reaction": 31.134035181116175,
+      "trace_before_sleep": 98336.1875
+    },
+    {
+      "day": 2,
+      "predator_reaction": 8.64975643157959,
+      "safe_reaction": 2.5250528284481595,
+      "trace_before_sleep": 30085.119140625
+    },
+    {
+      "day": 3,
+      "predator_reaction": 10.448868751525879,
+      "safe_reaction": 2.5389043859073093,
+      "trace_before_sleep": 27540.43359375
+    },
+    {
+      "day": 4,
+      "predator_reaction": 12.054734230041504,
+      "safe_reaction": 2.5724681568145753,
+      "trace_before_sleep": 60340.49609375
+    },
+    {
+      "day": 5,
+      "predator_reaction": 15.457443237304688,
+      "safe_reaction": 2.6154669482132484,
+      "trace_before_sleep": 12166.6611328125
+    },
+    {
+      "day": 6,
+      "predator_reaction": 16.099014282226562,
+      "safe_reaction": 2.6141412598746165,
+      "trace_before_sleep": 63767.125
+    },
+    {
+      "day": 7,
+      "predator_reaction": 19.511735916137695,
+      "safe_reaction": 2.719267721833854,
+      "trace_before_sleep": 48226.42578125
+    },
+    {
+      "day": 8,
+      "predator_reaction": 21.98259162902832,
+      "safe_reaction": 2.8524948159853616,
+      "trace_before_sleep": 210081.96875
+    },
+    {
+      "day": 9,
+      "predator_reaction": 32.54203414916992,
+      "safe_reaction": 2.99192608833313,
+      "trace_before_sleep": 242068.84375
+    },
+    {
+      "day": 10,
+      "predator_reaction": 44.653953552246094,
+      "safe_reaction": 3.5136342706351447,
+      "trace_before_sleep": 38676.75390625
+    },
+    {
+      "day": 11,
+      "predator_reaction": 46.62283706665039,
+      "safe_reaction": 3.5395357279941955,
+      "trace_before_sleep": 118810.484375
+    },
+    {
+      "day": 12,
+      "predator_reaction": 52.6998405456543,
+      "safe_reaction": 3.998700901314064,
+      "trace_before_sleep": 152694.859375
+    },
+    {
+      "day": 13,
+      "predator_reaction": 60.64687728881836,
+      "safe_reaction": 4.374792496363322,
+      "trace_before_sleep": 277664.21875
+    },
+    {
+      "day": 14,
+      "predator_reaction": 75.3509521484375,
+      "safe_reaction": 5.021990776062012,
+      "trace_before_sleep": 427090.875
+    },
+    {
+      "day": 15,
+      "predator_reaction": 98.48286437988281,
+      "safe_reaction": 5.86952463511763,
+      "trace_before_sleep": 150463.5625
+    }
+  ]
+}
