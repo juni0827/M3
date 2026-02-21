@@ -1,0 +1,14 @@
+# Runtime/build artifacts
+__pycache__/
+*.pyc
+.vscode/
+llm_adapter.log
+
+# Temporary / generated model artifacts
+*.pt.bad
+log/logs/llm_checkpoint.pt
+*.tmp
+*.temp
+
+# Keep logs except training artifacts in versioned test logs
+/docs&tests&data_sets/tests/logs/*.log

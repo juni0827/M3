@@ -231,6 +231,11 @@ class M3EpisodicMemoryRetriever:
             engagement = getattr(core.qualia, 'engagement', 0.5)
             
             min_score = (1.0 - entropy) * engagement * 0.8
+            try:
+                min_floor = float(os.getenv('M3_EPISODIC_MIN_SCORE', '-0.25'))
+                min_score = max(min_score, min_floor)
+            except Exception:
+                pass
 
             filtered = [
                 (ep, score) for ep, score in scored_episodes
@@ -240,8 +245,25 @@ class M3EpisodicMemoryRetriever:
             # 3. Sort and Top-K
             filtered.sort(key=lambda x: x[1], reverse=True)
             top_k = self._infer_top_k(core)
-            
-            return [ep for ep, _ in filtered[:top_k]]
+            if not filtered:
+                scored_episodes.sort(key=lambda x: x[1], reverse=True)
+                filtered = scored_episodes
+
+            selected = [ep for ep, _ in filtered[:top_k]]
+            if selected:
+                for ep in selected:
+                    try:
+                        if hasattr(ep, 'retrieval_count'):
+                            ep.retrieval_count = int(getattr(ep, 'retrieval_count', 0)) + 1
+                    except Exception:
+                        continue
+                try:
+                    em = getattr(core, 'episodic_memory', None)
+                    if em is not None and hasattr(em, 'total_retrieved'):
+                        em.total_retrieved = int(getattr(em, 'total_retrieved', 0)) + len(selected)
+                except Exception:
+                    pass
+            return selected
 
         except Exception as e:
             logger.error(f"Error in retrieve_relevant_episodes: {e}")

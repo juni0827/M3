@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -17,6 +18,15 @@ except Exception:
     torch = None  # type: ignore
     nn = object  # type: ignore
     F = None  # type: ignore
+from m3.device import resolve_torch_device_string
+
+
+def _resolve_device(device: Optional[str]) -> str:
+    return resolve_torch_device_string(
+        explicit=device,
+        torch_module=torch,
+        require_cuda=False,
+    )
 
 
 # Shared representation (MoE-MLP)
@@ -169,7 +179,7 @@ class TorchPolicy:
         self.in_dim = int(in_dim)
         self.out_dim = int(out_dim)
         self.affect_dim = int(affect_dim)
-        self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
+        self.device = torch.device(_resolve_device(device))
         
         # Input dimension includes affect vector if present
         total_in_dim = self.in_dim + self.affect_dim
@@ -413,7 +423,7 @@ class BRPolicy:
             raise RuntimeError('PyTorch is not available for BRPolicy')
         self.in_dim = int(in_dim)
         self.out_dim = int(out_dim)
-        dev = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
+        dev = torch.device(_resolve_device(device))
         self.device = dev
         self.model = BRPolicyModel(in_dim, out_dim, trunk_dim=trunk_dim).to(dev)
         self.optim = torch.optim.AdamW(self.model.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=0.1)

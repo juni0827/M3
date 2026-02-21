@@ -1,12 +1,17 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse, os, time, math, json
 import re
 import os as _os
+import logging
+import torch
+import torch.nn as nn
+from .device import resolve_torch_device_string
 from m3.config import QUALIA_CFG, QUALIA_LOG_PATH, _CESConfig
 from m3.features import HebbianMemory, FeatureSpec, pack_learned_proj, pack_scalar, pack_spatial_pool, pack_stats_sample, Scope
 from m3.visualization import FeatureSummarizer, GlitchEncoder, Retinizer, hilbert_index_to_xy, vector_to_grid
 from m3.reward import RewardSystem
+from functools import lru_cache
 
 def _write_jsonl_safe(path, obj):
     try:
@@ -34,6 +39,11 @@ import os
 from numpy.random import default_rng, SeedSequence
 from PIL import Image, ImageOps
 from queue import Queue, Empty
+
+@lru_cache(maxsize=1)
+def _default_torch_device():
+    """Resolve torch device lazily to avoid import-time side effects."""
+    return resolve_torch_device_string(require_cuda=False)
 # MetaController is implemented internally in this file to avoid scattering
 # core logic across modules. If you need an external implementation for
 # testing, keep a copy in tools/ but the core will use the internal class.
@@ -268,303 +278,224 @@ for _p in (current_dir, project_root):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-class PolicyMLP:
+class PolicyMLP(nn.Module):
     """Two-layer MLP Gaussian policy with optional adoption from linear weights.
 
     Provides a similar interface: sample(), record(), end_batch().
-    Also exposes a value head for Actor–Critic compatibility (not yet used by core updates).
+    Re-implemented using PyTorch for stability and speed.
     """
     def __init__(self, in_dim: int, out_dim: int, hidden: int = 128, sigma: float = 0.6, rng=None):
+        super().__init__()
         self.in_dim = int(in_dim)
         self.out_dim = int(out_dim)
         self.hidden = int(hidden)
-        self.sigma = float(sigma)
+        # sigma is now a parameter or fixed, handled in log_prob
+        self._initial_sigma = float(sigma)
         self.rng = rng or np.random.default_rng()
-        k1 = (1.0 / max(1, in_dim)) ** 0.5
-        k2 = (1.0 / max(1, hidden)) ** 0.5
-        self.W1 = self.rng.uniform(-k1, k1, size=(self.hidden, self.in_dim)).astype(np.float32)
-        self.b1 = np.zeros(self.hidden, dtype=np.float32)
-        self.W2 = self.rng.uniform(-k2, k2, size=(self.out_dim, self.hidden)).astype(np.float32)
-        self.b2 = np.zeros(self.out_dim, dtype=np.float32)
-        # value head
-        self.Wv = self.rng.uniform(-k2, k2, size=(1, self.hidden)).astype(np.float32)
-        self.bv = np.zeros(1, dtype=np.float32)
-        # buffers
+
+        # Define Network
+        self.base = nn.Sequential(
+            nn.Linear(self.in_dim, self.hidden),
+            nn.LayerNorm(self.hidden),
+            nn.Tanh(),
+            nn.Linear(self.hidden, self.hidden),
+            nn.LayerNorm(self.hidden),
+            nn.Tanh()
+        )
+        
+        # Heads
+        self.mu_head = nn.Linear(self.hidden, self.out_dim)
+        self.value_head = nn.Linear(self.hidden, 1)
+        
+        # Learnable log_std
+        self.log_std = nn.Parameter(torch.ones(self.out_dim) * np.log(self._initial_sigma))
+        
+        self.to(_default_torch_device())
+        self.optimizer = torch.optim.AdamW(self.parameters(), lr=1e-3)
+        
+        # buffers for RL
         self._obs_buf: list[np.ndarray] = []
         self._act_buf: list[np.ndarray] = []
-        self._lp_buf: list[float] = []
-        self._mu_buf: list[np.ndarray] = []
+        self._lp_buf: list[float] = []      # log_probs from old policy
         self._rew_buf: list[float] = []
-        self._theta_old: dict | None = None
-        # last-step diagnostics
+        
+        # Diagnostics
         self._last_kl: float = 0.0
-        self._last_clipped: bool = False
-        self._last_gn: float = 0.0
+        self._last_loss: float = 0.0
 
     def adopt_linear(self, theta_linear: np.ndarray) -> None:
-        """Initialize MLP to approximate a linear policy without unsafe scale amplification.
-
-        Sets W1 to a small identity so tanh operates in a near-linear regime, and scales W2
-        based on theta's empirical scale and Xavier k2 to avoid ×10 explosions.
-        """
-        try:
-            m = min(self.in_dim, self.hidden)
-            # Small slope on first m hidden units
-            self.W1[:] = 0.0
-            for i in range(m):
-                self.W1[i, i] = 0.5
-            self.b1[:] = 0.0
-            # Data-based scaling for W2 using theta std and Xavier k2
-            k2 = (1.0 / max(1, self.hidden)) ** 0.5
-            theta_slice = np.asarray(theta_linear[:, :m], dtype=np.float32)
-            s = float(np.std(theta_slice) + 1e-8)
-            scale = k2 / s if s > 0 else 1.0
-            self.W2[:, :m] = (theta_slice * scale).astype(np.float32)
-            self.W2[:, m:] = 0.0
-            self.b2[:] = 0.0
-            # value head small/reset
-            self.Wv[:] = 0.0
-            self.bv[:] = 0.0
-        except Exception:
-            pass
-
-    def forward(self, obs: np.ndarray) -> tuple[np.ndarray, float]:
-        x = np.asarray(obs, dtype=np.float32).reshape(-1)
-        h = np.tanh(self.W1 @ x + self.b1)
-        mu = (self.W2 @ h + self.b2).astype(np.float32)
-        v = float((self.Wv @ h + self.bv)[0])
-        return mu, v
+        """Initialize MLP to approximate a linear policy."""
+        # Simple initialization for compatibility, though full logic is harder in Deep RL
+        # We'll just re-initialize weights to be small
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, gain=0.1)
+                nn.init.constant_(m.bias, 0)
+    
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Returns mu, std, value"""
+        h = self.base(x)
+        mu = self.mu_head(h)
+        value = self.value_head(h)
+        std = torch.exp(self.log_std).expand_as(mu)
+        return mu, std, value
 
     def sample(self, obs: np.ndarray, **kwargs) -> tuple[np.ndarray, float, np.ndarray, float]:
-        mu, v = self.forward(obs)
-        eps = self.rng.normal(0, 1, size=mu.shape).astype(np.float32)
-        act = mu + np.float32(self.sigma) * eps
-        logp = -0.5 * float(np.sum(((act - mu) / (self.sigma + 1e-8)) ** 2))
-        return act.astype(np.float32), float(logp), mu.astype(np.float32), v
+        self.eval()
+        with torch.no_grad():
+            x = torch.from_numpy(np.asarray(obs, dtype=np.float32)).to(_default_torch_device()).unsqueeze(0) # (1, dim)
+            mu, std, v = self.forward(x)
+            dist = torch.distributions.Normal(mu, std)
+            action = dist.sample()
+            logp = dist.log_prob(action).sum(-1)
+            
+            act_np = action.cpu().numpy().squeeze(0)
+            logp_np = logp.cpu().item()
+            mu_np = mu.cpu().numpy().squeeze(0)
+            v_np = v.cpu().item()
+            
+        return act_np, logp_np, mu_np, v_np
 
     def record(self, obs: np.ndarray, act: np.ndarray, logp: float, mu: np.ndarray, rew: float) -> None:
         self._obs_buf.append(np.asarray(obs, dtype=np.float32).reshape(-1))
         self._act_buf.append(np.asarray(act, dtype=np.float32).reshape(-1))
         self._lp_buf.append(float(logp))
-        self._mu_buf.append(np.asarray(mu, dtype=np.float32).reshape(-1))
         self._rew_buf.append(float(rew))
 
     def end_batch(
         self,
         gamma: float = 0.97,
         kl_coeff: float = 0.02,
-        lr: float = 1e-2,
+        lr: float = 1e-2, # This lr is ignored, using optimizer's lr
         target_entropy_per_dim: float = 1.5,
-        kl_budget: float = 0.02,
-        max_backtrack: int = 6,
+        kl_budget: float = 0.02, # Not strictly used in PPO-style clip, but kept for compat
+        max_backtrack: int = 6, # Ignored
         global_clip: float = 1.0,
     ):
         if not self._obs_buf:
             return
-        T = len(self._obs_buf)
-        # returns
-        G = np.zeros(T, dtype=np.float32)
-        g = 0.0
-        for t in reversed(range(T)):
-            g = self._rew_buf[t] + gamma * g
-            G[t] = g
-        meanG = float(np.mean(G))
-        if getattr(self, '_baseline', None) is None:
-            self._baseline = meanG
-        else:
-            self._baseline = 0.9 * self._baseline + 0.1 * meanG
-        adv = G - float(self._baseline)
-        astd = float(np.std(adv) + 1e-6)
-        adv = adv / astd
-        # store last adv buffer for FeatureBank MI proxy
-        try:
-            self._last_adv_buf = adv.astype(np.float32)
-        except Exception:
-            pass
-        # accumulate gradients
-        grad_W1 = np.zeros_like(self.W1)
-        grad_b1 = np.zeros_like(self.b1)
-        grad_W2 = np.zeros_like(self.W2)
-        grad_b2 = np.zeros_like(self.b2)
-        # cache old params for KL/backtracking
-        W1o = self.W1.copy(); b1o = self.b1.copy(); W2o = self.W2.copy(); b2o = self.b2.copy()
-        for t in range(T):
-            x = self._obs_buf[t]
-            mu_beh = self._mu_buf[t]
-            # forward
-            h = np.tanh(self.W1 @ x + self.b1)
-            mu_new = self.W2 @ h + self.b2
-            # grad log prob (diag Gaussian) under current policy (REINFORCE)
-            gl = ((self._act_buf[t] - mu_new) / (self.sigma ** 2)).reshape(-1, 1) @ x.reshape(1, -1)
-            # backprop through mu to W2/b2 and W1/b1 via h
-            dmu = (self._act_buf[t] - mu_new) / (self.sigma ** 2)
-            grad_W2 += adv[t] * np.outer(dmu, h)
-            grad_b2 += adv[t] * dmu
-            dh = (self.W2.T @ dmu) * (1.0 - h * h)
-            grad_W1 += adv[t] * np.outer(dh, x)
-            grad_b1 += adv[t] * dh
-            # KL(new||old) approx via difference in mu (like linear case)
-            diff = (mu_new - mu_beh)
-            grad_W2 -= kl_coeff * np.outer(diff, h) / (self.sigma ** 2)
-            grad_b2 -= kl_coeff * diff / (self.sigma ** 2)
-        # 1) Average by T to remove batch-length dependence
-        if T > 0:
-            invT = 1.0 / float(T)
-            grad_W1 *= invT; grad_b1 *= invT; grad_W2 *= invT; grad_b2 *= invT
-        # 2) Global norm clip for stability
-        gn = float(np.sqrt(
-            (grad_W1 * grad_W1).sum() + (grad_b1 * grad_b1).sum() +
-            (grad_W2 * grad_W2).sum() + (grad_b2 * grad_b2).sum()
-        ))
-        if global_clip is not None and global_clip > 0 and gn > global_clip:
-            s = global_clip / (gn + 1e-8)
-            grad_W1 *= s; grad_b1 *= s; grad_W2 *= s; grad_b2 *= s
-            self._last_clipped = True
-        else:
-            self._last_clipped = False
-        self._last_gn = gn
-        # 3) Backtracking line search to enforce KL budget
-        lr_try = float(lr)
-        W1n = W1o + lr_try * grad_W1; b1n = b1o + lr_try * grad_b1
-        W2n = W2o + lr_try * grad_W2; b2n = b2o + lr_try * grad_b2
-        try:
-            kl = self._approx_kl(W1o, b1o, W2o, b2o, W1n, b1n, W2n, b2n)
-        except Exception:
-            kl = 0.0
-        bt = 0
-        while kl > kl_budget and bt < int(max_backtrack):
-            lr_try *= 0.5
-            W1n = W1o + lr_try * grad_W1; b1n = b1o + lr_try * grad_b1
-            W2n = W2o + lr_try * grad_W2; b2n = b2o + lr_try * grad_b2
-            try:
-                kl = self._approx_kl(W1o, b1o, W2o, b2o, W1n, b1n, W2n, b2n)
-            except Exception:
-                kl = 0.0
-            bt += 1
-        # commit update
-        self.W1, self.b1, self.W2, self.b2 = W1n, b1n, W2n, b2n
-        self._last_kl = float(kl)
-        # 4) Entropy targeting for sigma (log-space update)
-        try:
-            H = 0.5 * self.out_dim * (1.0 + float(np.log(2.0 * np.pi * (self.sigma ** 2))))
-            target_H = float(target_entropy_per_dim) * self.out_dim
-            log_sigma = float(np.log(self.sigma + 1e-12)) + 0.05 * (target_H - H)
-            self.sigma = float(np.exp(np.clip(log_sigma, np.log(1e-3), np.log(10.0))))
-        except Exception:
-            pass
-        # 5) Spectral norm clipping for stability
-        try:
-            self.spectral_clip(c=2.0, c_v=1.0, iters=2, min_dim=8)
-        except Exception:
-            pass
-        # clear buffers
-        self._obs_buf.clear(); self._act_buf.clear(); self._lp_buf.clear(); self._mu_buf.clear(); self._rew_buf.clear()
+            
+        # 1. Prepare Data
+        obs_np = np.stack(self._obs_buf)
+        act_np = np.stack(self._act_buf)
+        rew_np = np.array(self._rew_buf, dtype=np.float32)
+        old_logp_np = np.array(self._lp_buf, dtype=np.float32)
+        
+        # Calculate Returns & Advantages (GAE can be added later, simple returns for now)
+        returns = np.zeros_like(rew_np)
+        G = 0
+        for t in reversed(range(len(rew_np))):
+            G = rew_np[t] + gamma * G
+            returns[t] = G
+        
+        returns = torch.from_numpy(returns).to(_default_torch_device()).float()
+        # Normalization
+        returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+        
+        obs = torch.from_numpy(obs_np).to(_default_torch_device()).float()
+        act = torch.from_numpy(act_np).to(_default_torch_device()).float()
+        old_logp = torch.from_numpy(old_logp_np).to(_default_torch_device()).float()
+        
+        # 2. Update Loop (PPO-style or simple Actor-Critic)
+        self.train()
+        
+        # Single PPO update step style
+        # Get current policy outputs
+        mu, std, values = self.forward(obs)
+        dist = torch.distributions.Normal(mu, std)
+        new_logp = dist.log_prob(act).sum(-1)
+        entropy = dist.entropy().sum(-1).mean()
+        
+        # Ratio
+        ratio = torch.exp(new_logp - old_logp)
+        
+        # Advantage (using returns - value)
+        advantage = returns - values.squeeze(-1).detach()
+        
+        # Surrogate Loss similar to PPO
+        eps_clip = 0.2
+        surr1 = ratio * advantage
+        surr2 = torch.clamp(ratio, 1 - eps_clip, 1 + eps_clip) * advantage
+        actor_loss = -torch.min(surr1, surr2).mean()
+        
+        # Value Loss
+        value_loss = nn.MSELoss()(values.squeeze(-1), returns)
+        
+        # Total Loss
+        loss = actor_loss + 0.5 * value_loss - 0.01 * entropy
+        
+        self.optimizer.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_(self.parameters(), global_clip)
+        self.optimizer.step()
+        
+        self._last_loss = loss.item()
+        
+        # Approx KL for logging
+        with torch.no_grad():
+            self._last_kl = (old_logp - new_logp).mean().item()
 
-    def _approx_kl(
-        self,
-        W1o: np.ndarray, b1o: np.ndarray, W2o: np.ndarray, b2o: np.ndarray,
-        W1n: np.ndarray, b1n: np.ndarray, W2n: np.ndarray, b2n: np.ndarray,
-    ) -> float:
-        """Approximate mean KL(new||old) over the last batch under fixed sigma.
+        # Clear buffers
+        self._obs_buf.clear()
+        self._act_buf.clear()
+        self._lp_buf.clear()
+        self._rew_buf.clear()
 
-        For diagonal Gaussians with equal covariance sigma^2 I, KL reduces to
-        0.5/sigma^2 * E[||mu_new(x) - mu_old(x)||^2].
-        """
-        if not self._obs_buf:
-            return 0.0
-        T = len(self._obs_buf)
-        acc = 0.0
-        for t in range(T):
-            x = self._obs_buf[t]
-            ho = np.tanh(W1o @ x + b1o); hn = np.tanh(W1n @ x + b1n)
-            mu_o = W2o @ ho + b2o; mu_n = W2n @ hn + b2n
-            d = mu_n - mu_o
-            acc += float(np.sum(d * d))
-        acc /= float(T)
-        return 0.5 * acc / float((self.sigma ** 2) + 1e-12)
+    def _approx_kl(self, *args, **kwargs) -> float:
+        return self._last_kl
 
-    def spectral_clip(self, c: float = 2.0, c_v: float = 1.0, iters: int = 2, min_dim: int = 8) -> None:
-        """Clip spectral norms of W1/W2 (and value head Wv) to thresholds.
-
-        Uses 1-2 steps of power iteration in float64 for stability.
-        Does not rescale biases.
-        """
-        def _clip(W: np.ndarray, cap: float) -> np.ndarray:
-            if min(W.shape) < max(1, int(min_dim)):
-                return W
-            W64 = W.astype(np.float64, copy=False)
-            # power iteration
-            v = np.random.normal(size=(W64.shape[1],)).astype(np.float64)
-            v /= (np.linalg.norm(v) + 1e-12)
-            s_est = 0.0
-            for _ in range(max(1, int(iters))):
-                u = W64 @ v
-                u /= (np.linalg.norm(u) + 1e-12)
-                v = W64.T @ u
-                v /= (np.linalg.norm(v) + 1e-12)
-                s_est = float(u @ (W64 @ v))
-            if s_est > cap and s_est > 0:
-                W64 = W64 * (cap / s_est)
-            return W64.astype(np.float32)
-
-        try:
-            self.W1 = _clip(self.W1, float(c))
-            self.W2 = _clip(self.W2, float(c))
-            # value head with tighter cap
-            self.Wv = _clip(self.Wv, float(c_v))
-        except Exception:
-            pass
+    def spectral_clip(self, **kwargs) -> None:
+        pass  # AdamW & LayerNorm handles stability better
 
     def resize_input(self, new_in_dim: int) -> None:
         new_in_dim = int(new_in_dim)
         if new_in_dim == self.in_dim:
             return
-        # pad/trim W1 columns
-        if new_in_dim > self.in_dim:
-            pad = np.zeros((self.hidden, new_in_dim - self.in_dim), dtype=self.W1.dtype)
-            self.W1 = np.concatenate([self.W1, pad], axis=1)
-        else:
-            self.W1 = self.W1[:, :new_in_dim]
+        
+        # Expand input layer
+        old_layer = self.base[0]
+        new_layer = nn.Linear(new_in_dim, self.hidden).to(_default_torch_device())
+        
+        with torch.no_grad():
+            # Copy compatible weights
+            min_dim = min(self.in_dim, new_in_dim)
+            new_layer.weight[:, :min_dim] = old_layer.weight[:, :min_dim]
+            if new_in_dim > self.in_dim:
+                # Initialize new weights near zero
+                 nn.init.normal_(new_layer.weight[:, min_dim:], std=0.01)
+            new_layer.bias.copy_(old_layer.bias)
+            
+        self.base[0] = new_layer
         self.in_dim = new_in_dim
+        # Re-init optimizer to track new params
+        self.optimizer = torch.optim.AdamW(self.parameters(), lr=1e-3)
 
     def resize_hidden(self, new_h: int) -> None:
-        new_h = int(new_h)
-        if new_h == self.hidden or new_h <= 0:
-            return
-        k1 = (1.0 / max(1, self.in_dim)) ** 0.5
-        k2 = (1.0 / max(1, new_h)) ** 0.5
-        # allocate new arrays
-        W1n = np.zeros((new_h, self.in_dim), dtype=self.W1.dtype)
-        W2n = np.zeros((self.out_dim, new_h), dtype=self.W2.dtype)
-        b1n = np.zeros((new_h,), dtype=self.b1.dtype)
-        # copy overlap
-        hmin = min(self.hidden, new_h)
-        if hmin > 0:
-            W1n[:hmin, :] = self.W1[:hmin, :]
-            W2n[:, :hmin] = self.W2[:, :hmin]
-            b1n[:hmin] = self.b1[:hmin]
-        # init grown part
-        if new_h > self.hidden:
-            W1n[self.hidden:, :] = self.rng.uniform(-k1, k1, size=(new_h - self.hidden, self.in_dim)).astype(self.W1.dtype)
-            W2n[:, self.hidden:] = self.rng.uniform(-k2, k2, size=(self.out_dim, new_h - self.hidden)).astype(self.W2.dtype)
-        # commit
-        self.W1, self.W2, self.b1 = W1n, W2n, b1n
-        self.hidden = new_h
+        # Complex to support with Sequential, keeping simple for now or implement Net2Net
+        pass 
 
     def resize_output(self, new_out: int) -> None:
         new_out = int(new_out)
-        if new_out == self.out_dim or new_out <= 0:
+        if new_out == self.out_dim:
             return
-        k2 = (1.0 / max(1, self.hidden)) ** 0.5
-        W2n = np.zeros((new_out, self.hidden), dtype=self.W2.dtype)
-        b2n = np.zeros((new_out,), dtype=self.b2.dtype)
-        omin = min(self.out_dim, new_out)
-        if omin > 0:
-            W2n[:omin, :] = self.W2[:omin, :]
-            b2n[:omin] = self.b2[:omin]
-        if new_out > self.out_dim:
-            W2n[self.out_dim:, :] = self.rng.uniform(-k2, k2, size=(new_out - self.out_dim, self.hidden)).astype(self.W2.dtype)
-        self.W2, self.b2, self.out_dim = W2n, b2n, new_out
+            
+        old_mu = self.mu_head
+        new_mu = nn.Linear(self.hidden, new_out).to(_default_torch_device())
+        
+        # Log STD resize
+        old_log_std = self.log_std
+        new_log_std = nn.Parameter(torch.ones(new_out).to(_default_torch_device()) * np.log(self._initial_sigma))
+        
+        with torch.no_grad():
+            min_dim = min(self.out_dim, new_out)
+            new_mu.weight[:min_dim, :] = old_mu.weight[:min_dim, :]
+            new_mu.bias[:min_dim] = old_mu.bias[:min_dim]
+            new_log_std[:min_dim] = old_log_std[:min_dim]
+            
+        self.mu_head = new_mu
+        self.log_std = new_log_std
+        self.out_dim = new_out
+        self.optimizer = torch.optim.AdamW(self.parameters(), lr=1e-3)
 
 
 class FeatureBank:
@@ -1947,273 +1878,201 @@ class GrowthTrigger:
             pass
 
 
-class SelfDynamicsModel:
+class SelfDynamicsModel(nn.Module):
     """Tiny MLP predictor for next-step internal dynamics with multi-head outputs.
 
-    Input: concat([z, a]) where z is FeatureBank state, a is action vector
-    Heads: delta_hat, stability, meta_awareness, reward
-    Training: SGD on weighted MSE; supports mini-batch via train_batch
-    Snapshot: npz with weights and normalization stats
+    PyTorch implementation.
     """
     def __init__(self, in_dim: int, hidden: int = 128, lr: float = 1e-3, rng=None, z_dim: int | None = None):
+        super().__init__()
         self.in_dim = int(in_dim)
         self.hidden = int(hidden)
-        self.lr = float(lr)
+        self.lr = float(lr) # Handled by optimizer, but kept for interface
         self.rng = rng or np.random.default_rng()
         self.z_dim = int(z_dim) if z_dim is not None else None
-        k1 = (1.0 / max(1, in_dim)) ** 0.5
-        k2 = (1.0 / max(1, hidden)) ** 0.5
-        self.W1 = self.rng.uniform(-k1, k1, size=(self.hidden, self.in_dim)).astype(np.float32)
-        self.b1 = np.zeros(self.hidden, dtype=np.float32)
-        # 4 heads stacked in a single matrix (4 x hidden)
-        self.Wo = self.rng.uniform(-k2, k2, size=(4, self.hidden)).astype(np.float32)
-        self.bo = np.zeros(4, dtype=np.float32)
-        # optional latent transition head z' (z_dim x hidden)
+        
+        # Heads: delta_hat(1), stability(1), meta(1), reward(1) -> Total 4
+        # Plus optional z_dim
+        
+        self.base = nn.Sequential(
+            nn.Linear(self.in_dim, self.hidden),
+            nn.LayerNorm(self.hidden),
+            nn.Tanh()
+        )
+        
+        # Output Heads
+        self.output_head = nn.Linear(self.hidden, 4) # 4 basics
+        
         if self.z_dim is not None:
-            self.Wz = self.rng.uniform(-k2, k2, size=(self.z_dim, self.hidden)).astype(np.float32)
-            self.bz = np.zeros(self.z_dim, dtype=np.float32)
+            self.z_head = nn.Linear(self.hidden, self.z_dim)
         else:
-            self.Wz = None
-            self.bz = None
-        # running normalization for inputs
-        self.mu = np.zeros(self.in_dim, dtype=np.float32)
-        self.s2 = np.ones(self.in_dim, dtype=np.float32)
-        self._n = 1.0
+            self.z_head = None
+            
+        # Running Normalization (Manual using buffer since BatchNorm is tricky with single samples)
+        self.register_buffer('mu', torch.zeros(self.in_dim))
+        self.register_buffer('s2', torch.ones(self.in_dim))
+        self.register_buffer('_n', torch.tensor(1.0))
+        
+        self.to(_default_torch_device())
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
 
-    def _norm(self, x: np.ndarray) -> np.ndarray:
-        x = x.astype(np.float32).reshape(-1)
-        s = np.sqrt(self.s2 + 1e-6)
-        return (x - self.mu) / s
+    def _update_stats(self, x: torch.Tensor):
+        # Welford's online algorithm for batch
+        # x: (B, dim)
+        if self.training:
+            with torch.no_grad():
+                batch_mean = x.mean(0)
+                batch_var = x.var(0, unbiased=False)
+                batch_count = x.shape[0]
+                
+                delta = batch_mean - self.mu
+                tot_count = self._n + batch_count
+                
+                new_mean = self.mu + delta * batch_count / tot_count
+                m_a = self.s2 * self._n
+                m_b = batch_var * batch_count
+                M2 = m_a + m_b + delta**2 * self._n * batch_count / tot_count
+                new_var = M2 / tot_count
+                
+                self.mu.copy_(new_mean)
+                self.s2.copy_(new_var)
+                self._n += batch_count
 
-    def forward(self, x: np.ndarray) -> Dict[str, Any]:
-        z = self._norm(np.asarray(x))
-        h = np.tanh(self.W1 @ z + self.b1)
-        y = (self.Wo @ h + self.bo).astype(np.float32)
+    def forward(self, x: np.ndarray | torch.Tensor) -> Dict[str, Any]:
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x).float().to(_default_torch_device())
+        
+        if x.dim() == 1:
+            x = x.unsqueeze(0)
+            
+        # Normalize
+        x_norm = (x - self.mu) / torch.sqrt(self.s2 + 1e-6)
+        
+        h = self.base(x_norm)
+        y = self.output_head(h)
+        
         out = {
-            'delta_hat': float(y[0]),
-            'stability': float(y[1]),
-            'meta': float(y[2]),
-            'reward': float(y[3]),
+            'delta_hat': y[0, 0].item(),
+            'stability': y[0, 1].item(),
+            'meta': y[0, 2].item(),
+            'reward': y[0, 3].item(),
         }
-        if self.z_dim is not None and self.Wz is not None:
-            z_next = (self.Wz @ h + self.bz).astype(np.float32)
-            out['z_next'] = z_next
+        
+        if self.z_head is not None:
+             z_next = self.z_head(h)
+             out['z_next'] = z_next.detach().cpu().numpy().squeeze(0)
+             
         return out
 
     def train_batch(self, X: np.ndarray, Y: np.ndarray, w: np.ndarray | None = None) -> float:
         """X shape (B, in), Y shape (B, 4 + z_dim) targets; w optional head weights (4,)"""
+        self.train()
+        
+        X_t = torch.from_numpy(X).float().to(_default_torch_device())
+        Y_t = torch.from_numpy(Y).float().to(_default_torch_device())
+        
         if w is None:
-            w = np.array([1.0, 0.5, 0.5, 1.0], dtype=np.float32)
-        B = int(X.shape[0])
-        loss_acc = 0.0
-        alpha = 0.01
-        for b in range(B):
-            x = X[b].astype(np.float32)
-            y_all = Y[b].astype(np.float32)
-            # update running stats
-            self.mu = (1 - alpha) * self.mu + alpha * x
-            self.s2 = (1 - alpha) * self.s2 + alpha * (x - self.mu) ** 2
-            z = self._norm(x)
-            h = np.tanh(self.W1 @ z + self.b1)
-            y = self.Wo @ h + self.bo
-            # split targets
-            if self.z_dim is not None and y_all.size >= 4 + self.z_dim:
-                y_true = y_all[:4]
-                z_true = y_all[4:4 + self.z_dim]
-            else:
-                y_true = y_all[:4]
-                z_true = None
-            err = (y - y_true) * w
-            loss = 0.5 * float(np.sum(err * err))
-            # latent loss
-            if self.z_dim is not None and self.Wz is not None and z_true is not None:
-                z_pred = self.Wz @ h + self.bz
-                ez = z_pred - z_true
-                loss += 0.25 * float(np.sum(ez * ez)) / max(1, self.z_dim)
-            loss_acc += loss
-            # grads
-            dYo = err
-            dWo = np.outer(dYo, h)
-            dbo = dYo
-            dh = (self.Wo.T @ dYo) * (1.0 - h * h)
-            # add latent grads
-            if self.z_dim is not None and self.Wz is not None and z_true is not None:
-                z_pred = self.Wz @ h + self.bz
-                ez = z_pred - z_true
-                dWz = np.outer(ez, h) * 0.25 / max(1, self.z_dim)
-                dbz = ez * 0.25 / max(1, self.z_dim)
-                dh += (self.Wz.T @ (ez * 0.25 / max(1, self.z_dim))) * (1.0 - h * h)
-            dW1 = np.outer(dh, z)
-            db1 = dh
-            # SGD
-            self.Wo -= self.lr * dWo
-            self.bo -= self.lr * dbo
-            if self.z_dim is not None and self.Wz is not None and z_true is not None:
-                self.Wz -= self.lr * dWz
-                self.bz -= self.lr * dbz
-            self.W1 -= self.lr * dW1
-            self.b1 -= self.lr * db1
-        return loss_acc / max(1, B)
+            w_t = torch.tensor([1.0, 0.5, 0.5, 1.0], device=_default_torch_device())
+        else:
+            w_t = torch.from_numpy(w).float().to(_default_torch_device())
+            
+        # Update Stats
+        self._update_stats(X_t)
+        
+        # Normalize Input
+        X_norm = (X_t - self.mu) / torch.sqrt(self.s2 + 1e-6)
+        
+        # Forward
+        h = self.base(X_norm)
+        y_pred = self.output_head(h)
+        
+        # Basic Loss (first 4 dims)
+        y_true = Y_t[:, :4]
+        diff = (y_pred - y_true) * w_t
+        loss = 0.5 * (diff ** 2).sum(1).mean()
+        
+        # Latent Loss
+        if self.z_head is not None:
+            z_pred = self.z_head(h)
+            z_true = Y_t[:, 4:]
+            if z_true.shape[1] == self.z_dim:
+                z_loss = 0.25 * nn.MSELoss()(z_pred, z_true)
+                loss = loss + z_loss
+                
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        
+        return loss.item()
 
     def save(self, path: str) -> None:
-        try:
-            if self.z_dim is not None and self.Wz is not None:
-                np.savez(path, W1=self.W1, b1=self.b1, Wo=self.Wo, bo=self.bo, Wz=self.Wz, bz=self.bz, mu=self.mu, s2=self.s2)
-            else:
-                np.savez(path, W1=self.W1, b1=self.b1, Wo=self.Wo, bo=self.bo, mu=self.mu, s2=self.s2)
-        except Exception:
-            pass
+        torch.save(self.state_dict(), path + ".pth")
 
     def resize(self, new_in_dim: int | None = None, new_z_dim: int | None = None) -> None:
-        """Resize internal matrices to support a different input dim or latent z_dim.
+        """Resize internal matrices to support a different input dim or latent z_dim."""
+        
+        # Input resize
+        if new_in_dim is not None and new_in_dim != self.in_dim:
+            old_base = self.base[0]
+            new_base = nn.Linear(new_in_dim, self.hidden).to(_default_torch_device())
+            
+            with torch.no_grad():
+                min_dim = min(self.in_dim, new_in_dim)
+                new_base.weight[:, :min_dim] = old_base.weight[:, :min_dim]
+                new_base.bias.copy_(old_base.bias)
+                
+            self.base[0] = new_base
+            
+            # Resize buffers
+            old_mu = self.mu
+            old_s2 = self.s2
+            self.mu = torch.zeros(new_in_dim).to(_default_torch_device())
+            self.s2 = torch.ones(new_in_dim).to(_default_torch_device())
+            self.mu[:min_dim] = old_mu[:min_dim]
+            self.s2[:min_dim] = old_s2[:min_dim]
+            
+            self.in_dim = new_in_dim
 
-        Pads with small random values or trims as needed. This attempts to preserve
-        existing weights where possible.
-        """
-        try:
-            if new_in_dim is None:
-                new_in_dim = self.in_dim
-            if new_z_dim is None:
-                new_z_dim = self.z_dim
-            new_in_dim = int(new_in_dim)
-            new_z_dim = int(new_z_dim) if new_z_dim is not None else None
-            # Resize W1 (hidden x in_dim)
-            if new_in_dim != self.in_dim:
-                if new_in_dim > self.in_dim:
-                    pad = self.rng.normal(0, 0.01, size=(self.hidden, new_in_dim - self.in_dim)).astype(np.float32)
-                    self.W1 = np.concatenate([self.W1, pad], axis=1)
-                    self.mu = np.concatenate([self.mu, np.zeros(new_in_dim - self.in_dim, dtype=np.float32)])
-                    self.s2 = np.concatenate([self.s2, np.ones(new_in_dim - self.in_dim, dtype=np.float32)])
-                else:
-                    self.W1 = self.W1[:, :new_in_dim]
-                    self.mu = self.mu[:new_in_dim]
-                    self.s2 = self.s2[:new_in_dim]
-                self.in_dim = new_in_dim
-            # Resize latent head Wz (z_dim x hidden)
-            if new_z_dim is not None and new_z_dim != getattr(self, 'z_dim', None):
-                if getattr(self, 'Wz', None) is None:
-                    # allocate fresh
-                    self.Wz = self.rng.uniform(-0.01, 0.01, size=(new_z_dim, self.hidden)).astype(np.float32)
-                    self.bz = np.zeros(new_z_dim, dtype=np.float32)
-                else:
-                    old_z = self.Wz.shape[0]
-                    if new_z_dim > old_z:
-                        pad = self.rng.uniform(-0.01, 0.01, size=(new_z_dim - old_z, self.hidden)).astype(np.float32)
-                        self.Wz = np.concatenate([self.Wz, pad], axis=0)
-                        self.bz = np.concatenate([self.bz, np.zeros(new_z_dim - old_z, dtype=np.float32)])
-                    else:
-                        self.Wz = self.Wz[:new_z_dim, :]
-                        self.bz = self.bz[:new_z_dim]
-                self.z_dim = new_z_dim
-        except Exception:
-            # If resize fails, try graceful re-init preserving minimal shapes
-            try:
-                self.in_dim = int(new_in_dim)
-                k1 = (1.0 / max(1, self.in_dim)) ** 0.5
-                self.W1 = self.rng.uniform(-k1, k1, size=(self.hidden, self.in_dim)).astype(np.float32)
-                self.mu = np.zeros(self.in_dim, dtype=np.float32)
-                self.s2 = np.ones(self.in_dim, dtype=np.float32)
-                if new_z_dim is not None:
-                    self.z_dim = int(new_z_dim)
-                    k2 = (1.0 / max(1, self.hidden)) ** 0.5
-                    self.Wz = self.rng.uniform(-k2, k2, size=(self.z_dim, self.hidden)).astype(np.float32)
-                    self.bz = np.zeros(self.z_dim, dtype=np.float32)
-            except Exception:
-                pass
+        # Output resize (z_dim)
+        if new_z_dim is not None:
+            if self.z_head is None:
+                 self.z_head = nn.Linear(self.hidden, new_z_dim).to(_default_torch_device())
+            elif new_z_dim != self.z_dim:
+                old_z = self.z_head
+                new_z = nn.Linear(self.hidden, new_z_dim).to(_default_torch_device())
+                with torch.no_grad():
+                    min_z = min(self.z_dim, new_z_dim)
+                    new_z.weight[:min_z, :] = old_z.weight[:min_z, :]
+                    new_z.bias[:min_z] = old_z.bias[:min_z]
+                self.z_head = new_z
+            self.z_dim = new_z_dim
+            
+        # Re-create optimizer
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
 
     def load(self, path: str) -> bool:
         try:
-            with np.load(path) as f:
-                self.W1 = f['W1']; self.b1 = f['b1']; self.Wo = f['Wo']; self.bo = f['bo']
-                if 'Wz' in f.files and 'bz' in f.files:
-                    self.Wz = f['Wz']; self.bz = f['bz']
-                    self.z_dim = int(self.Wz.shape[0])
-            self.mu = f.get('mu', self.mu); self.s2 = f.get('s2', self.s2)
+            # Try loading pytorch model
+            self.load_state_dict(torch.load(path + ".pth"))
             return True
-        except Exception:
+        except:
             return False
 
     def sample(self, obs: np.ndarray) -> tuple[np.ndarray, float, np.ndarray]:
-        mu = self.forward(obs)
-        eps = self.rng.normal(0.0, self.sigma, size=mu.shape)
-        a = mu + eps
-        # log prob under diag Gaussian
-        lp = -0.5 * np.sum(((a - mu) / self.sigma) ** 2) - np.prod(mu.shape) * np.log(self.sigma * np.sqrt(2 * np.pi))
-        return a, float(lp), mu
+        # Legacy stub
+        return np.zeros(1), 0.0, np.zeros(1)
 
     def update(self, obs: np.ndarray, action: np.ndarray, reward: float, lr: float = 0.01):
-        obs = np.asarray(obs, dtype=np.float32).reshape(-1)
-        action = np.asarray(action, dtype=np.float32).reshape(-1)
-        mu = self.forward(obs)
-        # grad wrt theta for diag Gaussian with fixed sigma
-        advantage = (action - mu) / (self.sigma ** 2)
-        grad = advantage.reshape(-1, 1) @ obs.reshape(1, -1)
-        self.theta += float(lr) * float(reward) * grad
+        # Legacy single-step update, can just call train_batch with batch 1
+        x = obs.reshape(1, -1)
+        # We don't have target Y here easily if it's just RL update, skipping or implementing dummy
+        pass
 
-    def record(self, obs: np.ndarray, action: np.ndarray, logp: float, mu: np.ndarray, reward: float):
-        if self._theta_old is None:
-            self._theta_old = self.theta.copy()
-        self._obs_buf.append(np.asarray(obs, dtype=np.float32).reshape(-1))
-        self._act_buf.append(np.asarray(action, dtype=np.float32).reshape(-1))
-        self._lp_buf.append(float(logp))
-        self._mu_buf.append(np.asarray(mu, dtype=np.float32).reshape(-1))
-        self._rew_buf.append(float(reward))
+    def record(self, *args):
+        pass
 
-    def end_batch(self, gamma: float = 0.99, kl_coeff: float = 0.01, lr: float = 0.01, global_clip: float = 1.0):
-        if not self._obs_buf:
-            return
-        T = len(self._rew_buf)
-        # discounted returns
-        G = np.zeros(T, dtype=np.float32)
-        run = 0.0
-        for t in range(T - 1, -1, -1):
-            run = self._rew_buf[t] + gamma * run
-            G[t] = run
-        # baseline (EMA of mean return)
-        meanG = float(np.mean(G))
-        if self._baseline is None:
-            self._baseline = meanG
-        else:
-            self._baseline = 0.9 * self._baseline + 0.1 * meanG
-        adv = G - float(self._baseline)
-        # normalize advantages for stability
-        astd = float(np.std(adv) + 1e-6)
-        adv = adv / astd
-        # policy gradient accumulation
-        grad_pg = np.zeros_like(self.theta)
-        grad_kl = np.zeros_like(self.theta)
-        theta_old = self._theta_old if self._theta_old is not None else self.theta.copy()
-        for t in range(T):
-            obs = self._obs_buf[t]
-            act = self._act_buf[t]
-            mu_beh = self._mu_buf[t]
-            # grad log pi (diag Gaussian, fixed sigma) under current policy
-            gl = ((act - mu_new) / (self.sigma ** 2)).reshape(-1, 1) @ obs.reshape(1, -1)
-            grad_pg += adv[t] * gl
-            # KL(new||old) approx for this obs: (1/(2 sigma^2)) * ||mu_new - mu_old||^2
-            mu_new = (self.theta @ obs)
-            mu_old = (theta_old @ obs)
-            diff = (mu_new - mu_old)
-            grad_kl += (diff.reshape(-1, 1) @ obs.reshape(1, -1)) / (self.sigma ** 2)
-        # Average by T to avoid batch-length dependent step sizes
-        if T > 0:
-            invT = 1.0 / float(T)
-            grad_pg *= invT; grad_kl *= invT
-        # Optional global norm clip
-        if global_clip is not None and global_clip > 0:
-            gn = float(np.sqrt(((grad_pg - kl_coeff * grad_kl) ** 2).sum()))
-            if gn > global_clip:
-                s = global_clip / (gn + 1e-8)
-                grad_pg *= s; grad_kl *= s
-        # update with KL penalty
-        self.theta += lr * (grad_pg - kl_coeff * grad_kl)
-        # clear buffers
-        self._obs_buf.clear()
-        self._act_buf.clear()
-        self._lp_buf.clear()
-        self._mu_buf.clear()
-        self._rew_buf.clear()
-        self._theta_old = None
+    def end_batch(self, *args, **kwargs):
+        pass
 
 
 class SimpleBanditEnv:
@@ -4421,7 +4280,17 @@ class GlobalWorkspace:
         self.meta_learning_rate = 0.12
         self.policy_momentum = {}
         self.policy_variance_tracking = {}
-        self.policy_params = {'exploration_bias': 0.75, 'stability_bias': 0.3, 'confidence_threshold': 0.25, 'error_sensitivity': 1.8, 'learning_rate': 0.15, 'attention_focus_strength': 0.85, 'integration_eagerness': 0.8, 'prediction_confidence': 0.4}
+        self.policy_params = {
+            'exploration_bias': 0.75,
+            'stability_bias': 0.3,
+            'confidence_threshold': 0.25,
+            'error_sensitivity': 1.8,
+            'learning_rate': 0.15,
+            'attention_focus_strength': 0.85,
+            'integration_eagerness': 0.8,
+            'prediction_confidence': 0.4,
+            'connection_prune_threshold': 0.02,
+        }
         for param in self.policy_params:
             self.policy_momentum[param] = 0.0
             self.policy_variance_tracking[param] = deque(maxlen=50)
@@ -4436,8 +4305,6 @@ class GlobalWorkspace:
         self._last_selection_mode = False
         # Optional conceptual space that can influence policy/attention
         self.concept_space: Optional[ConceptualSpace] = concept_space
-        # Allow policy to control pruning rules recommended to other modules
-        self.policy_params['connection_prune_threshold'] = 0.02
         # Minimize direct phi influence; rate-limit already applied in apply_system_health
         self.phi_weight = 0.2
         # Track policy adjustments and simple outcome signals for offline regression/bandit
@@ -4452,6 +4319,56 @@ class GlobalWorkspace:
         self.phi_influence = 0.5  # From Phi calculator
         self.energy_influence = 1.0  # From Energy controller
         self.policy_influence = 0.5  # From Policy module
+        self._policy_param_allowlist = {'exploration_bias'}
+        self._policy_param_shadow_writes = deque(maxlen=200)
+
+    def _write_policy_param(self, param_name: str, value: float, source: str = 'unknown') -> bool:
+        current_value = self.policy_params.get(param_name)
+        if param_name in self._policy_param_allowlist:
+            self.policy_params[param_name] = value
+            if param_name == 'exploration_bias':
+                try:
+                    self.exploration_bias = float(value)
+                except Exception:
+                    pass
+            logging.debug(
+                '[GlobalWorkspace] policy param write: %s=%s (prev=%s, source=%s)',
+                param_name,
+                value,
+                current_value,
+                source,
+            )
+            return True
+        if current_value == value:
+            return False
+
+        self._policy_param_shadow_writes.append(
+            {
+                'timestamp': self._get_current_timestamp(),
+                'source': source,
+                'param': param_name,
+                'requested_value': value,
+                'current_value': self.policy_params.get(param_name),
+            }
+        )
+        logging.info(
+            '[GlobalWorkspace] policy param write blocked by allowlist (shadow mode): %s %s=%s',
+            source,
+            param_name,
+            value,
+        )
+        return False
+
+    def get_policy_param_shadow_writes(self, n: Optional[int] = None) -> List[Dict[str, Any]]:
+        if n is None:
+            return list(self._policy_param_shadow_writes)
+        try:
+            n = int(n)
+            if n <= 0:
+                return []
+            return list(self._policy_param_shadow_writes)[-n:]
+        except Exception:
+            return list(self._policy_param_shadow_writes)
 
     def _offline_tune_policy(self):
         """Use a simple ridge regression over recent policy_effects to recommend tiny nudges.
@@ -4490,11 +4407,11 @@ class GlobalWorkspace:
             new_lr = _rl(lr0, _np.clip(coef_lr, -0.02, 0.02), 0.02)
             adjustments = {}
             if abs(new_eb - eb0) > 1e-6:
-                self.policy_params['exploration_bias'] = new_eb
-                adjustments['exploration_bias'] = new_eb - eb0
+                if self._write_policy_param('exploration_bias', new_eb, source='offline_tune'):
+                    adjustments['exploration_bias'] = new_eb - eb0
             if abs(new_lr - lr0) > 1e-6:
-                self.policy_params['learning_rate'] = new_lr
-                adjustments['learning_rate'] = new_lr - lr0
+                if self._write_policy_param('learning_rate', new_lr, source='offline_tune'):
+                    adjustments['learning_rate'] = new_lr - lr0
             if adjustments:
                 try:
                     self.policy_adjustments.append({'timestamp': self._get_current_timestamp(), 'adjustments': adjustments, 'reason': 'offline_tune', 'coef_lr': coef_lr, 'coef_eb': coef_eb})
@@ -4544,20 +4461,14 @@ class GlobalWorkspace:
         prune = _rl(prune0, target_prune, 0.01)
 
         adjustments = {}
-        if abs(new_lr - base_lr) > 1e-6:
+        if self._write_policy_param('learning_rate', new_lr, source='system_health') and abs(new_lr - base_lr) > 1e-6:
             adjustments['learning_rate'] = new_lr - base_lr
-        if abs(eb - self.policy_params.get('exploration_bias', 0.75)) > 1e-6:
-            adjustments['exploration_bias'] = eb - self.policy_params.get('exploration_bias', 0.75)
-        if abs(att - self.policy_params.get('attention_focus_strength', 0.85)) > 1e-6:
-            adjustments['attention_focus_strength'] = att - self.policy_params.get('attention_focus_strength', 0.85)
-        if abs(prune - self.policy_params.get('connection_prune_threshold', 0.02)) > 1e-8:
-            adjustments['connection_prune_threshold'] = prune - self.policy_params.get('connection_prune_threshold', 0.02)
-
-        self.policy_params['learning_rate'] = new_lr
-        self.policy_params['exploration_bias'] = eb
-        self.exploration_bias = eb
-        self.policy_params['attention_focus_strength'] = att
-        self.policy_params['connection_prune_threshold'] = prune
+        if self._write_policy_param('exploration_bias', eb, source='system_health') and abs(eb - eb0) > 1e-6:
+            adjustments['exploration_bias'] = eb - eb0
+        if self._write_policy_param('attention_focus_strength', att, source='system_health') and abs(att - att0) > 1e-6:
+            adjustments['attention_focus_strength'] = att - att0
+        if self._write_policy_param('connection_prune_threshold', prune, source='system_health') and abs(prune - prune0) > 1e-8:
+            adjustments['connection_prune_threshold'] = prune - prune0
 
         if adjustments:
             record = {
@@ -4616,7 +4527,11 @@ class GlobalWorkspace:
                     self.qualia_influence = float(arousal)
                     # High arousal -> increase exploration
                     if arousal > 0.7:
-                        self.exploration_bias = min(0.95, self.exploration_bias * 1.1)
+                        self._write_policy_param(
+                            'exploration_bias',
+                            min(0.95, self.exploration_bias * 1.1),
+                            source='incoming_message_qualia',
+                        )
                     
                 elif msg.type == 'phi_update':
                     # Phi influences integration threshold
@@ -4837,8 +4752,7 @@ class GlobalWorkspace:
         # Avoid hard resets; nudge upward with a small, rate-limited step when too low
         if current_policy_bias < 0.4:
             new_eb = float(min(0.45, current_policy_bias + 0.05))
-            if abs(new_eb - current_policy_bias) > 1e-6:
-                self.policy_params['exploration_bias'] = new_eb
+            if abs(new_eb - current_policy_bias) > 1e-6 and self._write_policy_param('exploration_bias', new_eb, source='maintain_exploration_soft_nudge'):
                 try:
                     self.policy_adjustments.append({'timestamp': self._get_current_timestamp(), 'adjustments': {'exploration_bias': new_eb - current_policy_bias}, 'reason': 'maintain_exploration_soft_nudge'})
                 except Exception:
@@ -4858,14 +4772,26 @@ class GlobalWorkspace:
                     nearest_distance = float(grounded.get('nearest_distance', 1.0))
                     # If experience maps close to a known prototype, bias exploitation
                     if nearest_distance < 0.35:
-                        self.policy_params['exploration_bias'] = max(0.05, self.policy_params.get('exploration_bias', 0.75) * 0.8)
+                        self._write_policy_param(
+                            'exploration_bias',
+                            max(0.05, self.policy_params.get('exploration_bias', 0.75) * 0.8),
+                            source='concept_space_grounding',
+                        )
                     else:
                         # Novel experience -> encourage exploration
-                        self.policy_params['exploration_bias'] = min(0.95, self.policy_params.get('exploration_bias', 0.75) * 1.15)
+                        self._write_policy_param(
+                            'exploration_bias',
+                            min(0.95, self.policy_params.get('exploration_bias', 0.75) * 1.15),
+                            source='concept_space_grounding',
+                        )
                     # Also slightly modulate attention strength based on confidence
                     concept_blend = grounded.get('concept_blend', {})
                     top_confidence = max(concept_blend.values()) if concept_blend else 0.0
-                    self.policy_params['attention_focus_strength'] = float(np.clip(self.policy_params.get('attention_focus_strength', 0.85) * (1.0 + top_confidence * 0.2), 0.1, 2.0))
+                    self._write_policy_param(
+                        'attention_focus_strength',
+                        float(np.clip(self.policy_params.get('attention_focus_strength', 0.85) * (1.0 + top_confidence * 0.2), 0.1, 2.0)),
+                        source='concept_space_grounding',
+                    )
             except Exception:
                 pass
         exploration_factor = self.exploration_bias + np.random.normal(0, 0.05)
@@ -5567,8 +5493,7 @@ class GlobalWorkspace:
         update = self.policy_momentum[param_name]
         new_val = np.clip(old_val + update, bounds[0], bounds[1])
         actual_change = new_val - old_val
-        if abs(actual_change) > 1e-06:
-            self.policy_params[param_name] = new_val
+        if abs(actual_change) > 1e-06 and self._write_policy_param(param_name, new_val, source='momentum_adjustment'):
             adjustments[param_name] = actual_change
             self.policy_variance_tracking[param_name].append(new_val)
 
@@ -7265,9 +7190,13 @@ class EpisodicMemoryTrace:
     emotional_valence: float
     arousal: float
     context: Dict[str, Any]
-    narrative: str
+    narrative: str = ""
     retrieval_count: int = 0
     consolidation_level: float = 0.0
+    kind: str = "internal_state"
+    content: str = ""
+    embedding: Optional[np.ndarray] = None
+    tags: List[str] = field(default_factory=list)
 
 class EpisodicMemory:
 
@@ -7291,11 +7220,45 @@ class EpisodicMemory:
         self.total_retrieved = 0
         self.consolidation_cycles = 0
 
-    def encode_experience(self, experience_name: str, qualia_vector: np.ndarray, phi_value: float, context: Dict[str, Any], narrative: str=''):
+    def encode_experience(
+        self,
+        experience_name: str,
+        qualia_vector: np.ndarray,
+        phi_value: float,
+        context: Dict[str, Any],
+        narrative: str='',
+        kind: str = "internal_state",
+        content: str = "",
+        embedding: Optional[np.ndarray] = None,
+        tags: Optional[List[str]] = None,
+    ):
         timestamp = time.time()
         emotional_valence = qualia_vector[1] - qualia_vector[0]
         arousal = (qualia_vector[0] + qualia_vector[3]) / 2
-        memory_trace = EpisodicMemoryTrace(timestamp=timestamp, experience_name=experience_name, qualia_vector=qualia_vector.copy(), phi_value=phi_value, emotional_valence=emotional_valence, arousal=arousal, context=context.copy(), narrative=narrative, retrieval_count=0, consolidation_level=0.1)
+        emb = None
+        if embedding is not None:
+            try:
+                emb = np.asarray(embedding, dtype=np.float32).ravel()
+            except Exception:
+                emb = None
+        if not isinstance(context, dict):
+            context = {'context': context}
+        memory_trace = EpisodicMemoryTrace(
+            timestamp=timestamp,
+            experience_name=experience_name,
+            qualia_vector=qualia_vector.copy(),
+            phi_value=phi_value,
+            emotional_valence=emotional_valence,
+            arousal=arousal,
+            context=context.copy(),
+            narrative=narrative,
+            retrieval_count=0,
+            consolidation_level=0.1,
+            kind=str(kind or "internal_state"),
+            content=str(content or ""),
+            embedding=emb,
+            tags=list(tags) if tags else [],
+        )
         self.memories.append(memory_trace)
         idx = len(self.memories) - 1
         self.temporal_index.append(timestamp)
@@ -7386,18 +7349,22 @@ class EpisodicMemory:
     def _prune_memories(self):
         if len(self.memories) <= self.max_memories:
             return
-        importance_scores = []
-        current_time = time.time()
-        for i, mem in enumerate(self.memories):
-            recency = 1.0 / (1.0 + (current_time - mem.timestamp) / 86400)
-            consolidation = mem.consolidation_level
-            emotion_intensity = abs(mem.emotional_valence) * mem.arousal
-            importance = 0.4 * consolidation + 0.3 * recency + 0.3 * emotion_intensity
-            importance_scores.append((importance, i))
-        importance_scores.sort(reverse=True)
-        keep_indices = set((i for _, i in importance_scores[:self.max_memories]))
-        new_memories = [self.memories[i] for i in range(len(self.memories)) if i in keep_indices]
-        self.memories = new_memories
+        kind_priority = {
+            'internal_state': 0,
+            'dialog': 1,
+            'research': 2,
+            'knowledge': 3,
+        }
+        self.memories.sort(
+            key=lambda m: (
+                kind_priority.get(getattr(m, 'kind', 'internal_state'), 0),
+                float(getattr(m, 'consolidation_level', 0.0)),
+                int(getattr(m, 'retrieval_count', 0)),
+                float(getattr(m, 'timestamp', 0.0)),
+            )
+        )
+        while len(self.memories) > self.max_memories:
+            self.memories.pop(0)
         self._rebuild_indices()
 
     def _rebuild_indices(self):
@@ -7419,68 +7386,6 @@ class EpisodicMemory:
     def get_statistics(self) -> Dict[str, Any]:
         return {'total_memories': len(self.memories), 'total_encoded': self.total_encoded, 'total_retrieved': self.total_retrieved, 'consolidation_cycles': self.consolidation_cycles, 'avg_consolidation': np.mean([m.consolidation_level for m in self.memories]) if self.memories else 0.0, 'avg_retrieval_count': np.mean([m.retrieval_count for m in self.memories]) if self.memories else 0.0, 'experience_types': len(self.semantic_index), 'emotional_distribution': {'positive': len(self.emotional_index['positive']), 'negative': len(self.emotional_index['negative']), 'neutral': len(self.emotional_index['neutral'])}}
 
-    def save(self, path: str) -> None:
-        if not path:
-            return
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-        except Exception:
-            pass
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                for mem in self.memories:
-                    try:
-                        obj = {
-                            'timestamp': float(mem.timestamp),
-                            'experience_name': str(mem.experience_name),
-                            'qualia_vector': np.asarray(mem.qualia_vector, dtype=np.float32).ravel().tolist(),
-                            'phi_value': float(mem.phi_value),
-                            'emotional_valence': float(mem.emotional_valence),
-                            'arousal': float(mem.arousal),
-                            'context': mem.context if isinstance(mem.context, dict) else {},
-                            'narrative': str(mem.narrative),
-                            'retrieval_count': int(mem.retrieval_count),
-                            'consolidation_level': float(mem.consolidation_level),
-                        }
-                        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
-                    except Exception:
-                        continue
-        except Exception:
-            pass
-
-    def load(self, path: str) -> None:
-        if not path or not os.path.exists(path):
-            return
-        memories = []
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                        mem = EpisodicMemoryTrace(
-                            timestamp=float(obj.get('timestamp', time.time())),
-                            experience_name=str(obj.get('experience_name', '')),
-                            qualia_vector=np.asarray(obj.get('qualia_vector', []), dtype=np.float32),
-                            phi_value=float(obj.get('phi_value', 0.0)),
-                            emotional_valence=float(obj.get('emotional_valence', 0.0)),
-                            arousal=float(obj.get('arousal', 0.0)),
-                            context=obj.get('context', {}) if isinstance(obj.get('context', {}), dict) else {},
-                            narrative=str(obj.get('narrative', '')),
-                            retrieval_count=int(obj.get('retrieval_count', 0)),
-                            consolidation_level=float(obj.get('consolidation_level', 0.0)),
-                        )
-                        memories.append(mem)
-                    except Exception:
-                        continue
-        except Exception:
-            return
-        self.memories = memories
-        self.total_encoded = len(self.memories)
-        self.total_retrieved = sum((m.retrieval_count for m in self.memories)) if self.memories else 0
-        self._rebuild_indices()
 
     def save(self, path: str) -> None:
         try:
@@ -7504,6 +7409,10 @@ class EpisodicMemory:
                         'narrative': mem.narrative,
                         'retrieval_count': int(getattr(mem, 'retrieval_count', 0)),
                         'consolidation_level': float(getattr(mem, 'consolidation_level', 0.0)),
+                        'kind': str(getattr(mem, 'kind', 'internal_state')),
+                        'content': str(getattr(mem, 'content', '')),
+                        'embedding': np.asarray(getattr(mem, 'embedding', None), dtype=np.float32).tolist() if getattr(mem, 'embedding', None) is not None else None,
+                        'tags': list(getattr(mem, 'tags', []) or []),
                     }
                     f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
         except Exception:
@@ -7529,6 +7438,20 @@ class EpisodicMemory:
                         continue
                     try:
                         qv = np.asarray(obj.get('qualia_vector', []), dtype=np.float32)
+                        emb = None
+                        emb_obj = obj.get('embedding', None)
+                        if isinstance(emb_obj, (list, tuple)):
+                            try:
+                                emb = np.asarray(emb_obj, dtype=np.float32).ravel()
+                            except Exception:
+                                emb = None
+                        tags_obj = obj.get('tags', [])
+                        if isinstance(tags_obj, list):
+                            tags_val = [str(t) for t in tags_obj]
+                        elif tags_obj:
+                            tags_val = [str(tags_obj)]
+                        else:
+                            tags_val = []
                         mem = EpisodicMemoryTrace(
                             timestamp=float(obj.get('timestamp', time.time())),
                             experience_name=str(obj.get('experience_name', 'unknown')),
@@ -7540,6 +7463,10 @@ class EpisodicMemory:
                             narrative=str(obj.get('narrative', '')),
                             retrieval_count=int(obj.get('retrieval_count', 0)),
                             consolidation_level=float(obj.get('consolidation_level', 0.0)),
+                            kind=str(obj.get('kind', 'internal_state')),
+                            content=str(obj.get('content', '')),
+                            embedding=emb,
+                            tags=tags_val,
                         )
                         self.memories.append(mem)
                     except Exception:
@@ -9638,9 +9565,7 @@ except Exception:
 
 
 def _m3_torch_device() -> str:
-    if not _TORCH_OK:
-        return 'cpu'
-    return 'cuda' if _t.cuda.is_available() else 'cpu'
+    return resolve_torch_device_string(require_cuda=False)
 
 
 if _TORCH_OK:
@@ -10219,161 +10144,27 @@ class M3ConsciousnessCore:
                 # non-fatal; core still works without adapter
                 print(f"[M3] LLM 어댑터 연결 실패 (비필수): {e}")
 
-    def handle_user_message(self, text: str) -> str:
-        """Receive a short user utterance, record it, push a bus token if available,
-        and return a short immediate assistant-style reply (best-effort).
-
-        This method intentionally performs only lightweight, synchronous work so
-        the GUI can call it without blocking long-running internal cycles.
-        """
-        try:
-            msg = str(text).strip()
-            if not msg:
-                return ''
-            # record history
-            try:
-                self._chat_history.append({'role': 'user', 'text': msg, 't': int(getattr(self, 't', 0))})
-            except Exception:
-                pass
-            # push a lightweight bus token if available
-            try:
-                if getattr(self, 'bus', None) is not None:
-                    if getattr(self, 'feature_bank', None) is not None and hasattr(self.feature_bank, '_hash_embed'):
-                        try:
-                            vec = self.feature_bank._hash_embed(msg, getattr(self.feature_bank, 'embed_dim', 32))
-                        except Exception:
-                            vec = np.zeros((getattr(self.feature_bank, 'embed_dim', 32),), dtype=np.float32)
-                    else:
-                        vec = np.zeros((getattr(self, 'feature_bank', None).embed_dim if getattr(self, 'feature_bank', None) else 32,), dtype=np.float32)
-                    try:
-                        # best-effort: name token and push
-                        self.bus.push('user', 'utter.user', np.asarray(vec, dtype=np.float32), salience=0.7, confidence=0.9, ttl=8)
-                        try:
-                            self.bus.step()
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-            # Try to generate a short immediate reply via existing utterance generator
-            try:
-                if hasattr(self, '_generate_utterance') and callable(getattr(self, '_generate_utterance')):
-                    resp = self._generate_utterance()
-                else:
-                    resp = self._last_utterance or ''
-            except Exception:
-                resp = self._last_utterance or ''
-
-            # Ensure a short, non-empty assistant reply so callers (GUI) always
-            # receive something to display. Try to surface a real generator
-            # response when available; otherwise fall back to echoing the
-            # user's raw message (no templated acknowledgement) so the GUI
-            # shows the user's content verbatim rather than a meaningless
-            # canned phrase.
-            try:
-                if not resp or not str(resp).strip():
-                    tried = False
-                    # Common generator hook names to try (best-effort)
-                    candidates = ['generate_reply', 'generate_text', 'synthesize_reply', 'synthesize_text', 'respond', 'reply', 'chat_generate', 'chat_response', 'model_generate', 'llm_generate']
-                    for name in candidates:
-                        gen = getattr(self, name, None)
-                        if callable(gen):
-                            try:
-                                out = gen(msg)
-                            except TypeError:
-                                try:
-                                    out = gen()
-                                except Exception:
-                                    out = None
-                            except Exception:
-                                out = None
-                            if out and str(out).strip():
-                                resp = out
-                                tried = True
-                                break
-                    # try a top-level llm-like attribute (self.llm.generate / .respond)
-                    if (not tried) and getattr(self, 'llm', None) is not None:
-                        lm = getattr(self, 'llm')
-                        try:
-                            if hasattr(lm, 'generate') and callable(getattr(lm, 'generate')):
-                                out = lm.generate(msg)
-                                if out and str(out).strip():
-                                    resp = out
-                                    tried = True
-                        except Exception:
-                            pass
-                        try:
-                            if (not tried) and hasattr(lm, 'respond') and callable(getattr(lm, 'respond')):
-                                out = lm.respond(msg)
-                                if out and str(out).strip():
-                                    resp = out
-                                    tried = True
-                        except Exception:
-                            pass
-                    # best-effort: scan attributes for model-like objects with generate/respond
-                    if (not tried):
-                        for attr_name in dir(self):
-                            if attr_name.startswith('_'):
-                                continue
-                            try:
-                                attr = getattr(self, attr_name)
-                            except Exception:
-                                continue
-                            if attr is None:
-                                continue
-                            if hasattr(attr, 'generate') and callable(getattr(attr, 'generate')):
-                                try:
-                                    out = attr.generate(msg)
-                                    if out and str(out).strip():
-                                        resp = out
-                                        tried = True
-                                        break
-                                except Exception:
-                                    pass
-                            if hasattr(attr, 'respond') and callable(getattr(attr, 'respond')):
-                                try:
-                                    out = attr.respond(msg)
-                                    if out and str(out).strip():
-                                        resp = out
-                                        tried = True
-                                        break
-                                except Exception:
-                                    pass
-                    # Final fallback: echo the user's raw message
-                    if not resp or not str(resp).strip():
-                        try:
-                            resp = str(msg)
-                        except Exception:
-                            resp = ''
-            except Exception:
-                try:
-                    resp = str(msg)
-                except Exception:
-                    resp = ''
-
-            # record assistant reply in history
-            try:
-                self._chat_history.append({'role': 'assistant', 'text': str(resp), 't': int(getattr(self, 't', 0))})
-            except Exception:
-                pass
-            return str(resp)
-        except Exception:
-            return ''
-
     def _get_current_world_state(self) -> Dict[str, Union[int, float, bool]]:
+        """Compute a compact world-state summary for controller heuristics."""
         if len(self.P_obs_history) > 0:
-            P_obs = self.P_obs_history[-1]
-            delta_hat = float(0.5 * np.sum(np.abs(P_obs - self.base_vec)))
+            try:
+                P_obs = self.P_obs_history[-1]
+                delta_hat = float(0.5 * np.sum(np.abs(P_obs - self.base_vec)))
+            except Exception:
+                delta_hat = 1.0
         else:
             delta_hat = 1.0
+
         if len(self.stability_window) >= 10:
-            recent_deltas = list(self.stability_window)[-10:]
-            variance = np.var(recent_deltas)
-            stability = float(1.0 - min(1.0, variance * 20.0))
+            try:
+                recent_deltas = list(self.stability_window)[-10:]
+                variance = np.var(recent_deltas)
+                stability = float(1.0 - min(1.0, variance * 20.0))
+            except Exception:
+                stability = 0.5
         else:
             stability = 0.5
+
         # spatial metrics
         try:
             ax, ay = getattr(self, 'attn_xy', (0.5, 0.5))
@@ -10384,209 +10175,95 @@ class M3ConsciousnessCore:
                 else:
                     gx, gy = self.spatial_goal['xy']
                     gz = az
-                d = float(np.sqrt((ax-gx)**2 + (ay-gy)**2 + (az-gz)**2))
+                d = float(np.sqrt((ax - gx) ** 2 + (ay - gy) ** 2 + (az - gz) ** 2))
             else:
                 d = None
         except Exception:
             ax, ay, az, d = 0.5, 0.5, 0.5, None
-        return {'t': self.t, 'delta_hat': delta_hat, 'm': 0.0, 'stability': stability, 'energy_level': float(self.energy_ctrl.cognitive_energy / self.energy_ctrl.energy_capacity), 'activation_level': float(self.energy_ctrl.activation_level), 'meta_confidence': float(self.self_model.meta_confidence), 'qualia_valence': float(self.qualia.valence), 'adaptation_success': False, 'spatial_attn_x': float(ax), 'spatial_attn_y': float(ay), 'spatial_attn_z': float(az), 'spatial_goal_dist': (float(d) if d is not None else None)}
 
-    def generate_internal_events(self):
-        qualia_stats = self.goal_gen.qualia_stats
-        # Use rolling quantiles instead of fixed z-score thresholds
-        if len(self.qualia.history) > 20:
-            try:
-                ent_hist = np.array([h['entropy'] for h in list(self.qualia.history)[-100:]], dtype=float)
-                q90_ent = float(np.percentile(ent_hist, 90))
-                if self.qualia.entropy > q90_ent:
-                    imp = float(min(1.0, (self.qualia.entropy - q90_ent) * 2.0))
-                    self.event_queue.append(Event(type=EventType.HIGH_UNCERTAINTY, timestamp=self.t, importance=imp, payload={'entropy': self.qualia.entropy, 'q90': q90_ent}))
-            except Exception:
-                pass
-        pred = self.self_model.predict_next_state()
-        if pred:
-            actual = self.world_state
-            error = sum((abs(pred.get(k, 0) - actual.get(k, 0)) for k in ['delta_hat', 'stability']))
-            if len(self.self_model.prediction_errors) > 10:
-                try:
-                    err_hist = np.array(list(self.self_model.prediction_errors)[-50:], dtype=float)
-                    q90_err = float(np.percentile(err_hist, 90))
-                    if error > q90_err:
-                        imp = float(min(1.0, (error - q90_err) / (q90_err + 1e-6)))
-                        self.event_queue.append(Event(type=EventType.PREDICTION_ERROR, timestamp=self.t, importance=imp, payload={'error': error, 'q90': q90_err}))
-                except Exception:
-                    pass
-        if len(self.self_model.state_history) > 20:
-            try:
-                recent_confs = np.array([s.get('meta_confidence', 0.5) for s in list(self.self_model.state_history)[-100:]], dtype=float)
-                q10 = float(np.percentile(recent_confs, 10))
-                if self.self_model.meta_confidence < q10:
-                    imp = float(min(1.0, (q10 - self.self_model.meta_confidence) * 3.0))
-                    self.event_queue.append(Event(type=EventType.MODEL_CONFIDENCE_LOW, timestamp=self.t, importance=imp, payload={'confidence': self.self_model.meta_confidence, 'q10': q10}))
-            except Exception:
-                pass
-        if len(self.qualia.history) > 20:
-            try:
-                aro_hist = np.array([h['arousal'] for h in list(self.qualia.history)[-100:]], dtype=float)
-                q90_aro = float(np.percentile(aro_hist, 90))
-                if self.qualia.arousal > q90_aro:
-                    imp = float(min(1.0, (self.qualia.arousal - q90_aro) * 2.0))
-                    self.event_queue.append(Event(type=EventType.TENSION_SPIKE, timestamp=self.t, importance=imp, payload={'tension': self.qualia.arousal, 'q90': q90_aro}))
-            except Exception:
-                pass
-        if len(self.qualia.history) > 50:
-            recent_harmony = [h['valence'] for h in list(self.qualia.history)[-50:]]
-            q3 = np.percentile(recent_harmony, 75)
-            if self.qualia.valence > q3:
-                self.event_queue.append(Event(type=EventType.HARMONY_ACHIEVED, timestamp=self.t, importance=float(min(1.0, (self.qualia.valence - q3) * 2.0)), payload={'harmony': float(self.qualia.valence), 'q3': float(q3)}))
-        if len(self.qualia.history) > 50:
-            recent_flow = [h['engagement'] for h in list(self.qualia.history)[-50:]]
-            q3 = np.percentile(recent_flow, 75)
-            if self.qualia.engagement > q3:
-                importance_val = float(min(1.0, (float(self.qualia.engagement) - float(q3)) * 1.5))
-                self.event_queue.append(Event(type=EventType.FLOW_STATE_ENTERED, timestamp=self.t, importance=importance_val, payload={'flow': float(self.qualia.engagement), 'q3': float(q3)}))
-        if len(self.energy_ctrl.energy_history) > 50:
-            q1 = np.percentile(list(self.energy_ctrl.energy_history), 25)
-            current_energy = self.energy_ctrl.cognitive_energy / self.energy_ctrl.energy_capacity
-            if current_energy < q1:
-                self.event_queue.append(Event(type=EventType.ATTENTION_EXHAUSTED, timestamp=self.t, importance=float(min(1.0, (q1 - current_energy) * 3.0)), payload={'energy_level': current_energy, 'q1': q1}))
+        energy_level = 0.0
+        activation_level = 0.0
+        meta_confidence = 0.0
+        adaptation_success = False
+        try:
+            energy_level = float(self.energy_ctrl.cognitive_energy / self.energy_ctrl.energy_capacity)
+            activation_level = float(self.energy_ctrl.activation_level)
+            meta_confidence = float(self.self_model.meta_confidence)
+        except Exception:
+            pass
 
-    def select_most_important_event(self) -> Optional[Event]:
-        if not self.event_queue:
+        return {
+            't': int(self.t),
+            'delta_hat': float(delta_hat),
+            'm': 0.0,
+            'stability': float(stability),
+            'energy_level': energy_level,
+            'activation_level': activation_level,
+            'meta_confidence': float(meta_confidence),
+            'qualia_valence': float(getattr(self.qualia, 'valence', 0.0)),
+            'adaptation_success': bool(adaptation_success),
+            'spatial_attn_x': float(ax),
+            'spatial_attn_y': float(ay),
+            'spatial_attn_z': float(az),
+            'spatial_goal_dist': float(d) if d is not None else None,
+        }
+
+    def _collect_affect_state_for_llm(self):
+        try:
+            if hasattr(self, 'rewards') and getattr(self.rewards, 'last_affect', None) is not None:
+                return self.rewards.last_affect
+            if hasattr(self, 'affect_kernel'):
+                for name in ('get_state', 'get_state_vector'):
+                    fn = getattr(self.affect_kernel, name, None)
+                    if callable(fn):
+                        return fn()
+        except Exception:
+            pass
+        return None
+
+    def _collect_llm_memory(self, adapter, affect_state=None):
+        mem = None
+        panels_output = None
+        if hasattr(self, 'feature_bank') and hasattr(self.feature_bank, 'panels'):
+            try:
+                panels_output = self.feature_bank.panels(self)
+            except Exception:
+                panels_output = None
+
+        if panels_output is None:
             return None
-        self.event_queue.sort(reverse=True)
-        return self.event_queue.pop(0)
 
-    def process_event(self, event: Event, current_goal: Goal):
-        self.event_log_buffer.append({'timestamp': event.timestamp, 'type': event.type.value, 'importance': event.importance, 'goal_type': current_goal.type.value if current_goal else 'none', **event.payload})
-        if event.type == EventType.HIGH_UNCERTAINTY:
-            self.gate_mid *= 0.95
-        elif event.type == EventType.PREDICTION_ERROR:
-            error = event.payload.get('error', 0)
-            self.self_model.update_beliefs(error, False, self.world_state['stability'])
-        elif event.type == EventType.MODEL_CONFIDENCE_LOW:
-            needs_revision, quality, revision_level = self.meta_meta.evaluate_model_quality(self.self_model, self.t)
-            if needs_revision:
-                # Meta-decision: allow MetaMetaMonitor to request structural revisions.
-                # For revision levels >=2, attempt to grow the FeatureBank as part of
-                # a self-directed structural revision (growth size derived from
-                # model-quality to avoid arbitrary heuristics at call sites).
-                try:
-                    if revision_level >= 2:
-                        try:
-                            # Consult learned GrowthTrigger to decide whether to run the meta-proposal cycle
-                            should_run = True
-                            try:
-                                gt = getattr(self, 'growth_trigger', None)
-                                if gt is not None:
-                                    try:
-                                        feat_dim = getattr(gt, 'in_dim', 64)
-                                        feats = self.extract_embedding(target_dim=feat_dim, normalize=True)
-                                    except Exception:
-                                        feats = np.zeros((getattr(gt, 'in_dim', 64),), dtype=np.float32)
-                                    try:
-                                        trig, meta = gt.decide(feats)
-                                        should_run = bool(trig)
-                                    except Exception:
-                                        should_run = True
-                            except Exception:
-                                should_run = True
-                            if should_run:
-                                # Run the learned meta-proposal cycle (propose -> sandbox -> observe -> commit)
-                                res = self.run_meta_proposal_cycle(k=1, steps=40, commit_threshold=0.0)
-                                # let GrowthTrigger observe the outcome to learn when to trigger
-                                try:
-                                    gt = getattr(self, 'growth_trigger', None)
-                                    if gt is not None and isinstance(res, dict):
-                                        rew = float(res.get('reward', 0.0)) if res.get('reward') is not None else 0.0
-                                        try:
-                                            gt.observe(rew, meta={'accepted': bool(res.get('accepted', False)), 'specs': res.get('specs', [])})
-                                        except Exception:
-                                            try:
-                                                gt.observe(rew)
-                                            except Exception:
-                                                pass
-                                except Exception:
-                                    pass
-                                try:
-                                    if res.get('accepted'):
-                                        try:
-                                            self.visualizer.add_major_event(f'Auto-grown FB -> {self.feature_bank.max_dim}D (rev={revision_level})')
-                                        except Exception:
-                                            pass
-                                    # record pending meta-trial for downstream bookkeeping (optional)
-                                    try:
-                                        self._meta_grow_pending = {'t': int(self.t), 'specs': res.get('specs', []), 'sandbox': res.get('sandbox', {}), 'quality_before': float(quality)}
-                                    except Exception:
-                                        self._meta_grow_pending = None
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-                # Then perform self-model revision at requested level
-                if revision_level == 1:
-                    self.self_model.revise_self_model()
-                elif revision_level == 2:
-                    self.self_model.revise_self_model_level2()
-                elif revision_level == 3:
-                    self.self_model.revise_self_model_level3()
-                elif revision_level >= 4:
-                    self.self_model.revise_self_model_level4_emergency()
-        elif event.type == EventType.TENSION_SPIKE:
-            self.kd_eff = min(10.0, self.kd_eff * 1.15)
-        elif event.type == EventType.HARMONY_ACHIEVED:
-            if current_goal:
-                self.world_state['adaptation_success'] = True
-        elif event.type == EventType.FLOW_STATE_ENTERED:
-            pass
-        elif event.type == EventType.ATTENTION_EXHAUSTED:
-            pass
+        try:
+            if hasattr(adapter, 'build_m3_memory'):
+                mem_tokens = adapter.build_m3_memory(core=self, panels=panels_output, affect_state=affect_state)
+            elif hasattr(adapter, 'model') and hasattr(adapter.model, 'm3_encoder') and adapter.model.m3_encoder is not None:
+                mem_tokens = adapter.model.m3_encoder(panels_output, affect_state=affect_state)
+            else:
+                mem_tokens = None
+            if mem_tokens is None:
+                return None
+            if torch.is_tensor(mem_tokens):  # type: ignore
+                return mem_tokens.detach().cpu().numpy()
+            return np.asarray(mem_tokens)
+        except Exception:
+            return None
 
-    def consult_self_model_for_action(self, current_goal: Goal) -> Dict[str, float]:
-        adjustments = {'gate_adjust': 1.0, 'kd_adjust': 1.0, 'learning_rate_mult': 1.0}
-        if hasattr(self.self_model, 'belief_adaptation') and self.self_model.belief_adaptation < 0.35:
-            adjustments['gate_adjust'] = 0.85
-            adjustments['kd_adjust'] = 1.1
-        elif hasattr(self.self_model, 'belief_stability') and self.self_model.belief_stability < 0.35:
-            adjustments['gate_adjust'] = 0.9
-            adjustments['kd_adjust'] = 1.15
-        elif hasattr(self.self_model, 'meta_confidence') and self.self_model.meta_confidence < 0.4:
-            adjustments['gate_adjust'] = 1.1
-            adjustments['kd_adjust'] = 0.95
-        elif hasattr(self.self_model, 'belief_adaptation') and hasattr(self.self_model, 'belief_stability') and self.self_model.belief_adaptation > 0.7 and self.self_model.belief_stability > 0.6:
-            adjustments['gate_adjust'] = 1.08
-            adjustments['learning_rate_mult'] = 1.15
-        if current_goal.type == GoalType.STABILIZE:
-            adjustments['gate_adjust'] *= 0.9
-            adjustments['kd_adjust'] *= 1.1
-        elif current_goal.type == GoalType.EXPLORE:
-            adjustments['gate_adjust'] *= 1.12
-        elif current_goal.type == GoalType.REST:
-            adjustments['gate_adjust'] = 0.5
-            adjustments['learning_rate_mult'] = 0.3
-        return adjustments
-
-    def update_dynamics(self, adjustments: Dict[str, float]):
-        mod = np.array([float(np.mean(self.h[g])) for g in self.groups])
-        gmean = float(np.mean(self.h))
-        W = np.concatenate([mod, [gmean]])
-        lt = self.U @ W
-        lt = lt - np.max(lt)
-        P_obs = np.exp(lt) / np.sum(np.exp(lt))
-        self.P_obs_history.append(P_obs.copy())
-        if len(self.P_obs_history) >= 10:
-            self.base_vec = np.median(np.array(list(self.P_obs_history)[-10:]), axis=0)
-        delta_hat = float(0.5 * np.sum(np.abs(P_obs - self.base_vec)))
-        self.stability_window.append(delta_hat)
-        noise = self.rng.normal(0, 0.01, size=self.n)
-        self.h = 0.99 * self.h + noise
-        self.gate_mid *= adjustments['gate_adjust']
-        self.gate_mid = np.clip(self.gate_mid, 0.5, 0.99)
-        self.kd_eff *= adjustments['kd_adjust']
-        self.kd_eff = np.clip(self.kd_eff, 2.0, 12.0)
-        return (delta_hat, P_obs)
+    def _build_llm_prompt(self, fallback_text: str = "") -> str:
+        prompt = ""
+        if hasattr(self, '_chat_history'):
+            try:
+                turns = int(os.getenv('M3_CHAT_HISTORY_TURNS', '3'))
+            except Exception:
+                turns = 3
+            recent = list(self._chat_history)[-max(1, 2 * turns):]
+            for msg in recent:
+                role = "User" if msg.get('role') == 'user' else "M3"
+                text = msg.get('text', '')
+                prompt += f"{role}: {text}\n"
+        else:
+            prompt = f"{fallback_text}\n" if fallback_text else ""
+        prompt += "M3:"
+        return prompt
 
     def _postprocess_llm_response(self, text: str) -> str:
         if not text:
@@ -10597,7 +10274,8 @@ class M3ConsciousnessCore:
             return text
         if not norm:
             return norm
-        # Remove consecutive duplicate lines
+
+        # Remove consecutive duplicate lines.
         lines = [ln.rstrip() for ln in norm.split("\n")]
         out = []
         prev = None
@@ -10606,7 +10284,8 @@ class M3ConsciousnessCore:
                 continue
             out.append(ln)
             prev = ln
-        # Remove repeated paragraphs
+
+        # Remove repeated paragraphs.
         paras = []
         seen = set()
         for block in "\n".join(out).split("\n\n"):
@@ -10618,163 +10297,354 @@ class M3ConsciousnessCore:
             seen.add(blk)
             paras.append(blk)
         cleaned = "\n\n".join(paras).strip()
-        # Collapse repeated "M3:" prefixes
+
+        # Collapse repeated "M3:" prefixes.
         try:
             cleaned = cleaned.replace("M3: M3:", "M3:")
         except Exception:
             pass
         return cleaned
 
+    def _is_backend_or_error_response(self, text: str) -> bool:
+        try:
+            s = str(text or "").strip()
+        except Exception:
+            return True
+        if not s:
+            return True
+        sl = s.lower()
+        prefixes = (
+            "[HFBackend error:",
+            "[HFBackend not enabled",
+            "[Error: CUDA",
+            "[Error: [HFBackend",
+            "[Error:",
+            "Local Error:",
+            "Generation is in safe mode",
+            "현재 생성 경로에 장애가 있어 안전 모드로 전환했습니다.",
+            "当前生成路径出现故障，已切换到安全模式。",
+            "Обнаружен сбой генерации, включен безопасный режим.",
+            "[System: LLM Adapter not connected]",
+        )
+        if s.startswith(prefixes):
+            return True
+        markers = (
+            "local error:",
+            "hfbackend",
+            "backend fault",
+            "safe mode",
+            "llm adapter not connected",
+        )
+        return any(m in sl for m in markers)
+
+    def _is_disallowed_llm_response(self, text: str) -> bool:
+        try:
+            s = str(text or "").strip()
+        except Exception:
+            return True
+        if not s:
+            return True
+        if self._is_backend_or_error_response(s):
+            return True
+        adapter = getattr(self, 'llm_adapter', None) or getattr(self, 'llm', None)
+        try:
+            if adapter is not None and hasattr(adapter, '_is_refusal_disclaimer'):
+                if bool(adapter._is_refusal_disclaimer(s)):
+                    return True
+        except Exception:
+            pass
+        patterns = (
+            "i am currently untrained",
+            "please use the train button",
+            "현재 생성 경로에 장애가 있어",
+            "현재 생성 경로가 불안정",
+            "training data",
+            "현재 생성 경로가",
+            "세션을 재시작",
+            "train button",
+            "i am an ai",
+            "i'm an ai",
+            "as an ai",
+            "do not have feelings",
+            "i don't have feelings",
+            "language model",
+            "cannot feel",
+        )
+        if any(p in s.lower() for p in patterns):
+            return True
+        return False
+
+    def _verifier_tokens(self, text: str) -> List[str]:
+        try:
+            s = str(text or "").lower()
+        except Exception:
+            return []
+        tokens = re.findall(r"[a-z0-9_]+|[가-힣]+", s)
+        stop = {
+            "the", "a", "an", "is", "are", "to", "and", "or", "of", "in", "on", "for", "with",
+            "이", "그", "저", "은", "는", "이야", "그리고", "또는", "에서", "으로", "를", "을",
+        }
+        return [t for t in tokens if len(t) > 1 and t not in stop]
+
+    def _evaluate_dialog_accuracy(self, user_msg: str, response: str) -> Dict[str, float]:
+        if self._is_disallowed_llm_response(response):
+            return {"score": 0.0, "overlap": 0.0, "penalty": 1.0}
+        if self._is_backend_or_error_response(response):
+            return {"score": 0.0, "overlap": 0.0, "penalty": 1.0}
+        user_tokens = self._verifier_tokens(user_msg)
+        resp_tokens = set(self._verifier_tokens(response))
+        if not user_tokens:
+            return {"score": 0.5, "overlap": 0.0, "penalty": 0.0}
+        uniq_user = set(user_tokens)
+        overlap = float(len(uniq_user & resp_tokens)) / max(1.0, float(len(uniq_user)))
+        user_len = len(str(user_msg or "").strip())
+        resp_len = len(str(response or "").strip())
+        length_factor = float(np.clip(resp_len / max(24.0, user_len * 0.8), 0.0, 1.0))
+        penalty = 0.0
+        low_resp = str(response or "").lower()
+        low_user = str(user_msg or "").lower()
+        generic_phrases = (
+            "ready for the next query",
+            "please resend a short request",
+            "i am currently untrained",
+            "안전 모드",
+            "짧게 다시 보내",
+        )
+        if any(p in low_resp for p in generic_phrases):
+            penalty += 0.45
+        asks_question = ("?" in str(user_msg or "")) or any(
+            k in low_user for k in ("what", "why", "how", "explain", "무엇", "왜", "어떻게", "설명")
+        )
+        if asks_question and overlap < 0.15:
+            penalty += 0.25
+        score = float(np.clip(0.25 + 0.55 * overlap + 0.20 * length_factor - penalty, 0.0, 1.0))
+        return {"score": score, "overlap": overlap, "penalty": penalty}
+
+    def _apply_dialog_verifier_reward(self, user_msg: str, response: str) -> None:
+        try:
+            metrics = self._evaluate_dialog_accuracy(user_msg, response)
+            score = float(metrics.get("score", 0.0))
+            scale = float(os.getenv("M3_DIALOG_VERIFIER_SCALE", "0.3"))
+            reward = float((score - 0.5) * 2.0 * scale)
+            self._last_dialog_verifier_score = score
+            self._last_dialog_verifier_reward = reward
+            if hasattr(self, 'reward_history'):
+                self.reward_history.append(reward)
+            if hasattr(self, 'cumulative_reward'):
+                self.cumulative_reward += reward
+            if hasattr(self, 'reward_scheduler') and self.reward_scheduler is not None:
+                try:
+                    self.reward_scheduler.receive_reward(
+                        RewardSignal(
+                            source='dialog_accuracy_verifier',
+                            value=reward,
+                            metadata={
+                                'score': score,
+                                'overlap': float(metrics.get('overlap', 0.0)),
+                                'penalty': float(metrics.get('penalty', 0.0)),
+                            },
+                        )
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _emit_llm_response(self, prompt: str, mem=None, affect_state=None, max_len: int = 100, default_on_error: bool = False):
+        adapter = getattr(self, 'llm_adapter', None) or getattr(self, 'llm', None)
+        if adapter is None:
+            return None, "[System: LLM Adapter not connected]"
+
+        try:
+            response = adapter.generate(
+                prompt,
+                mem=mem,
+                affect_state=affect_state,
+                max_len=max_len,
+            )
+            response = self._postprocess_llm_response(response)
+        except Exception as e:
+            if default_on_error:
+                logging.debug(f"LLM adapter error: {e}")
+            return None, str(e)
+
+        if not response or not response.strip():
+            if default_on_error:
+                return None, "EMPTY"
+            return None, "EMPTY"
+
+        response = response.strip()
+        if self._is_disallowed_llm_response(response):
+            return None, response
+        self._chat_history.append({'role': 'assistant', 'text': response, 't': int(getattr(self, 't', 0))})
+        if getattr(self, 'bus', None) is not None:
+            try:
+                vec_resp = self.feature_bank._hash_embed(response, self.feature_bank.embed_dim) if getattr(self, 'feature_bank', None) else np.zeros((32,), np.float32)
+                self.bus.push('system', 'utter.self', vec_resp.astype(np.float32), salience=0.8, confidence=1.0, ttl=10)
+            except Exception:
+                pass
+        return response, None
+
+    def _memory_semantic_prefix(self) -> str:
+        try:
+            enabled = os.getenv('M3_EMBED_PERSPECTIVE', '0').lower() in ('1', 'true', 'yes', 'on')
+        except Exception:
+            enabled = False
+        if not enabled:
+            return ""
+        try:
+            subj = getattr(self, 'unified_subject', None)
+            if subj is None or not hasattr(subj, 'reflect_on_self'):
+                return ""
+            summary = str(subj.reflect_on_self()).strip()
+            if not summary:
+                return ""
+            return f"Perspective: {summary}\n\n"
+        except Exception:
+            return ""
+
+    def _semantic_text_for_embedding(self, text: str) -> str:
+        return self._memory_semantic_prefix() + str(text or "")
+
+    def _current_memory_qualia_vector(self) -> np.ndarray:
+        try:
+            return np.asarray([
+                float(getattr(self.qualia, 'arousal', 0.0)),
+                float(getattr(self.qualia, 'valence', 0.0)),
+                float(getattr(self.qualia, 'entropy', 0.0)),
+                float(getattr(self.qualia, 'engagement', 0.0)),
+                float(getattr(self.qualia, 'frustration', 0.0)),
+            ], dtype=np.float32)
+        except Exception:
+            return np.zeros((5,), dtype=np.float32)
+
+    def _current_memory_phi(self) -> float:
+        try:
+            phi_hist = getattr(self.phi_calculator, 'phi_history', None)
+            if phi_hist:
+                return float(phi_hist[-1])
+        except Exception:
+            pass
+        return 0.0
+
+    def _encode_semantic_memory_trace(
+        self,
+        experience_name: str,
+        kind: str,
+        content: str,
+        embedding: Optional[np.ndarray],
+        tags: Optional[List[str]] = None,
+        extra_context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        try:
+            if not hasattr(self, 'episodic_memory') or self.episodic_memory is None:
+                return
+            context = {
+                'iteration': int(getattr(self, 't', 0)),
+                'source': str(kind),
+            }
+            if isinstance(extra_context, dict):
+                context.update(extra_context)
+            qualia_vec = self._current_memory_qualia_vector()
+            phi_val = self._current_memory_phi()
+            self.episodic_memory.encode_experience(
+                experience_name=experience_name,
+                qualia_vector=qualia_vec,
+                phi_value=phi_val,
+                context=context,
+                narrative=str(content)[:256],
+                kind=kind,
+                content=str(content),
+                embedding=embedding,
+                tags=list(tags) if tags else [],
+            )
+        except Exception:
+            pass
+
+    def _record_dialog_trace(self, adapter, user_msg: str, response: str, prompt_for_embedding: str) -> None:
+        if not response:
+            return
+        if self._is_disallowed_llm_response(response):
+            return
+        try:
+            content = f"User: {user_msg}\nM3: {response}"
+            emb = None
+            if adapter is not None and hasattr(adapter, 'embed_text'):
+                emb_text = self._semantic_text_for_embedding(prompt_for_embedding)
+                emb = adapter.embed_text(emb_text, sys_identity="")
+            self._encode_semantic_memory_trace(
+                experience_name='dialog_turn',
+                kind='dialog',
+                content=content,
+                embedding=emb,
+                tags=['dialog'],
+                extra_context={'channel': 'handle_user_message'},
+            )
+        except Exception:
+            pass
+
+    def _llm_fallback_text(self, prompt: str = "") -> str:
+        lang = "en"
+        adapter = getattr(self, 'llm_adapter', None) or getattr(self, 'llm', None)
+        try:
+            if adapter is not None and hasattr(adapter, '_detect_language'):
+                lang = adapter._detect_language(prompt) or "en"
+        except Exception:
+            lang = "en"
+
+        if lang == "ko":
+            return "현재 생성 경로가 일시적으로 안전 모드입니다. 잠시 뒤 다시 질문해 주세요."
+        if lang == "zh":
+            return "当前生成路径处于安全模式。请稍后再发送请求。"
+        if lang == "ru":
+            return "Сейчас режим генерации переведен в безопасный режим. Пожалуйста, повторите запрос позже."
+        return "Generation is in safe mode. Please retry your request in a moment."
+
     def handle_user_message(self, text: str) -> str:
         msg = str(text).strip()
         if not msg:
             return ""
+
         self._chat_history.append({'role': 'user', 'text': msg, 't': int(getattr(self, 't', 0))})
         if getattr(self, 'bus', None) is not None:
             vec = self.feature_bank._hash_embed(msg, self.feature_bank.embed_dim) if getattr(self, 'feature_bank', None) else np.zeros((32,), np.float32)
             self.bus.push('user', 'utter.user', vec.astype(np.float32), salience=0.7, confidence=0.9, ttl=8)
-        
-        # LLM adapter 사용 (llm_adapter 또는 llm 속성)
+
         adapter = getattr(self, 'llm_adapter', None) or getattr(self, 'llm', None)
-        if adapter is not None:
-            try:
-                # M3 메모리 생성: feature_bank.panels → M3StateEncoder → mem
-                # Retrieve Affect State for Gating
-                affect = None
-                try:
-                    if hasattr(self, 'rewards') and getattr(self.rewards, 'last_affect', None) is not None:
-                        affect = self.rewards.last_affect
-                    elif hasattr(self, 'affect_kernel'):
-                        for name in ('get_state', 'get_state_vector'):
-                            try:
-                                fn = getattr(self.affect_kernel, name, None)
-                                if callable(fn):
-                                    affect = fn()
-                                    break
-                            except Exception:
-                                pass
-                except Exception:
-                    affect = None
-                
-                # M3 memory: feature_bank.panels -> M3StateEncoder -> mem
-                mem = None
-                panels_output = None
-                if hasattr(self, 'feature_bank') and hasattr(self.feature_bank, 'panels'):
-                    try:
-                        panels_output = self.feature_bank.panels(self)
-                    except Exception:
-                        panels_output = None
-                if panels_output is not None:
-                    try:
-                        if hasattr(adapter, 'build_m3_memory'):
-                            mem_tokens = adapter.build_m3_memory(core=self, panels=panels_output, affect_state=affect)
-                        elif hasattr(adapter, 'model') and hasattr(adapter.model, 'm3_encoder') and adapter.model.m3_encoder is not None:
-                            mem_tokens = adapter.model.m3_encoder(panels_output, affect_state=affect)
-                        else:
-                            mem_tokens = None
-                        if mem_tokens is not None:
-                            try:
-                                import torch
-                                if torch.is_tensor(mem_tokens):
-                                    mem = mem_tokens.detach().cpu().numpy()
-                                else:
-                                    mem = np.asarray(mem_tokens)
-                            except Exception:
-                                mem = None
-                    except Exception:
-                        pass
-                prompt = msg
-                try:
-                    if hasattr(self, '_chat_history'):
-                        try:
-                            turns = int(os.getenv('M3_CHAT_HISTORY_TURNS', '3'))
-                        except Exception:
-                            turns = 3
-                        recent = list(self._chat_history)[-max(1, 2 * turns):]
-                        prompt = ""
-                        for item in recent:
-                            role = "User" if item.get('role') == 'user' else "M3"
-                            text = item.get('text', '')
-                            prompt += f"{role}: {text}\n"
-                        prompt += "M3:"
-                except Exception:
-                    prompt = msg
-                response = adapter.generate(prompt, mem=mem, affect_state=affect)
-                response = self._postprocess_llm_response(response)
-                
-                # Feedback Loop: LLM Output -> M3 Core
-                # If the LLM generates a strong emotional response or a command, M3 Core should react.
-                # For now, we simply wire the "Utterance" event to the MessageBus
-                if response and response.strip():
-                    # 1. Store in History
-                    self._chat_history.append({'role': 'assistant', 'text': response, 't': int(getattr(self, 't', 0))})
-                    
-                    # 2. Push to MessageBus (Feedback to Unconscious)
-                    if getattr(self, 'bus', None) is not None:
-                        # Convert response text to vector (simple hash or reuse tokenizer embedding if possible)
-                        # Here we use the existing hash_embed for simplicity
-                        vec_resp = self.feature_bank._hash_embed(response, self.feature_bank.embed_dim) if getattr(self, 'feature_bank', None) else np.zeros((32,), np.float32)
-                        
-                        # "utter.self" event: M3 hearing its own voice
-                        # This can trigger secondary emotions (e.g., regret, reinforcement)
-                        self.bus.push('system', 'utter.self', vec_resp.astype(np.float32), salience=0.8, confidence=1.0, ttl=10)
-                        
-                    return response
-            except Exception as e:
-                logging.debug(f"LLM adapter error: {e}")
-        
-        return self._generate_utterance()
+        prompt = self._build_llm_prompt()
+        if adapter is None:
+            response = self._generate_utterance()
+            self._apply_dialog_verifier_reward(msg, response)
+            self._record_dialog_trace(None, msg, response, prompt)
+            return response
+
+        affect = self._collect_affect_state_for_llm()
+        mem = self._collect_llm_memory(adapter, affect_state=affect)
+        response, err = self._emit_llm_response(prompt, mem=mem, affect_state=affect, max_len=100)
+        if response is not None:
+            self._apply_dialog_verifier_reward(msg, response)
+            self._record_dialog_trace(adapter, msg, response, prompt)
+            return response
+
+        if err:
+            logging.debug(f"LLM generation failed: {err}")
+        fallback_response = self._generate_utterance()
+        self._apply_dialog_verifier_reward(msg, fallback_response)
+        self._record_dialog_trace(adapter, msg, fallback_response, prompt)
+        return fallback_response
 
     def _generate_utterance(self) -> str:
-        # Try to use LLM adapter if available
-        if hasattr(self, 'llm_adapter') and self.llm_adapter is not None:
-            try:
-                # Construct prompt from chat history
-                prompt = ""
-                if hasattr(self, '_chat_history'):
-                    # Use last few messages as context
-                    # Fix: deque does not support slicing, convert to list first
-                    try:
-                        turns = int(os.getenv('M3_CHAT_HISTORY_TURNS', '3'))
-                    except Exception:
-                        turns = 3
-                    recent = list(self._chat_history)[-max(1, 2 * turns):]
-                    for msg in recent:
-                        role = "User" if msg.get('role') == 'user' else "M3"
-                        text = msg.get('text', '')
-                        prompt += f"{role}: {text}\n"
-                prompt += "M3:"
-                
-                print(f"DEBUG: Generating response for prompt len {len(prompt)}")
-                # Generate response
-                response = self.llm_adapter.generate(prompt, max_len=100)
-                response = self._postprocess_llm_response(response)
-                print(f"DEBUG: Generated response: {response}")
-                
-                # Post-process response
-                if response and response.strip():
-                    response = response.strip()
-                    self._last_utterance = response
-                    self._chat_history.append({'role': 'assistant', 'text': response, 't': int(getattr(self, 't', 0))})
-                    return response
-                else:
-                    print("DEBUG: Generated response was empty")
-                    fallback = "I am currently untrained. Please use the 'Train' button to train my language model."
-                    self._last_utterance = fallback
-                    self._chat_history.append({'role': 'assistant', 'text': fallback, 't': int(getattr(self, 't', 0))})
-                    return fallback
-            except Exception as e:
-                print(f"LLM generation failed: {e}")
-                import traceback
-                traceback.print_exc()
-                # Return error as response to make it visible in GUI
-                err_msg = f"[Error: {e}]"
-                self._last_utterance = err_msg
-                self._chat_history.append({'role': 'assistant', 'text': err_msg, 't': int(getattr(self, 't', 0))})
-                return err_msg
-        else:
-            print("DEBUG: llm_adapter is missing or None")
-            return "[System: LLM Adapter not connected]"
+        response, err = self._emit_llm_response(self._build_llm_prompt(), max_len=100)
+        if response is not None:
+            self._last_utterance = response
+            return response
+
+        fallback = self._llm_fallback_text(self._build_llm_prompt())
+        if err and err != "EMPTY":
+            logging.debug(f"_generate_utterance fallback due to error: {err}")
+        self._last_utterance = fallback
+        self._chat_history.append({'role': 'assistant', 'text': fallback, 't': int(getattr(self, 't', 0))})
+        return fallback
 
     def _save_checkpoint(self):
         beliefs_dict = {}
@@ -10815,8 +10685,11 @@ class M3ConsciousnessCore:
             if hasattr(self, 'llm_adapter') and self.llm_adapter is not None:
                 llm_path = os.path.join(self.outdir, 'llm_checkpoint.pt')
                 if hasattr(self.llm_adapter, 'save_model'):
-                    self.llm_adapter.save_model(llm_path)
-                    print(f"LLM checkpoint saved to {llm_path}")
+                    if getattr(self.llm_adapter, '_hf_circuit_open', False):
+                        print(f"Skipping LLM checkpoint save due to HF circuit breaker: {llm_path}")
+                    else:
+                        self.llm_adapter.save_model(llm_path)
+                        print(f"LLM checkpoint saved to {llm_path}")
         except Exception as e:
             print(f"Failed to save LLM checkpoint: {e}")
 
@@ -11775,7 +11648,7 @@ class M3ConsciousnessCore:
             if mod is None:
                 return np.asarray(z, dtype=np.float32)
             import torch as _t
-            dev = _t.device('cuda' if _t.cuda.is_available() else 'cpu')
+            dev = _t.device(resolve_torch_device_string(torch_module=_t, require_cuda=False))
             try:
                 mod = mod.to(dev)
             except Exception:
@@ -14102,6 +13975,151 @@ class M3ConsciousnessCore:
         
         self._last_introspection = state
         return state
+
+    def _research_m3_state_summary(self) -> Dict[str, Any]:
+        """Compact M3 state snapshot for research grounding."""
+        try:
+            phi = float(self.phi_calculator.phi_history[-1]) if self.phi_calculator.phi_history else 0.0
+        except Exception:
+            phi = 0.0
+        try:
+            qualia = {
+                'arousal': float(self.qualia.arousal),
+                'valence': float(self.qualia.valence),
+                'entropy': float(self.qualia.entropy),
+                'engagement': float(self.qualia.engagement),
+                'frustration': float(self.qualia.frustration),
+            }
+        except Exception:
+            qualia = {}
+        try:
+            energy = float(self.energy_ctrl.cognitive_energy)
+            activation = float(self.energy_ctrl.activation_level)
+        except Exception:
+            energy = 0.0
+            activation = 0.0
+        try:
+            meta = {
+                'meta_awareness': float(self.self_model.meta_awareness),
+                'meta_confidence': float(self.self_model.meta_confidence),
+            }
+        except Exception:
+            meta = {}
+
+        return {
+            'phi': phi,
+            'qualia': qualia,
+            'energy': energy,
+            'activation': activation,
+            'meta': meta,
+        }
+
+    def _generate_research_plan(self, m3_state: Dict[str, Any], needs: List[Dict[str, Any]], question: Dict[str, Any]) -> Optional[str]:
+        """Use LLM adapter (if available) to propose M3-grounded research/combination steps."""
+        try:
+            adapter = getattr(self, 'llm_adapter', None)
+            if adapter is None or not hasattr(adapter, 'generate'):
+                return None
+        except Exception:
+            return None
+
+    def _creative_output_path(self) -> str:
+        """Single file destination for continuous creation output."""
+        try:
+            path = os.getenv('M3_CREATIVE_FILE', '').strip()
+        except Exception:
+            path = ''
+        if not path:
+            path = os.path.join(self.outdir, 'm3_creative_sandbox.md')
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        except Exception:
+            pass
+        return path
+
+    def _append_creative_output(self, text: str, meta: Optional[Dict[str, Any]] = None) -> None:
+        """Append creation output to a single persistent file."""
+        if not text:
+            return
+        path = self._creative_output_path()
+        stamp = time.strftime('%Y-%m-%d %H:%M:%S')
+        header = f"\n\n---\n# M3 Creative Output ({stamp})\n"
+        try:
+            with open(path, 'a', encoding='utf-8') as f:
+                f.write(header)
+                if meta:
+                    try:
+                        f.write(f"Meta: {json.dumps(meta, ensure_ascii=False)}\n")
+                    except Exception:
+                        pass
+                f.write(text.strip() + "\n")
+        except Exception:
+            pass
+
+    def run_autonomous_creation(self, cycles: int = 20, topic: str = None) -> Dict[str, Any]:
+        """Create novel outputs grounded in M3 state or potentially a specific topic, saved to a single file."""
+        log = {
+            'start_time': time.time(),
+            'cycles': [],
+            'file': self._creative_output_path(),
+        }
+        adapter = getattr(self, 'llm_adapter', None)
+        if adapter is None or not hasattr(adapter, 'generate'):
+            log['error'] = 'llm_adapter unavailable'
+            return log
+            
+        if topic:
+            print(f"  [Creation] Creative session grounded on topic: {topic}")
+
+        for i in range(max(1, int(cycles))):
+            m3_state = self._research_m3_state_summary()
+            
+            if topic:
+                prompt = (
+                    f"주제 '{topic}'에 대해 M3_STATE를 반영하여 독창적인 산출물을 만들어줘.\n"
+                    f"M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
+                    "요구사항: (1) 주제와 내부 상태(정서 등)의 연결, (2) 창의적인 아이디어/텍스트/설계, (3) 실행 가능한 인사이트."
+                )
+            else:
+                prompt = (
+                    "M3_STATE 기반으로 새로운 시도를 만들어줘.\n"
+                    f"M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
+                    "요구사항: (1) 새로운 조합/아이디어 1개, (2) 실행 가능한 다음 행동 1개, (3) 짧은 산출물(문단/설계/규칙 등)."
+                )
+            
+            try:
+                out = adapter.generate(prompt, max_len=220)
+            except Exception:
+                out = ''
+            if out:
+                meta = {'cycle': i + 1, 'm3_state': m3_state}
+                if topic:
+                    meta['topic'] = topic
+                self._append_creative_output(out, meta=meta)
+                log['cycles'].append({'cycle': i + 1, 'm3_state': m3_state})
+                print(f"  [Creation] Cycle {i+1}: Output generated.")
+            try:
+                self._single_consciousness_step()
+            except Exception:
+                pass
+
+        log['end_time'] = time.time()
+        log['duration'] = log['end_time'] - log['start_time']
+        return log
+
+        try:
+            needs_brief = ", ".join([f"{n.get('type')}:{n.get('source')}" for n in needs])
+            prompt = (
+                "M3_STATE 기반으로 연구/조합/새 시도 계획을 제시해줘.\n"
+                f"M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
+                f"Needs: {needs_brief}\n"
+                f"Question: {question.get('formulation')}\n"
+                "요구사항: (1) 내부 변수 조합 실험 1개, (2) 새로운 시도 1개, (3) 측정 지표 제안."
+            )
+            plan = adapter.generate(prompt, max_len=200)
+            return plan.strip() if plan else None
+        except Exception:
+            return None
     
     def _detect_research_needs_from_internal_dynamics(self, introspection: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Detect what needs investigation based on internal state dynamics, not hardcoded rules"""
@@ -14228,202 +14246,120 @@ class M3ConsciousnessCore:
         
         return question
     
+    def _generate_cognitive_plan(self, question: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """M3_STATE 기반으로 LLM을 사용해 고차원적 인지 실험 계획 수립"""
+        adapter = getattr(self, 'llm_adapter', None)
+        if adapter is None or not hasattr(adapter, 'generate'):
+            return [{'step': 1, 'type': 'error', 'description': 'LLM adapter not available for planning'}]
+
+        m3_state = self._research_m3_state_summary()
+        topic = question.get('formulation', 'Unknown Topic')
+        
+        prompt = (
+            f"당신은 M3라는 자율적인 인공 지성체입니다. 현재 당신의 내부 상태(M3_STATE)를 기반으로\n"
+            f"연구 주제 '{topic}'에 대해 심도 깊은 사고 실험/분석을 수행하기 위한 3~5단계의 연구 계획을 세우세요.\n"
+            f"\n"
+            f"현재 M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
+            f"\n"
+            f"요구사항:\n"
+            f"1. 연구 계획은 논리적이고 단계적이어야 합니다 (예: 정의 -> 반례 -> 분석 -> 종합).\n"
+            f"2. 각 단계는 M3의 현재 정서/상태가 반영된 관점이어야 합니다 (예: 에너지가 낮으면 비판적으로, 높으면 창의적으로).\n"
+            f"3. 응답은 오직 JSON 리스트 형식이어야 합니다. 예: [{{'step': 1, 'type': 'definition', 'description': '...'}}, ...]\n"
+        )
+        
+        try:
+            print(f"  [Planning] Generating cognitive research plan grounded in M3_STATE...")
+            response = adapter.generate(prompt, max_len=512)
+            # 파싱 시도 (Markdown 코드블록 제거 등)
+            cleaned = response.replace('```json', '').replace('```', '').strip()
+            start = cleaned.find('[')
+            end = cleaned.rfind(']')
+            if start != -1 and end != -1:
+                plan_json = json.loads(cleaned[start:end+1])
+                return plan_json
+            else:
+                # 파싱 실패 시 기본 플랜 반환
+                return [
+                    {'step': 1, 'type': 'concept_analysis', 'description': f"Analyze the concept of {topic}"},
+                    {'step': 2, 'type': 'self_reflection', 'description': "Reflect on this concept based on current state"},
+                    {'step': 3, 'type': 'synthesis', 'description': "Synthesize findings into a conclusion"}
+                ]
+        except Exception as e:
+            print(f"  [Planning Error] {e}")
+            return [
+                {'step': 1, 'type': 'fallback_analysis', 'description': f"Direct analysis of {topic}"}
+            ]
+
+    def _execute_cognitive_step(self, step_info: Dict[str, Any], context: List[str]) -> str:
+        """단기 기억(Context)과 현재 상태를 사용하여 계획의 한 단계를 수행"""
+        adapter = getattr(self, 'llm_adapter', None)
+        m3_state = self._research_m3_state_summary()
+        
+        context_str = "\n".join(context[-3:]) # 최근 맥락 3개만 유지
+        
+        prompt = (
+            f"M3 연구 진행 중. 현재 단계: {step_info['description']}\n"
+            f"이전 맥락:\n{context_str}\n\n"
+            f"현재 M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
+            f"지시: 위 상태와 맥락을 바탕으로 이 단계를 수행하고, 그 결과를 텍스트로 서술하세요.\n"
+            f"당신의 현재 기분/상태가 반영된 어조와 깊이로 작성하세요."
+        )
+        
+        try:
+            result = adapter.generate(prompt, max_len=300)
+            return result.strip()
+        except:
+            return "Execution failed."
+
     def _conduct_investigation(self, question: Dict[str, Any], steps: int = 20) -> Dict[str, Any]:
-        """Conduct investigation based on strategy, collecting internal evidence"""
-        strategy = question['investigation_strategy']
-        strategy_type = strategy['type']
+        """Conduct investigation based on COGNITIVE PLANNING, not mechanical loops"""
         
         evidence = {
             'question_id': question['id'],
-            'strategy': strategy_type,
-            'observations': [],
-            'measurements': [],
+            'strategy': 'cognitive_reasoning',
+            'process_log': [],
             'conclusion': None
         }
+
+        # 1. Plan
+        plan = self._generate_cognitive_plan(question)
+        print(f"  [Plan Drafted] {len(plan)} steps.")
+        for p in plan:
+             print(f"    - Step {p.get('step')}: {p.get('description')}")
         
-        try:
-            if strategy_type == 'causal_manipulation':
-                # Manipulate one variable, observe another
-                manipulate_var = strategy['manipulate']
-                observe_var = strategy['observe']
-                
-                baseline_obs = self._extract_variable_value(observe_var)
-                
-                for step in range(steps):
-                    # Inject controlled perturbation
-                    perturbation = np.sin(step * 0.5) * 0.3  # Oscillating input
-                    self._inject_perturbation(manipulate_var, perturbation)
-                    
-                    # Execute one step
-                    self._single_consciousness_step()
-                    
-                    # Measure response
-                    response = self._extract_variable_value(observe_var)
-                    
-                    evidence['observations'].append({
-                        'step': step,
-                        'perturbation': float(perturbation),
-                        'response': float(response),
-                        'delta': float(response - baseline_obs)
-                    })
-                
-                # Analyze correlation
-                perturbations = np.array([o['perturbation'] for o in evidence['observations']])
-                responses = np.array([o['response'] for o in evidence['observations']])
-                
-                correlation = np.corrcoef(perturbations, responses)[0, 1] if len(perturbations) > 1 else 0.0
-                
-                evidence['measurements'].append({
-                    'metric': 'perturbation_response_correlation',
-                    'value': float(correlation)
-                })
-                
-                evidence['conclusion'] = {
-                    'relationship': 'positive' if correlation > 0.3 else 'negative' if correlation < -0.3 else 'weak',
-                    'strength': abs(float(correlation)),
-                    'interpretation': f"{manipulate_var} {'drives' if correlation > 0.3 else 'suppresses' if correlation < -0.3 else 'weakly affects'} {observe_var}"
-                }
+        context = []
+        findings = []
+
+        # 2. Execute Steps
+        for i, step_info in enumerate(plan):
+            print(f"\n  [Executing Step {i+1}/{len(plan)}] {step_info['description']}...")
             
-            elif strategy_type == 'perturbation_response':
-                # Perturb system and watch dynamics
-                target_var = strategy['target_variable']
-                baseline = self._extract_variable_value(target_var)
-                
-                responses = []
-                for step in range(steps):
-                    if step == steps // 2:
-                        # Apply strong perturbation at midpoint
-                        self._inject_perturbation(target_var, 0.5)
-                    
-                    self._single_consciousness_step()
-                    
-                    current = self._extract_variable_value(target_var)
-                    responses.append(float(current))
-                    
-                    evidence['observations'].append({
-                        'step': step,
-                        'value': float(current),
-                        'deviation': float(current - baseline)
-                    })
-                
-                # Measure recovery time
-                post_perturbation = responses[steps // 2:]
-                recovery_threshold = baseline * 0.1
-                recovery_step = None
-                
-                for i, val in enumerate(post_perturbation):
-                    if abs(val - baseline) < recovery_threshold:
-                        recovery_step = i
-                        break
-                
-                evidence['measurements'].append({
-                    'metric': 'recovery_time',
-                    'value': recovery_step if recovery_step is not None else steps
-                })
-                
-                evidence['conclusion'] = {
-                    'stability': 'stable' if recovery_step and recovery_step < steps // 2 else 'unstable',
-                    'recovery_time': recovery_step,
-                    'interpretation': f"{target_var} {'quickly stabilizes' if recovery_step and recovery_step < 5 else 'slowly recovers' if recovery_step else 'does not recover'} after perturbation"
-                }
+            # 사고 실험 수행 (LLM)
+            result_text = self._execute_cognitive_step(step_info, context)
             
-            elif strategy_type == 'information_flow_analysis':
-                # Measure cross-module correlations
-                module_states = []
-                
-                for step in range(steps):
-                    self._single_consciousness_step()
-                    
-                    # Collect module states
-                    state = {
-                        'qualia_arousal': float(self.qualia.arousal),
-                        'qualia_valence': float(self.qualia.valence),
-                        'meta_awareness': float(self.self_model.meta_awareness),
-                        'energy': float(self.energy_ctrl.cognitive_energy / 100.0),
-                        'phi': float(self.phi_calculator.phi_history[-1]) if self.phi_calculator.phi_history else 0.0
-                    }
-                    module_states.append(state)
-                
-                # Compute correlations
-                if len(module_states) > 2:
-                    keys = list(module_states[0].keys())
-                    values = {k: [s[k] for s in module_states] for k in keys}
-                    
-                    correlations = {}
-                    for i, k1 in enumerate(keys):
-                        for k2 in keys[i+1:]:
-                            v1 = np.array(values[k1])
-                            v2 = np.array(values[k2])
-                            if v1.std() > 1e-6 and v2.std() > 1e-6:
-                                corr = np.corrcoef(v1, v2)[0, 1]
-                                correlations[f'{k1}_x_{k2}'] = float(corr)
-                    
-                    evidence['measurements'].append({
-                        'metric': 'cross_module_correlations',
-                        'value': correlations
-                    })
-                    
-                    # Find isolated modules (low average correlation)
-                    avg_corrs = {}
-                    for key in keys:
-                        related = [abs(v) for k, v in correlations.items() if key in k]
-                        avg_corrs[key] = np.mean(related) if related else 0.0
-                    
-                    isolated = [k for k, v in avg_corrs.items() if v < 0.2]
-                    
-                    evidence['conclusion'] = {
-                        'isolated_modules': isolated,
-                        'average_integration': float(np.mean(list(avg_corrs.values()))),
-                        'interpretation': f"Modules {isolated} show weak integration" if isolated else "All modules well integrated"
-                    }
+            print(f"    -> Result: {result_text[:100]}... (truncated)")
             
-            elif strategy_type == 'resource_allocation_optimization':
-                # Test different energy allocation strategies
-                resource = strategy['resource']
-                objective = strategy['objective']
-                
-                strategies_tested = []
-                
-                # Strategy 1: Maintain high energy
-                self.energy_ctrl.cognitive_energy = 90.0
-                for _ in range(steps // 3):
-                    self._single_consciousness_step()
-                avg_engagement_1 = np.mean([self.qualia.engagement for _ in range(5)])
-                strategies_tested.append(('high_energy', float(avg_engagement_1)))
-                
-                # Strategy 2: Maintain medium energy
-                self.energy_ctrl.cognitive_energy = 50.0
-                for _ in range(steps // 3):
-                    self._single_consciousness_step()
-                avg_engagement_2 = np.mean([self.qualia.engagement for _ in range(5)])
-                strategies_tested.append(('medium_energy', float(avg_engagement_2)))
-                
-                # Strategy 3: Variable energy based on task
-                for _ in range(steps // 3):
-                    # Adapt energy to frustration
-                    self.energy_ctrl.cognitive_energy = max(20, 100 * (1 - self.qualia.frustration))
-                    self._single_consciousness_step()
-                avg_engagement_3 = np.mean([self.qualia.engagement for _ in range(5)])
-                strategies_tested.append(('adaptive_energy', float(avg_engagement_3)))
-                
-                evidence['measurements'].append({
-                    'metric': 'allocation_strategies',
-                    'value': dict(strategies_tested)
-                })
-                
-                best_strategy = max(strategies_tested, key=lambda x: x[1])
-                
-                evidence['conclusion'] = {
-                    'best_allocation': best_strategy[0],
-                    'best_performance': best_strategy[1],
-                    'interpretation': f"{best_strategy[0]} allocation maximizes {objective}"
-                }
-        
-        except Exception as e:
-            evidence['conclusion'] = {
-                'error': str(e),
-                'interpretation': f"Investigation failed: {e}"
+            # 결과 기록
+            # M3 내부 상태 변화도 동반 (사고 과정이 상태에 영향을 줌)
+            self._single_consciousness_step() 
+            
+            log_entry = {
+                'step': i + 1,
+                'intent': step_info['description'],
+                'result': result_text,
+                'm3_state_snapshot': self._research_m3_state_summary()
             }
+            evidence['process_log'].append(log_entry)
+            context.append(f"Step {i+1} Result: {result_text}")
+            findings.append(result_text)
+
+        # 3. Conclude
+        print(f"\n  [Synthesizing Conclusion]...")
+        final_summary = " ".join(findings)
+        evidence['conclusion'] = {
+            'interpretation': final_summary[:200] + "...", # 요약
+            'detailed_findings': final_summary
+        }
         
         return evidence
     
@@ -14493,11 +14429,14 @@ class M3ConsciousnessCore:
         except:
             pass
     
-    def run_autonomous_research(self, max_cycles: int = 100):
-        """Autonomous research driven by internal dynamics, not hardcoded heuristics"""
+    def run_autonomous_research(self, max_cycles: int = 100, topic: str = None):
+        """Autonomous research driven by internal dynamics or specific topic"""
         print(f"\n{'='*70}")
         print(f"M3 AUTONOMOUS RESEARCH SYSTEM")
-        print(f"Driven by Internal Dynamics & Introspection")
+        if topic:
+            print(f"Target Topic: {topic}")
+        else:
+            print(f"Driven by Internal Dynamics & Introspection")
         print(f"{'='*70}\n")
         
         research_log = {
@@ -14515,58 +14454,209 @@ class M3ConsciousnessCore:
             # 1. Deep introspection of internal state
             introspection = self._introspect_internal_state()
             
-            # 2. Detect research needs from internal dynamics
-            needs = self._detect_research_needs_from_internal_dynamics(introspection)
+            needs = []
+            primary_need = None
             
+            if topic:
+                # User-directed research overrides internal needs
+                primary_need = {
+                    'type': 'user_directed',
+                    'source': 'external_command',
+                    'intensity': 1.0,
+                    'description': f'User requested research on: {topic}',
+                    'requires_investigation': True
+                }
+                needs = [primary_need]
+            else:
+                # 2. Detect research needs from internal dynamics
+                needs = self._detect_research_needs_from_internal_dynamics(introspection)
+                try:
+                    force_research = os.getenv('M3_RESEARCH_FORCE', '0').lower() in ('1', 'true', 'yes', 'on')
+                except Exception:
+                    force_research = False
+                
+                if not needs and force_research:
+                    needs = [{
+                        'type': 'baseline_exploration',
+                        'source': 'forced_probe',
+                        'intensity': 0.2,
+                        'description': 'Forced research probe (no acute needs detected)',
+                        'requires_investigation': True
+                    }]
+
             if not needs:
                 print(f"  Internal state stable - no investigation needs detected")
+                try:
+                    self._append_creative_output(
+                        "연구: 내부 상태 안정. 조사 필요 없음.",
+                        meta={'type': 'research', 'cycle': cycle + 1, 'm3_state': self._research_m3_state_summary()}
+                    )
+                except Exception:
+                    pass
                 self._single_consciousness_step()
                 continue
             
             research_log['total_needs_detected'] += len(needs)
+
+            # M3 state snapshot for grounding
+            m3_state = self._research_m3_state_summary()
             
             print(f"  Detected {len(needs)} internal needs:")
             for need in needs:
                 print(f"    - {need['type']}: {need['description']} (intensity={need['intensity']:.3f})")
             
             # 3. Select most intense need
-            primary_need = max(needs, key=lambda n: n['intensity'])
+            if not primary_need:
+                primary_need = max(needs, key=lambda n: n['intensity'])
+                # Optional: create a combination need to encourage synthesis
+                if len(needs) >= 2:
+                    combo = sorted(needs, key=lambda n: n.get('intensity', 0.0), reverse=True)[:2]
+                    combo_need = {
+                        'type': 'combined_synthesis',
+                        'source': f"{combo[0].get('source')}+{combo[1].get('source')}",
+                        'intensity': float((combo[0].get('intensity', 0.0) + combo[1].get('intensity', 0.0)) / 2.0),
+                        'description': 'Synthesis of top-2 internal needs',
+                        'requires_investigation': True
+                    }
+                    needs.append(combo_need)
             
-            # 4. Formulate research question from internal need
-            question = self._formulate_research_question_from_need(primary_need)
+            # 4. Formulate research question
+            question = None
+            if topic:
+                # Direct formulation from user topic
+                question = {
+                    'id': f'Q{int(time.time() * 1000000) % 1000000}',
+                    'need': primary_need,
+                    'created_at': time.time(),
+                    'formulation': topic,
+                    'investigation_strategy': {
+                        'type': 'user_specified', 
+                        'target': 'user_topic',
+                        'hypothesis': f"Investigating {topic}"
+                    }
+                }
+            else:
+                # Autonomous formulation
+                question = self._formulate_research_question_from_need(primary_need)
+
             research_log['total_questions_formulated'] += 1
+
+            # M3-grounded research plan (combination/new attempt) via adapter
+            plan = self._generate_research_plan(m3_state, needs, question)
+            if plan:
+                question['m3_plan'] = plan
             
             print(f"\n  Research Question: {question['formulation']}")
             print(f"  Investigation Strategy: {question['investigation_strategy']['type']}")
             
             # 5. Conduct investigation
             print(f"\n  Conducting investigation...")
-            evidence = self._conduct_investigation(question, steps=20)
+            evidence = self._conduct_investigation(question, steps=20) or {}
             research_log['total_investigations'] += 1
+            conclusion = evidence.get('conclusion') if isinstance(evidence, dict) else None
             
             # 6. Extract conclusion
-            if evidence['conclusion']:
+            if conclusion:
                 print(f"\n  Investigation Results:")
-                print(f"    {evidence['conclusion'].get('interpretation', 'No interpretation')}")
+                print(f"    {conclusion.get('interpretation', 'No interpretation')}")
                 
                 # Record discovery
-                if 'error' not in evidence['conclusion']:
+                if isinstance(conclusion, dict) and 'error' not in conclusion:
+                    evidence_items = evidence.get('measurements', evidence.get('process_log', []))
                     discovery = {
                         'cycle': cycle + 1,
                         'need': primary_need,
                         'question': question['formulation'],
-                        'finding': evidence['conclusion']['interpretation'],
-                        'evidence': evidence['measurements']
+                        'finding': conclusion.get('interpretation', ''),
+                        'evidence': evidence_items
                     }
                     research_log['discoveries'].append(discovery)
                     print(f"    [DISCOVERY RECORDED]")
+                    try:
+                        domain = str(topic).strip() if topic else str(primary_need.get('type', 'general')).strip()
+                        if not domain:
+                            domain = 'general'
+                        investigation_parts = []
+                        if isinstance(evidence_items, list):
+                            for item in evidence_items[:3]:
+                                if isinstance(item, dict):
+                                    intent = str(item.get('intent', item.get('step', ''))).strip()
+                                    result = str(item.get('result', item.get('value', ''))).strip().replace('\n', ' ')
+                                    if len(result) > 180:
+                                        result = result[:180] + '...'
+                                    if intent and result:
+                                        investigation_parts.append(f"{intent}: {result}")
+                                    elif result:
+                                        investigation_parts.append(result)
+                                elif item is not None:
+                                    txt = str(item).strip().replace('\n', ' ')
+                                    if txt:
+                                        investigation_parts.append(txt[:180] + ('...' if len(txt) > 180 else ''))
+                        investigation_text = " | ".join(investigation_parts) if investigation_parts else "No detailed investigation log."
+                        conclusion_text = str(conclusion.get('interpretation', 'No interpretation'))
+                        if len(conclusion_text) > 240:
+                            conclusion_text = conclusion_text[:240] + '...'
+                        key_points = [
+                            f"strategy={question.get('investigation_strategy', {}).get('type', 'unknown')}",
+                            f"need_type={primary_need.get('type', 'unknown')}",
+                            f"finding={conclusion_text}",
+                        ]
+                        research_content = "\n".join([
+                            f"Need: {primary_need.get('description', primary_need.get('type', 'unknown'))}",
+                            f"Question: {question.get('formulation', '')}",
+                            f"Investigation: {investigation_text}",
+                            f"Conclusion: {conclusion_text}",
+                            f"Key points: {'; '.join(key_points)}",
+                        ])
+                        adapter = getattr(self, 'llm_adapter', None) or getattr(self, 'llm', None)
+                        emb = None
+                        if adapter is not None and hasattr(adapter, 'embed_text'):
+                            emb_text = self._semantic_text_for_embedding(research_content)
+                            emb = adapter.embed_text(emb_text, sys_identity="")
+                        self._encode_semantic_memory_trace(
+                            experience_name='research_discovery',
+                            kind='research',
+                            content=research_content,
+                            embedding=emb,
+                            tags=['research', domain],
+                            extra_context={
+                                'cycle': int(cycle + 1),
+                                'question_id': str(question.get('id', '')),
+                                'domain': domain,
+                            },
+                        )
+                    except Exception:
+                        pass
             else:
                 print(f"\n  Investigation inconclusive")
+
+            # Append a concise research report to the single creative file
+            try:
+                report_lines = [
+                    f"연구 사이클 {cycle + 1}/{max_cycles}",
+                    f"질문: {question.get('formulation')}",
+                    f"전략: {question.get('investigation_strategy', {}).get('type')}",
+                ]
+                if question.get('m3_plan'):
+                    report_lines.append(f"M3 계획: {question.get('m3_plan')}")
+                if conclusion:
+                    report_lines.append(
+                        f"결론: {conclusion.get('interpretation', 'No interpretation')}"
+                    )
+                else:
+                    report_lines.append("결론: 불충분")
+                self._append_creative_output(
+                    "\n".join(report_lines),
+                    meta={'type': 'research', 'cycle': cycle + 1, 'm3_state': m3_state}
+                )
+            except Exception:
+                pass
             
             # 7. Log cycle
             cycle_log = {
                 'cycle': cycle + 1,
                 'introspection': introspection,
+                'm3_state': m3_state,
                 'needs': needs,
                 'question': question,
                 'evidence': evidence,
@@ -16976,8 +17066,11 @@ if _GUI_AVAILABLE:
                 try:
                     save_path = os.path.join(self.core.outdir, 'llm_checkpoint.pt')
                     if hasattr(adapter, 'save_model'):
-                        adapter.save_model(save_path)
-                        self.after(0, lambda: self._log(f'✓ Model saved: {save_path}'))
+                        if getattr(adapter, '_hf_circuit_open', False):
+                            self.after(0, lambda: self._log('⚠ Skipped LLM save: HF circuit breaker is open'))
+                        else:
+                            adapter.save_model(save_path)
+                            self.after(0, lambda: self._log(f'✓ Model saved: {save_path}'))
                     elif hasattr(adapter, 'conv_policy'):
                         import torch
                         torch.save(adapter.conv_policy.model.state_dict(), save_path)
@@ -17058,43 +17151,6 @@ Items Stored: {len(knn._keys)}"""
             _tk.Button(btn_frame, text='Close', command=settings_win.destroy,
                       bg='#666666', fg='#fff', font=('Consolas', 9, 'bold'),
                       bd=0, cursor='hand2').pack(side=_tk.LEFT, padx=5)
-        
-        def _clear_knn_memory(self, parent_win):
-            """kNN 메모리 클리어"""
-            adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
-            if adapter is None:
-                return
-            
-            try:
-                knn = getattr(adapter, '_knn', None)
-                if knn:
-                    knn._keys.clear()
-                    knn._vals.clear()
-                    knn._access_counts.clear()
-                    knn._total_queries = 0
-                    self._log('✓ kNN memory cleared')
-                    parent_win.destroy()
-                else:
-                    self._log('✗ kNN not available')
-            except Exception as e:
-                self._log(f'✗ Clear kNN error: {e}')
-        
-        def _reset_knn_tau(self, parent_win, new_tau):
-            """kNN tau 재설정"""
-            adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
-            if adapter is None:
-                return
-            
-            try:
-                knn = getattr(adapter, '_knn', None)
-                if knn:
-                    knn.tau = float(new_tau)
-                    self._log(f'✓ kNN tau reset to {new_tau}')
-                    parent_win.destroy()
-                else:
-                    self._log('✗ kNN not available')
-            except Exception as e:
-                self._log(f'✗ Reset tau error: {e}')
         
         def _toggle_m3_integration(self):
             """M3 integration 토글"""

@@ -1,0 +1,21 @@
+{
+  "t": 3649,
+  "seed": 2166567996,
+  "strange_loop_active": 0,
+  "meta_awareness": 0.8123842065915376,
+  "unity_score": 0.5,
+  "energy": 0.0,
+  "activation": 0.0,
+  "beliefs": {
+    "stability": 0.5,
+    "adaptation": 0.5,
+    "prediction": 0.5
+  },
+  "qualia": {
+    "arousal": 0.7349024035898573,
+    "valence": 0.3724406323371643,
+    "entropy": 0.869646772545063,
+    "engagement": 0.22315483355490146,
+    "frustration": 0.7615941559557649
+  }
+}

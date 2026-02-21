@@ -1,8 +1,10 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import os
 from typing import Optional, Tuple, List, Dict, Any, Union
 import logging
+from m3.device import resolve_torch_device_string
 
 from llm_adapter.config import get_global_config, M3PlasticPolicyConfig
 from llm_adapter.layers import PlasticBitLinear
@@ -22,7 +24,13 @@ class M3PlasticPolicy(nn.Module):
         
         # Load config
         self.config = config or get_global_config().plastic_policy
-        self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
+        self.device = torch.device(
+            resolve_torch_device_string(
+                explicit=device,
+                torch_module=torch,
+                require_cuda=False,
+            )
+        )
         
         # Tokenizer
         try:
@@ -52,7 +60,19 @@ class M3PlasticPolicy(nn.Module):
         
         # Output Projection (High Precision for probable token selection)
         self.layer_out = nn.Linear(hidden_dim, self.vocab_size)
-        
+
+        # Token-critic Q-value head (matches Model class in core.py)
+        # Used by HFBackend.generate_with_m3() for per-token logit bias
+        self.token_value = PlasticBitLinear(hidden_dim, self.vocab_size,
+                                            trace_decay=self.config.linear_config.trace_decay)
+
+        # Expose hidden_dim as .hidden for HFBackend projection layer init
+        self.hidden = hidden_dim
+
+        # Alias: PlasticBrainPolicy.generate() calls self.model.emb()
+        # M3PlasticPolicy uses self.embedding, so alias for compatibility
+        self.emb = self.embedding
+
         self.act = nn.GELU()
         self.norm = nn.LayerNorm(hidden_dim)
         
@@ -60,6 +80,29 @@ class M3PlasticPolicy(nn.Module):
         
         # State for recurrence (persistent across steps)
         self.reset_state()
+
+    def encoder(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """GRU-compatible encoder interface for PlasticBrainPolicy.
+
+        Runs input through the plastic recurrent stack and returns
+        (full_output, last_hidden) matching the (output, h_n) convention
+        used by TorchConversationalPolicy's GRU encoder.
+        """
+        batch_size, seq_len, _ = x.shape
+        curr_h = self._hidden_state.repeat(batch_size, 1) if self._hidden_state.shape[0] == 1 else self._hidden_state
+        if curr_h.shape[0] != batch_size:
+            curr_h = torch.zeros(batch_size, self.config.hidden_dim, device=self.device)
+        outputs = []
+        for t in range(seq_len):
+            xt = x[:, t, :]
+            h_in = self.layer_in(xt)
+            h_combined = h_in
+            for layer in self.layers:
+                h_combined = h_combined + layer(curr_h)
+            curr_h = self.norm(self.act(curr_h + h_combined))
+            outputs.append(curr_h)
+        out_stack = torch.stack(outputs, dim=1)  # (B, S, H)
+        return out_stack, curr_h.unsqueeze(0)  # match GRU h_n shape (1, B, H)
 
     def reset_state(self):
         """Reset the short-term hidden state (not the Hebbian traces)."""

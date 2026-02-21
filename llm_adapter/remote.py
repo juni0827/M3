@@ -10,7 +10,6 @@ logger = logging.getLogger('llm_adapter.remote')
 DEFAULT_SYSTEM_PROMPT = (
     "You are M3. Respond as M3 using the provided M3_STATE. "
     "Do not claim to be an AI assistant or language model. "
-    "Do not mention DeepSeek or any other persona. "
     "Do not say you cannot feel; answer based on state. "
     "Do not refuse by saying you cannot. "
     "Be concise and factual. Reply in the user's language."
@@ -22,6 +21,15 @@ def _get_system_prompt() -> str:
         return os.getenv('LLM_SYSTEM_PROMPT', DEFAULT_SYSTEM_PROMPT).strip()
     except Exception:
         return DEFAULT_SYSTEM_PROMPT
+
+
+def _system_prompt_mode() -> str:
+    return str(os.getenv('M3_SYSTEM_PROMPT_MODE', 'param')).strip().lower()
+
+
+def _system_prompt_enabled() -> bool:
+    mode = _system_prompt_mode()
+    return mode in {'prompt', 'on', '1', 'true', 'yes', 'open'}
 
 
 def _build_prompt(prompt: str, sys_identity: str) -> str:
@@ -79,22 +87,21 @@ def get_local_thinking(
     top_p: float = None,
     max_len: int = None,
 ) -> str:
-    """Call local Ollama/Deepseek server with retries/backoff.
+    """Call local Ollama server with retries/backoff.
 
     Uses environment variables:
       OLLAMA_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT, OLLAMA_RETRIES, OLLAMA_BACKOFF,
       OLLAMA_NUM_CTX,
       OLLAMA_NUM_PREDICT_MIN, OLLAMA_NUM_PREDICT_MAX, OLLAMA_NUM_PREDICT_ESCALATIONS
     """
-    use_local = os.getenv('USE_LOCAL_AI', '1') == '1'
+    use_local = os.getenv('USE_LOCAL_AI', '0') == '1'
     if not use_local:
-        return 'Local AI disabled'
+        return ''
 
     url = url or os.getenv('OLLAMA_URL', 'http://localhost:11434/api/generate')
-    model = model or os.getenv('OLLAMA_MODEL', 'deepseek-r1:8b')
+    model = model or os.getenv('OLLAMA_MODEL', 'qwen2.5:1.5b')
     if timeout is None:
         try:
-            # Reasoning models (e.g. deepseek-r1) can take much longer; 60s is often too short.
             timeout = float(os.getenv('OLLAMA_TIMEOUT', '300'))
         except Exception:
             timeout = 300.0
@@ -157,7 +164,7 @@ def get_local_thinking(
         # Detect Chinese (CJK Unified Ideographs) and Japanese (Hiragana/Katakana)
         has_chinese = bool(re.search(RE_CJK, cleaned))
         has_japanese = bool(re.search(RE_HIRAGANA, cleaned) or re.search(RE_KATAKANA, cleaned))
-        persona_terms = ['miya', 'Miya', 'DeepSeek', 'Deepseek', 'DeepSeek R1', 'DeepSeekR1', 'DeepSeek R1']
+        persona_terms = ['miya', 'Miya']
         has_other_persona = any(term in cleaned for term in persona_terms)
         lower = cleaned.lower()
         forbidden_phrases = [
@@ -193,9 +200,10 @@ def get_local_thinking(
 
     for attempt in range(1, retries + 1):
         try:
-            # Prepend system instruction to strongly enforce identity/format
-            sys_identity = _get_system_prompt()
-            final_prompt = _build_prompt(prompt, sys_identity)
+            # Prepend system instruction only when explicit prompt mode is enabled.
+            sys_identity = _get_system_prompt() if _system_prompt_enabled() else ""
+            final_prompt = _build_prompt(prompt, sys_identity) if sys_identity else str(prompt)
+            prompt_had_system = bool(sys_identity)
 
             options = {}
             if num_ctx and num_ctx > 0:
@@ -246,7 +254,6 @@ def get_local_thinking(
             data = _call_ollama(final_prompt, options)
 
             # Adaptive retry: if the model produced only `thinking` and hit length, bump `num_predict`.
-            # This is common for deepseek-r1 style models.
             try:
                 dr = str(data.get('done_reason', '') or '')
             except Exception:
@@ -303,7 +310,7 @@ def get_local_thinking(
                 orig_text = resp_text
                 # If model echoed the system prompt or the full prompt, strip that prefix
                 try:
-                    if sys_identity and resp_text.startswith(sys_identity):
+                    if prompt_had_system and sys_identity and resp_text.startswith(sys_identity):
                         resp_text = resp_text[len(sys_identity):].strip()
                     if resp_text.startswith(final_prompt):
                         resp_text = resp_text[len(final_prompt):].strip()
@@ -323,8 +330,11 @@ def get_local_thinking(
                         )
                     except Exception:
                         pass
-                    strong_sys = _get_system_prompt() + " STRICT: Reply as M3 only. No AI disclaimers."
-                    final_prompt = _build_prompt(prompt, strong_sys)
+                    if prompt_had_system:
+                        strong_sys = _get_system_prompt() + " STRICT: Reply as M3 only. No AI disclaimers."
+                        final_prompt = _build_prompt(prompt, strong_sys)
+                    else:
+                        final_prompt = str(prompt)
                     try:
                         data2 = _call_ollama(final_prompt, options)
                         if 'response' in data2:
@@ -346,8 +356,8 @@ def get_local_thinking(
                         )
                     except Exception:
                         pass
-                return f'Local Error: Unexpected or invalid response: {resp_text}'
-            return f'Local Error: Unexpected response format: {data}'
+                return ''
+            return ''
         except requests.exceptions.RequestException as e:
             if attempt < retries:
                 wait = backoff ** (attempt - 1)
@@ -362,9 +372,9 @@ def get_local_thinking(
                     logger.error(f'Ollama request failed after {retries} attempts: {e}')
                 except Exception:
                     pass
-                return f'Local Error: Request failed after {retries} attempts: {e}'
+                return ''
         except Exception as e:
             if attempt < retries:
                 time.sleep(backoff ** (attempt - 1))
                 continue
-            return f'Local Error: {e}'
+            return ''

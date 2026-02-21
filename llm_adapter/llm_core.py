@@ -22,9 +22,9 @@ from __future__ import annotations
 import os
 import sys
 
-# If this file is executed directly (python llm_adapter/core.py), ensure
+# If this file is executed directly (python llm_adapter/llm_core.py), ensure
 # project root is on sys.path so absolute imports like `import llm_adapter.*`
-# work. When run as a module (`python -m llm_adapter.core`) this is not needed.
+# work. When run as a module (`python -m llm_adapter.llm_core`) this is not needed.
 if __name__ == "__main__" and __package__ is None:
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if project_root not in sys.path:
@@ -33,12 +33,59 @@ import os
 import json
 import numpy as np
 import logging
+import re
 from logging.handlers import RotatingFileHandler
 from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
 import threading
 import time
 from collections import deque
+import types
 import torch
+from m3.device import resolve_torch_device_string
+
+# ---------------------------------------------------------------------------
+# Silence noisy external libraries (HuggingFace Hub / Transformers / httpx)
+# ---------------------------------------------------------------------------
+# These libraries legitimately make many HEAD/GET requests (metadata, redirects,
+# cache checks). The INFO logs are not actionable in normal runs and clutter the
+# interactive REPL, so we suppress them unconditionally.
+os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
+os.environ['HF_HUB_VERBOSITY'] = 'error'
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+os.environ['BITSANDBYTES_NOWELCOME'] = '1'
+
+for _name in (
+    'httpx', 'httpcore', 'hpack', 'h2', 'urllib3',
+    'huggingface_hub', 'transformers', 'accelerate', 'bitsandbytes'
+):
+    logging.getLogger(_name).setLevel(logging.WARNING)
+
+# Local adapter chatter (keep console clean)
+logging.getLogger('llm_adapter.tokenization').setLevel(logging.WARNING)
+
+try:
+    from transformers.utils import logging as _tlog
+    _tlog.set_verbosity_error()
+    try:
+        _tlog.disable_progress_bar()
+    except Exception:
+        pass
+except Exception:
+    pass
+
+try:
+    from huggingface_hub.utils import logging as _hlog
+    try:
+        _hlog.set_verbosity_error()
+    except Exception:
+        pass
+    try:
+        _hlog.disable_progress_bars()
+    except Exception:
+        pass
+except Exception:
+    pass
 
 try:
     from .config import (
@@ -71,6 +118,37 @@ except Exception:
     )
     from llm_adapter.memory import ConditionalKNNIndex, KNNItem, M3EpisodicMemoryRetriever
     from llm_adapter.tokenization import M3Tokenizer, AutoTokenizer
+
+try:
+    from .m3_control_bridge import (
+        M3ControlBridge,
+        LayerGateRuntime,
+        GenerationQualityGate,
+        find_decoder_layers,
+    )
+except Exception:
+    try:
+        from llm_adapter.m3_control_bridge import (  # type: ignore
+            M3ControlBridge,
+            LayerGateRuntime,
+            GenerationQualityGate,
+            find_decoder_layers,
+        )
+    except Exception:
+        M3ControlBridge = None  # type: ignore
+        LayerGateRuntime = None  # type: ignore
+        GenerationQualityGate = None  # type: ignore
+        def find_decoder_layers(_model):  # type: ignore
+            return []
+
+try:
+    from .remote import get_local_thinking
+except Exception:
+    try:
+        from llm_adapter.remote import get_local_thinking  # type: ignore
+    except Exception:
+        def get_local_thinking(*args, **kwargs):  # type: ignore
+            return ""
 
 
 class M3StateEncoder:
@@ -685,6 +763,724 @@ class M3AdaptiveSampler:
         return self.torch.multinomial(probs, num_samples=1)
 
 
+class HFBackend:
+    """HuggingFace Transformers backend with full M3 parameter control.
+
+    Unlike Ollama (text-in/text-out), this gives per-token access to:
+    - Raw logits  → token-critic Q-value injection
+    - Hidden states → cross-attention / projection
+    - Sampling params → M3AdaptiveSampler (phi/qualia/energy → temperature/top_k)
+
+    Singleton: model is loaded once and reused across calls.
+    Set  M3_USE_HF=1  and  M3_HF_MODEL=Qwen/Qwen2.5-1.5B-Instruct  to enable.
+    """
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    @classmethod
+    def is_available(cls):
+        return os.getenv('M3_USE_HF', '0') == '1'
+
+    def __init__(self):
+        self._loaded = False
+        self._model = None
+        self._tokenizer = None
+        self.model_name = os.getenv('M3_HF_MODEL', 'Qwen/Qwen2.5-1.5B-Instruct')
+        self.quantize = os.getenv('M3_HF_QUANTIZE', '4bit')
+        self._hf_proj = None
+        self._hf_proj_dims = (0, 0)
+        self.device = None
+        self.hidden_dim = None
+        self.vocab_size = None
+        self._control_bridge = None
+        self._control_bridge_state_dim = 0
+        self._control_bridge_layers = []
+        self._decode_term_cache = {}
+
+    def _ensure_loaded(self):
+        if self._loaded:
+            return
+        import torch as _torch
+        try:
+            from transformers import AutoModelForCausalLM
+            from transformers import AutoTokenizer as HFAutoTokenizer
+        except ImportError as exc:
+            raise RuntimeError(
+                'M3_USE_HF=1 requires: pip install transformers accelerate bitsandbytes'
+            ) from exc
+
+        logging.getLogger('llm_adapter').info(
+            f'[HFBackend] Loading {self.model_name} (quantize={self.quantize}) ...'
+        )
+
+        self._tokenizer = HFAutoTokenizer.from_pretrained(
+            self.model_name, trust_remote_code=True
+        )
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        # transformers 최신 버전에서는 `torch_dtype`가 deprecated이고 `dtype`를 권장함.
+        # 다만 구버전 호환을 위해 from_pretrained 호출에서 필요 시 `torch_dtype`로 폴백한다.
+        load_kw = {'trust_remote_code': True, 'dtype': _torch.bfloat16}
+
+        if self.quantize == '4bit':
+            try:
+                from transformers import BitsAndBytesConfig
+                load_kw['quantization_config'] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=_torch.bfloat16,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type='nf4',
+                )
+            except ImportError:
+                logging.getLogger('llm_adapter').warning(
+                    '[HFBackend] bitsandbytes unavailable, falling back to bf16'
+                )
+        elif self.quantize == '8bit':
+            try:
+                from transformers import BitsAndBytesConfig
+                load_kw['quantization_config'] = BitsAndBytesConfig(load_in_8bit=True)
+            except ImportError:
+                pass
+
+        if 'device_map' not in load_kw:
+            load_kw['device_map'] = 'auto'
+
+        try:
+            self._model = AutoModelForCausalLM.from_pretrained(
+                self.model_name, **load_kw
+            )
+        except TypeError as exc:
+            msg = str(exc)
+            if (
+                ('dtype' in msg)
+                and ('unexpected' in msg or 'got an unexpected keyword argument' in msg)
+            ):
+                load_kw_fallback = dict(load_kw)
+                load_kw_fallback.pop('dtype', None)
+                load_kw_fallback['torch_dtype'] = _torch.bfloat16
+                self._model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name, **load_kw_fallback
+                )
+            else:
+                raise
+        self._model.eval()
+
+        # CPU는 bfloat16 비지원 → float32로 강제
+        self.device = next(self._model.parameters()).device
+        if self.device.type == 'cpu':
+            self._model = self._model.float()
+
+        self.hidden_dim = self._model.config.hidden_size
+        self.vocab_size = self._model.config.vocab_size
+        self._loaded = True
+
+        logging.getLogger('llm_adapter').info(
+            f'[HFBackend] Ready: vocab={self.vocab_size}, '
+            f'hidden={self.hidden_dim}, device={self.device}'
+        )
+
+    def _bridge_enabled(self) -> bool:
+        return (
+            self._control_allows('bridge')
+            and os.getenv('M3_ENABLE_CONTROL_BRIDGE', '0').lower() in ('1', 'true', 'yes', 'on')
+        )
+
+    def _bridge_enabled_safe(self) -> bool:
+        try:
+            fn = getattr(self, "_bridge_enabled", None)
+            if callable(fn):
+                return bool(fn())
+        except Exception:
+            pass
+        return False
+
+    def _note_control_health(self, success: bool, reason: str = "") -> None:
+        try:
+            self._control_health_window.append((time.time(), bool(success), str(reason or "")))
+        except Exception:
+            return
+        if success:
+            self._auto_mode_fail_streak = 0
+        else:
+            self._auto_mode_fail_streak += 1
+
+    def _compute_recent_control_stats(self) -> Dict[str, float]:
+        now = time.time()
+        window_sec = float(os.getenv("M3_CONTROL_HEALTH_WINDOW_SEC", "180"))
+        events = [
+            (ts, ok, reason)
+            for ts, ok, reason in list(self._control_health_window)
+            if now - float(ts) <= window_sec
+        ]
+        if not events:
+            return {"count": 0.0, "fail_ratio": 0.0, "consecutive_failures": 0.0}
+        n = len(events)
+        fails = sum(1 for _, ok, _ in events if not ok)
+        return {
+            "count": float(n),
+            "fail_ratio": float(fails / max(1.0, float(n))),
+            "consecutive_failures": float(self._auto_mode_fail_streak),
+        }
+
+    def _auto_control_selection(self) -> str:
+        if getattr(self, "_hf_circuit_open", False):
+            return "off"
+        stats = self._compute_recent_control_stats()
+        fail_ratio = float(stats.get("fail_ratio", 0.0))
+        consecutive = int(stats.get("consecutive_failures", 0))
+        count = int(stats.get("count", 0.0))
+        if consecutive >= 2:
+            return "off"
+        if fail_ratio >= 0.30 and count >= 3:
+            return "state"
+        if fail_ratio >= 0.15 and count >= 2:
+            return "state"
+
+        core = getattr(self, 'core', None)
+        if core is not None:
+            em = getattr(core, 'episodic_memory', None)
+            try:
+                retrieved = int(getattr(em, 'total_retrieved', 0))
+            except Exception:
+                retrieved = 0
+            if retrieved > 0 and os.getenv("M3_CONTROL_AUTO_FULL", "1").lower() not in ('0', 'false', 'no', 'off'):
+                return "full"
+            if retrieved >= 0:
+                return "memory"
+
+        return "state"
+
+    def _control_selection_mode(self) -> str:
+        raw = str(os.getenv("M3_CONTROL_SELECTION_MODE", "state") or "state").strip().lower()
+        if raw in {"0", "off", "none", "disable", "disabled", "no", "false"}:
+            return "off"
+        if raw in {"1", "state", "state_only", "context", "context_only", "low"}:
+            return "state"
+        if raw in {"2", "memory", "mid", "mixed", "medium"}:
+            return "memory"
+        if raw in {"3", "full", "high", "all", "strict"}:
+            return "full"
+        if raw in {"auto", "adaptive", "self", "self_adjust"}:
+            return self._auto_control_selection()
+        # Backward-compatible aliases
+        if raw in {"on", "true", "yes"}:
+            return "full"
+        return "state"
+
+    def _control_allows(self, feature: str) -> bool:
+        mode = self._control_selection_mode()
+        allowed = {
+            "off": set(),
+            "state": {"state_context"},
+            "memory": {"state_context", "memory_retrieval"},
+            "full": {"state_context", "memory_retrieval", "bridge", "decode_control", "adaptive_sampler", "token_value_bias", "quality_gate"},
+        }.get(mode, {"state_context"})
+        return feature in allowed
+
+    def _ensure_control_bridge(self, state_dim: int):
+        if M3ControlBridge is None:
+            return None
+        try:
+            state_dim = int(max(8, state_dim))
+        except Exception:
+            state_dim = 256
+        layers = find_decoder_layers(self._model) if self._model is not None else []
+        num_layers = max(1, len(layers))
+        need_new = (
+            self._control_bridge is None
+            or self._control_bridge_state_dim != state_dim
+            or not self._control_bridge_layers
+        )
+        if need_new:
+            prefix_len = int(max(1, int(os.getenv('M3_BRIDGE_PREFIX_LEN', '8'))))
+            logit_rank = int(max(4, int(os.getenv('M3_BRIDGE_LOGIT_RANK', '32'))))
+            self._control_bridge = M3ControlBridge(
+                state_dim=state_dim,
+                model_hidden_dim=int(self.hidden_dim or 1024),
+                vocab_size=int(self.vocab_size or 32000),
+                num_layers=num_layers,
+                prefix_len=prefix_len,
+                logit_rank=logit_rank,
+            ).to(self.device)
+            self._control_bridge.eval()
+            self._control_bridge_state_dim = state_dim
+            self._control_bridge_layers = list(layers)
+        return self._control_bridge
+
+    def _prepare_bridge_state(self, z_m3, state_dim: int, device):
+        if z_m3 is None:
+            return None
+        try:
+            z = np.asarray(z_m3, dtype=np.float32).ravel()
+        except Exception:
+            return None
+        if z.size == 0:
+            return None
+        if z.size > state_dim:
+            z = z[:state_dim]
+        elif z.size < state_dim:
+            z = np.pad(z, (0, state_dim - z.size), mode='constant')
+        import torch as _torch
+        return _torch.from_numpy(z).to(device=device, dtype=_torch.float32).unsqueeze(0)
+
+    @staticmethod
+    def _micro_update_step_state(core, _step: int, generated_ids: list, interval: int) -> bool:
+        """Apply lightweight core state updates every ``interval`` steps."""
+        if core is None or interval is None:
+            return False
+        try:
+            interval = int(interval)
+        except Exception:
+            return False
+        if interval <= 0 or (_step <= 0) or (_step % interval != 0):
+            return False
+        updated = False
+        try:
+            if hasattr(core, 'energy_ctrl'):
+                ec = core.energy_ctrl
+                before = float(getattr(ec, 'cognitive_energy', 0.0))
+                ec.cognitive_energy = max(0.0, before - 0.05 * interval)
+                if ec.cognitive_energy != before:
+                    updated = True
+            if hasattr(core, 'qualia'):
+                q = core.qualia
+                before = float(getattr(q, 'entropy', 0.0))
+                window = generated_ids[-interval:] if generated_ids else []
+                n_unique = len(set(window)) if window else 0
+                token_diversity = n_unique / max(interval, 1)
+                q.entropy = 0.8 * before + 0.2 * token_diversity
+                if q.entropy != before:
+                    updated = True
+        except Exception:
+            return False
+        return updated
+
+    @staticmethod
+    def _sample_next_token(logits, temperature: float, top_k: int, top_p: float):
+        """Shared sampling logic for HF decoding."""
+        import torch as _torch
+
+        if temperature <= 0:
+            return _torch.argmax(logits, dim=-1, keepdim=True), None
+
+        logits = logits / (temperature + 1e-8)
+        if top_k > 0:
+            k = min(int(top_k), logits.size(-1))
+            topv, _ = _torch.topk(logits, k)
+            logits = _torch.where(logits < topv[:, -1:], _torch.full_like(logits, float('-inf')), logits)
+        if 0 < top_p < 1.0:
+            sl, si = _torch.sort(logits, descending=True)
+            cp = _torch.cumsum(_torch.softmax(sl, dim=-1), dim=-1)
+            mask = cp > top_p
+            mask[:, 0] = False
+            sl = sl.clone()
+            sl[mask] = float('-inf')
+            logits = _torch.zeros_like(logits).scatter(-1, si, sl)
+        probs = _torch.softmax(logits, dim=-1)
+        return _torch.multinomial(probs, num_samples=1), {
+            'temperature': float(temperature),
+            'top_k': int(top_k),
+            'top_p': float(top_p),
+        }
+
+    @staticmethod
+    def _token_critic_enabled(token_value_head, internal_hidden_dim) -> bool:
+        return (
+            token_value_head is not None
+            and isinstance(internal_hidden_dim, int)
+            and internal_hidden_dim > 0
+        )
+
+    def _compute_sample_params(self, core, m3_sampler, base_temperature, base_top_k, base_top_p):
+        temperature = float(base_temperature) if base_temperature is not None else 0.8
+        top_k = int(base_top_k) if base_top_k is not None else 50
+        top_p = float(base_top_p) if base_top_p is not None else 0.9
+        sampler_enabled = self._control_allows('adaptive_sampler') and os.getenv(
+            'M3_HF_ENABLE_M3_SAMPLER', '1'
+        ).lower() in ('1', 'true', 'yes', 'on')
+        if m3_sampler is not None and core is not None and sampler_enabled:
+            try:
+                temperature = float(m3_sampler._compute_temperature(core, temperature))
+                top_k = int(m3_sampler._compute_top_k(core, top_k))
+            except Exception:
+                pass
+        return temperature, top_k, top_p
+
+    @staticmethod
+    def _apply_bridge_logit_bias(logits, bridge_controls):
+        if bridge_controls is None:
+            return logits
+        try:
+            lb = bridge_controls.logit_bias
+            if lb is not None and lb.shape[-1] == logits.shape[-1]:
+                return logits + lb.to(device=logits.device, dtype=logits.dtype)
+        except Exception:
+            pass
+        return logits
+
+    def _apply_token_value_injection(self, logits, hidden, token_value_head, beta, internal_hidden_dim):
+        if not self._token_critic_enabled(token_value_head, internal_hidden_dim):
+            return logits
+        try:
+            import torch as _torch
+            if hidden is None:
+                return logits
+            h_proj = self._hf_proj(hidden.to(self._hf_proj.weight.dtype)) if self._hf_proj is not None else hidden.to(_torch.float32)
+            q_vals = token_value_head(h_proj.float())
+            if q_vals.shape[-1] != logits.shape[-1]:
+                return logits
+            q = q_vals.float()
+            q = q - q.mean(dim=-1, keepdim=True)
+            q = q / (q.std(dim=-1, keepdim=True) + 1e-6)
+            q = _torch.clamp(q, -3.0, 3.0)
+            return logits + float(beta) * q
+        except Exception:
+            return logits
+
+    def _resolve_forbidden_token_ids(self, decode_control: Optional[Dict[str, Any]]) -> List[int]:
+        if not decode_control:
+            return []
+
+        terms: List[str] = []
+        if not decode_control.get("allow_state_terms", True):
+            base_terms = decode_control.get("forbidden_terms", [])
+            if isinstance(base_terms, (list, tuple)):
+                terms.extend(str(t).strip() for t in base_terms if str(t).strip())
+
+        if decode_control.get("identity_lock", False):
+            identity_terms = decode_control.get("identity_forbidden_terms", [])
+            if isinstance(identity_terms, (list, tuple)):
+                terms.extend(str(t).strip() for t in identity_terms if str(t).strip())
+
+        key = tuple(dict.fromkeys(terms))
+        if not key:
+            return []
+        cached = self._decode_term_cache.get(key)
+        if cached is not None:
+            return list(cached)
+
+        ids = set()
+        for term in key:
+            try:
+                token_ids = self._tokenizer(term, add_special_tokens=False).get("input_ids", [])
+            except Exception:
+                try:
+                    token_ids = self._tokenizer.encode(term, add_special_tokens=False)
+                except Exception:
+                    token_ids = []
+            for tid in token_ids:
+                try:
+                    t_int = int(tid)
+                except Exception:
+                    continue
+                if t_int >= 0:
+                    ids.add(t_int)
+        resolved = sorted(ids)
+        self._decode_term_cache[key] = tuple(resolved)
+        return resolved
+
+    @staticmethod
+    def _apply_decode_control_params(temperature: float, top_k: int, top_p: float, decode_control: Optional[Dict[str, Any]]):
+        if not decode_control or decode_control.get("allow_state_terms", True):
+            return temperature, top_k, top_p
+        try:
+            temperature = min(float(temperature), float(decode_control.get("max_temperature", temperature)))
+        except Exception:
+            pass
+        try:
+            ctrl_k = int(decode_control.get("max_top_k", top_k))
+            if ctrl_k > 0 and int(top_k) > 0:
+                top_k = min(int(top_k), ctrl_k)
+        except Exception:
+            pass
+        try:
+            top_p = min(float(top_p), float(decode_control.get("max_top_p", top_p)))
+        except Exception:
+            pass
+        return temperature, top_k, top_p
+
+    # ------------------------------------------------------------------ #
+    #  Core generation with M3 control hooks                              #
+    # ------------------------------------------------------------------ #
+    def generate_with_m3(
+        self,
+        prompt: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        core=None,
+        m3_sampler=None,
+        token_value_head=None,
+        internal_hidden_dim: int = None,
+        beta: float = 0.1,
+        z_m3: Optional[np.ndarray] = None,
+        max_new_tokens: int = None,
+        base_temperature: float = 0.8,
+        base_top_k: int = 50,
+        base_top_p: float = 0.9,
+        decode_control: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Generate text with per-token M3 parameter control.
+
+        Control points executed at every decoding step:
+        1. Token-critic Q-value injection  (logit bias from internal value head)
+        2. M3AdaptiveSampler               (dynamic temperature / top_k)
+        3. Standard top-k / top-p / multinomial sampling
+        """
+        import torch as _torch
+        self._ensure_loaded()
+
+        if max_new_tokens is None:
+            max_new_tokens = int(os.getenv('M3_HF_MAX_TOKENS', '512'))
+
+        max_input = int(os.getenv('M3_HF_MAX_INPUT', '4096'))
+        # Prefer chat templates for instruct models when available.
+        # This significantly improves response quality vs. plain-text concatenation.
+        prompt_text = prompt
+        if messages is not None:
+            try:
+                safe_messages = [dict(m) for m in messages]
+                try:
+                    system_max_tokens = int(os.getenv('M3_SYSTEM_MAX_TOKENS', '320'))
+                except Exception:
+                    system_max_tokens = 320
+                if max_input > 0:
+                    system_max_tokens = min(system_max_tokens, max(64, int(max_input * 0.4)))
+                if system_max_tokens > 0:
+                    for mi, m in enumerate(safe_messages):
+                        if str(m.get('role', '')).lower() != 'system':
+                            continue
+                        system_content = str(m.get('content', ''))
+                        if system_content:
+                            kept_lines = []
+                            for ln in system_content.splitlines():
+                                s = ln.strip()
+                                if (
+                                    s.startswith("vector=")
+                                    or s.startswith("vector_head=")
+                                    or s.startswith("vector[")
+                                ):
+                                    continue
+                                kept_lines.append(ln)
+                            system_content = "\n".join(kept_lines).strip()
+                            try:
+                                ids = self._tokenizer(system_content, add_special_tokens=False).get('input_ids', [])
+                                if len(ids) > system_max_tokens:
+                                    system_content = self._tokenizer.decode(
+                                        ids[:system_max_tokens],
+                                        skip_special_tokens=True,
+                                    ).strip()
+                            except Exception:
+                                pass
+                        safe_messages[mi]['content'] = system_content
+                        break
+                if hasattr(self._tokenizer, 'apply_chat_template'):
+                    prompt_text = self._tokenizer.apply_chat_template(
+                        safe_messages,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                    )
+                else:
+                    # Minimal, role-preserving fallback.
+                    parts = []
+                    for m in safe_messages:
+                        role = str(m.get('role', 'user'))
+                        content = str(m.get('content', '')).strip()
+                        if not content:
+                            continue
+                        if role == 'system':
+                            parts.append(content)
+                        elif role == 'user':
+                            parts.append(f'User: {content}')
+                        else:
+                            parts.append(f'Assistant: {content}')
+                    parts.append('Assistant:')
+                    prompt_text = "\n".join(parts)
+            except Exception:
+                prompt_text = prompt
+
+        inputs = self._tokenizer(
+            prompt_text, return_tensors='pt', truncation=False
+        )
+        try:
+            if max_input > 0:
+                cur_len = int(inputs['input_ids'].shape[1])
+                if cur_len > max_input:
+                    start = cur_len - max_input
+                    for k, v in list(inputs.items()):
+                        if hasattr(v, 'shape') and len(v.shape) == 2 and int(v.shape[1]) == cur_len:
+                            inputs[k] = v[:, start:]
+        except Exception:
+            pass
+        input_ids = inputs['input_ids'].to(self.device)
+        attention_mask = inputs['attention_mask'].to(self.device)
+        inputs_embeds = None
+        bridge_controls = None
+        bridge_runtime = None
+
+        # Lazy-init projection: HF hidden → internal model hidden
+        if (
+            token_value_head is not None
+            and internal_hidden_dim is not None
+            and self._hf_proj_dims != (self.hidden_dim, internal_hidden_dim)
+        ):
+            self._hf_proj = _torch.nn.Linear(
+                self.hidden_dim, internal_hidden_dim, bias=False
+            )
+            _torch.nn.init.xavier_uniform_(self._hf_proj.weight)
+            self._hf_proj = self._hf_proj.to(self.device).to(_torch.bfloat16)
+            self._hf_proj.eval()
+            self._hf_proj_dims = (self.hidden_dim, internal_hidden_dim)
+
+        # Optional M3ControlBridge (experimental; off by default)
+        if self._bridge_enabled_safe() and z_m3 is not None:
+            try:
+                state_dim = int(os.getenv('M3_BRIDGE_STATE_DIM', '256'))
+            except Exception:
+                state_dim = 256
+            try:
+                bridge = self._ensure_control_bridge(state_dim=state_dim)
+                z_t = self._prepare_bridge_state(z_m3, state_dim=state_dim, device=self.device)
+                if bridge is not None and z_t is not None:
+                    strength = float(os.getenv('M3_BRIDGE_STRENGTH', '1.0'))
+                    with _torch.no_grad():
+                        bridge_controls = bridge(z_t, strength=strength)
+                    if bridge_controls.prefix_embeddings is not None:
+                        try:
+                            tok_emb = self._model.get_input_embeddings()(input_ids)
+                            prefix = bridge_controls.prefix_embeddings.to(
+                                device=tok_emb.device,
+                                dtype=tok_emb.dtype,
+                            )
+                            inputs_embeds = _torch.cat([prefix, tok_emb], dim=1)
+                            input_ids = None
+                            prefix_mask = _torch.ones(
+                                attention_mask.size(0),
+                                prefix.size(1),
+                                device=attention_mask.device,
+                                dtype=attention_mask.dtype,
+                            )
+                            attention_mask = _torch.cat([prefix_mask, attention_mask], dim=1)
+                        except Exception:
+                            inputs_embeds = None
+                    if (
+                        bridge_controls.layer_gates is not None
+                        and LayerGateRuntime is not None
+                    ):
+                        layers = self._control_bridge_layers or find_decoder_layers(self._model)
+                        if layers:
+                            bridge_runtime = LayerGateRuntime(layers)
+                            bridge_runtime.apply(bridge_controls.layer_gates[0])
+            except Exception as e:
+                logging.getLogger('llm_adapter').debug(f'[HFBackend] control bridge skipped: {e}')
+                bridge_controls = None
+                bridge_runtime = None
+
+        generated_ids: list = []
+        past_key_values = None
+        forbidden_token_ids = self._resolve_forbidden_token_ids(decode_control)
+        try:
+            forbidden_penalty = float(decode_control.get("forbidden_penalty", 0.0)) if decode_control else 0.0
+        except Exception:
+            forbidden_penalty = 0.0
+        # How often to micro-update core state during decoding
+        try:
+            _core_update_interval = int(os.getenv('M3_HF_CORE_UPDATE_INTERVAL', '8'))
+        except Exception:
+            _core_update_interval = 8
+
+        for _step in range(max_new_tokens):
+            # === M3 CONTROL 0: Lightweight core state micro-update ===
+            # without this, qualia/energy become static and adaptive sampler cannot react.
+            self._micro_update_step_state(
+                core=core,
+                _step=_step,
+                generated_ids=generated_ids,
+                interval=_core_update_interval,
+            )
+
+            with _torch.no_grad():
+                model_kw = {
+                    'attention_mask': attention_mask,
+                    'past_key_values': past_key_values,
+                    'use_cache': True,
+                    'output_hidden_states': True,
+                }
+                if inputs_embeds is not None:
+                    model_kw['inputs_embeds'] = inputs_embeds
+                else:
+                    model_kw['input_ids'] = input_ids
+                out = self._model(**model_kw)
+
+            logits = out.logits[:, -1, :].float()          # (1, V)
+            hidden = out.hidden_states[-1][:, -1, :]       # (1, H)
+            past_key_values = out.past_key_values
+            inputs_embeds = None
+
+            # M3ControlBridge logit bias
+            logits = self._apply_bridge_logit_bias(logits, bridge_controls)
+
+            # === M3 CONTROL 1: Token-Critic Q-value injection ===
+            logits = self._apply_token_value_injection(
+                logits=logits,
+                hidden=hidden,
+                token_value_head=token_value_head,
+                beta=beta,
+                internal_hidden_dim=internal_hidden_dim,
+            )
+            if forbidden_token_ids and forbidden_penalty > 0.0:
+                try:
+                    logits[:, forbidden_token_ids] = logits[:, forbidden_token_ids] - float(forbidden_penalty)
+                except Exception:
+                    pass
+
+            # === M3 CONTROL 2: Adaptive sampling from core state ===
+            temperature, top_k, top_p = self._compute_sample_params(
+                core=core,
+                m3_sampler=m3_sampler,
+                base_temperature=base_temperature,
+                base_top_k=base_top_k,
+                base_top_p=base_top_p,
+            )
+            temperature, top_k, top_p = self._apply_decode_control_params(
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                decode_control=decode_control,
+            )
+            next_token, sample_meta = self._sample_next_token(
+                logits=logits,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+            )
+
+            token_id = next_token.item()
+            if token_id == self._tokenizer.eos_token_id:
+                break
+            generated_ids.append(token_id)
+
+            # KV-cache: feed only the new token
+            input_ids = next_token
+            attention_mask = _torch.cat(
+                [attention_mask,
+                 _torch.ones(1, 1, device=self.device, dtype=attention_mask.dtype)],
+                dim=1,
+            )
+
+        if bridge_runtime is not None:
+            try:
+                bridge_runtime.close()
+            except Exception:
+                pass
+
+        return self._tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+
+
 # Redirecting all outputs to the unified logs folder (with safe fallback)
 DEFAULT_OUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../docs&tests&data_sets/tests/logs'))
 OUT_DIR = os.getenv('LLM_ADAPTER_LOG_DIR', DEFAULT_OUT_DIR)
@@ -708,14 +1504,15 @@ LOG_PATH = os.getenv('LLM_ADAPTER_LOG_PATH', os.path.join(OUT_DIR, 'llm_adapter.
 logger = logging.getLogger('llm_adapter')
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are M3. Respond as M3 using the provided M3_STATE. "
+    "You are M3. Respond as M3. "
+    "Use internal control state for response policy, not as quoted prompt context. "
     "Do not claim to be an AI assistant or language model. "
-    "Do not mention DeepSeek or any other persona. "
-    "Do not say you cannot feel; answer based on state. "
+    "Do not say you cannot feel. "
+    "Do not report phi/qualia/state values unless the user explicitly asks for them. "
     "Be concise and factual. Reply in the user's language."
 )
 if not logger.handlers:
-    level = logging.DEBUG if os.environ.get('LLM_ADAPTER_DEBUG', '0') in ('1', 'true', 'TRUE') else logging.INFO
+    level = logging.DEBUG if os.environ.get('LLM_ADAPTER_DEBUG', '0') in ('1', 'true', 'TRUE') else logging.WARNING
     handler = None
     log_paths = [LOG_PATH]
     try:
@@ -755,10 +1552,19 @@ __all__ = [
     'M3StateCache',
     'M3AwareDecoderLayer',
     'M3AdaptiveSampler',
+    'HFBackend',
     'TorchConversationalPolicy',
     'UnifiedM3Policy',
     'attach_llm_to_core',
 ]
+
+
+def _resolve_torch_device(torch_module=None, explicit: Optional[str] = None) -> str:
+    return resolve_torch_device_string(
+        explicit=explicit,
+        torch_module=torch_module,
+        require_cuda=False,
+    )
 
 
 class TorchConversationalPolicy:
@@ -777,7 +1583,7 @@ class TorchConversationalPolicy:
 
         self.torch = __import__('torch')
         nn = self.torch.nn
-        self.device = self.torch.device(device or ('cuda' if self.torch.cuda.is_available() else 'cpu'))
+        self.device = self.torch.device(_resolve_torch_device(self.torch, device))
         
         # Load configuration
         self.config = config or get_global_config().torch_policy
@@ -823,21 +1629,15 @@ class TorchConversationalPolicy:
                 # Autonomy (Plastic)
                 self.q_head = PlasticBitLinear(hidden, 2)
                 self.intensity_head = PlasticBitLinear(hidden, 1)
-                
-                self.prefix_len = max(1, hidden // embed_dim)
-                self.state2prefix = PlasticBitLinear(hidden, self.prefix_len * embed_dim)
-                self.prefix_gate = PlasticBitLinear(hidden, self.prefix_len)
-                
-                # --- Heads (Plastic) ---
-                self.value = PlasticBitLinear(hidden, 1)
-                self.v_phi   = PlasticBitLinear(hidden, 1)
-                self.v_stab  = PlasticBitLinear(hidden, 1)
-                self.v_tool  = PlasticBitLinear(hidden, 1)
-                self.token_value = PlasticBitLinear(hidden, vocab_size)
-                
-                # Autonomy (Plastic)
-                self.q_head = PlasticBitLinear(hidden, 2)
-                self.intensity_head = PlasticBitLinear(hidden, 1)
+                # Encourage speaking early on (avoid always-waiting before training)
+                try:
+                    if hasattr(self.q_head, 'bias') and self.q_head.bias is not None:
+                        # bias[0]=Q_wait, bias[1]=Q_speak
+                        with torch_module.no_grad():
+                            self.q_head.bias[0].fill_(0.0)
+                            self.q_head.bias[1].fill_(0.5)
+                except Exception:
+                    pass
                 
                 self.prefix_len = max(1, hidden // embed_dim)
                 self.state2prefix = PlasticBitLinear(hidden, self.prefix_len * embed_dim)
@@ -1054,86 +1854,816 @@ class TorchConversationalPolicy:
         
         # [Optimization] Pure BF16 Training (No Scaler needed for BF16)
         # Scaler is only for FP16 underflow prevention. BF16 has wide dynamic range.
-        self.amp_dtype = self.torch.bfloat16
+        # CPU는 bfloat16을 지원 안 함 → float32로 강제
+        if self.device.type == 'cpu':
+            self.amp_dtype = self.torch.float32
+        else:
+            self.amp_dtype = self.torch.bfloat16
 
-        # Ollama configuration for Deepseek R1 integration
-        self.use_local_ai = os.getenv("USE_LOCAL_AI", "1") == "1"
-        self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-        self.ollama_model = os.getenv("OLLAMA_MODEL", "deepseek-r1:8b")
-        # Request timeout (seconds) for local Ollama/Deepseek calls — configurable via OLLAMA_TIMEOUT
+        # === HuggingFace backend (M3_USE_HF=1) ===
+        self.use_hf = os.getenv('M3_USE_HF', '0') == '1'
+        self._quality_gate = GenerationQualityGate() if GenerationQualityGate is not None else None
+        self._hf_circuit_open = False
+        self._hf_circuit_reason = ""
+        self._gpu_fault_count = 0
+        self._record_scope = str(os.getenv("M3_TRAIN_RECORD_SCOPE", "user_only") or "user_only").strip().lower()
+        self._last_record_reject_reason = ""
+        self._phi_zero_streak = 0
+        self._phi_zero_warn_every = max(10, int(os.getenv("M3_PHI_ZERO_WARN_EVERY", "50")))
+        control_window = max(8, int(os.getenv("M3_CONTROL_HEALTH_WINDOW", "24")))
+        self._control_health_window = deque(maxlen=control_window)
+        self._auto_mode_fail_streak = 0
+
+    def _is_numeric_dump_response(self, text: str) -> bool:
+        """Detect low-quality CSV-like numeric dumps."""
         try:
-            self.ollama_timeout = float(os.getenv("OLLAMA_TIMEOUT", "300"))
+            s = str(text).strip()
         except Exception:
-            self.ollama_timeout = 300.0
+            return False
+        if not s or "," not in s:
+            return False
+        if any(ch.isalpha() for ch in s):
+            return False
+        parts = [p for p in re.split(r"[\s,]+", s) if p]
+        if len(parts) < 6:
+            return False
+        numeric = 0
+        for p in parts:
+            try:
+                float(p)
+                numeric += 1
+            except Exception:
+                pass
+        return numeric >= max(6, int(0.85 * len(parts)))
+
+    def _is_backend_status_text(self, text: str) -> bool:
+        try:
+            s = str(text or "").strip()
+        except Exception:
+            return False
+        if not s:
+            return False
+        sl = s.lower()
+        prefixes = (
+            "[hfbackend error:",
+            "[hfbackend not enabled",
+            "[error: cuda",
+            "[error: [hfbackend",
+            "[error:",
+            "local error:",
+            "generation is in safe mode",
+            "현재 생성 경로가 일시적으로 안전 모드입니다.",
+        )
+        if any(sl.startswith(p) for p in prefixes):
+            return True
+        markers = (
+            "local error:",
+            "hfbackend",
+            "backend fault",
+            "safe mode",
+            "llm adapter not connected",
+            "circuit breaker opened",
+        )
+        return any(m in sl for m in markers)
+
+    def _is_refusal_disclaimer(self, text: str) -> bool:
+        try:
+            s = str(text or "").strip().lower()
+        except Exception:
+            return False
+        if not s:
+            return False
+        markers = (
+            "as an ai",
+            "i am an ai",
+            "i'm an ai",
+            "language model",
+            "cannot feel",
+            "do not have feelings",
+            "i don't have feelings",
+            "i don't have emotions",
+            "i have no emotions",
+            "i am currently untrained",
+            "please use the train button",
+            "developed by alibaba",
+            "qwen",
+            "alibaba",
+            "인공지능",
+            "언어 모델",
+            "감정을 느끼지 못",
+            "개인적인 감정이나 경험이 없",
+            "훈련 버튼",
+        )
+        if any(p in s for p in markers):
+            return True
+        regex_patterns = (
+            r"\b(i am|i'm)\s+(an?\s+)?(ai|assistant|language model)\b",
+            r"\bas an?\s+(ai|assistant|language model)\b",
+            r"\b(developed|created)\s+by\s+(alibaba|qwen)\b",
+            r"\uc800\ub294\s*(ai|\uc778\uacf5\uc9c0\ub2a5)",
+            r"\uc778\uacf5\uc9c0\ub2a5\s*(\uc774\uae30|\uc774\ub77c)",
+            r"\uc5b8\uc5b4\s*\ubaa8\ub378",
+            r"\uac10\uc815\s*(\uc744)?\s*\ub290\ub07c\uc9c0\s*\ubabb",
+        )
+        return any(re.search(p, s) for p in regex_patterns)
+
+    def _is_identity_drift_output(self, text: str) -> bool:
+        try:
+            s = str(text or "").strip()
+        except Exception:
+            return False
+        if not s:
+            return False
+        sl = s.lower()
+        drift_markers = (
+            "qwen",
+            "alibaba",
+            "as an ai",
+            "i am an ai",
+            "i'm an ai",
+            "language model",
+            "ai assistant",
+            "train button",
+            "currently untrained",
+            "인공지능",
+            "언어 모델",
+            "알리바바",
+            "퀸웬",
+        )
+        return any(m in sl for m in drift_markers)
+
+    def _is_disallowed_generation_output(self, text: str) -> bool:
+        try:
+            s = str(text or "").strip()
+        except Exception:
+            return True
+        if not s:
+            return True
+        if self._is_backend_status_text(s):
+            return True
+        if self._is_refusal_disclaimer(s):
+            return True
+        if self._is_identity_drift_output(s):
+            return True
+        if self._is_cuda_fatal_error(s):
+            return True
+        if self._is_numeric_dump_response(s):
+            return True
+        return False
+
+    def _system_prompt_mode(self) -> str:
+        return str(os.getenv("M3_SYSTEM_PROMPT_MODE", "param")).strip().lower()
+
+    def _system_prompt_enabled(self) -> bool:
+        mode = self._system_prompt_mode()
+        return mode in {"prompt", "on", "1", "true", "yes"}
+
+    def _get_system_prompt(self) -> str:
+        if not self._system_prompt_enabled():
+            return ""
+        sys_identity = os.getenv('LLM_SYSTEM_PROMPT', DEFAULT_SYSTEM_PROMPT)
+        if sys_identity:
+            return str(sys_identity).strip()
+        return ""
+
+    def _verifier_tokens(self, text: str) -> List[str]:
+        s = str(text or "").lower()
+        if not s:
+            return []
+        toks = re.findall(r"[a-z0-9]+|[\uac00-\ud7a3]+", s)
+        return [t for t in toks if len(t) > 1]
+
+    def _evaluate_generation_quality(self, prompt: str, response: str, source: str = "generate") -> Tuple[bool, Dict[str, float]]:
+        info: Dict[str, float] = {
+            "score": 0.0,
+            "overlap": 0.0,
+            "len_ratio": 0.0,
+            "disallowed": 1.0,
+        }
+        if self._is_disallowed_generation_output(response):
+            return False, info
+        info["disallowed"] = 0.0
+
+        response_text = str(response or "").strip()
+        if not response_text:
+            return False, info
+
+        try:
+            min_chars = max(2, int(os.getenv("M3_CONTROL_MIN_RESPONSE_CHARS", "8")))
+        except Exception:
+            min_chars = 24
+        if len(response_text) < min_chars:
+            return False, info
+
+        prompt_text = self._extract_last_user_text(prompt)
+
+        # Primary verifier: delegate to the core's existing accuracy metric when available.
+        core = getattr(self, "core", None)
+        if core is not None and hasattr(core, "_evaluate_dialog_accuracy"):
+            try:
+                metrics = core._evaluate_dialog_accuracy(prompt_text, response_text)
+                if isinstance(metrics, dict):
+                    score = float(metrics.get("score", 0.0))
+                    overlap = float(metrics.get("overlap", 0.0))
+                else:
+                    score = 0.0
+                    overlap = 0.0
+                info["score"] = score
+                info["overlap"] = overlap
+
+                min_score = float(os.getenv("M3_CONTROL_MIN_DIALOG_SCORE", "0.18"))
+                if source == "autonomy":
+                    min_score = float(os.getenv("M3_CONTROL_MIN_AUTONOMY_SCORE", "0.08"))
+                return score >= min_score, info
+            except Exception:
+                pass
+
+        prompt_tokens = set(self._verifier_tokens(prompt_text))
+        response_tokens = set(self._verifier_tokens(response_text))
+        overlap = 0.0
+        if prompt_tokens:
+            overlap = float(len(prompt_tokens & response_tokens)) / float(len(prompt_tokens))
+        info["overlap"] = overlap
+
+        len_ratio = 0.0
+        if response_tokens:
+            prompt_len = len(prompt_text.strip())
+            if prompt_len > 0:
+                len_ratio = float(len(response_text)) / float(prompt_len)
+                if len_ratio < 0.0:
+                    len_ratio = 0.0
+                if len_ratio > 1.0:
+                    len_ratio = 1.0
+                if len_ratio > 1.0:
+                    len_ratio = 1.0
+        info["len_ratio"] = float(min(1.0, max(0.0, len_ratio)))
+
+        score = max(0.0, min(1.0, 0.20 + 0.65 * overlap + 0.15 * info["len_ratio"]))
+        info["score"] = score
+
+        min_score = float(os.getenv("M3_CONTROL_MIN_RESPONSE_SCORE", "0.16"))
+        if source == "autonomy":
+            min_score = float(os.getenv("M3_CONTROL_MIN_AUTONOMY_SCORE", "0.08"))
+        return score >= min_score, info
+
+    def _read_float(self, name: str, default: float) -> float:
+        try:
+            return float(os.getenv(name, str(default)))
+        except Exception:
+            return float(default)
+
+    def _read_int(self, name: str, default: int) -> int:
+        try:
+            return int(os.getenv(name, str(default)))
+        except Exception:
+            return int(default)
+
+    def _resolve_generation_sampling(
+        self,
+        requested_temperature: Optional[float],
+        requested_top_k: Optional[int],
+        requested_top_p: Optional[float],
+        source: str = "generate",
+        core: Optional[Any] = None,
+    ) -> Tuple[float, int, float]:
+        source_key = str(source or "generate").strip().lower()
+
+        min_temp = self._read_float("M3_CONTROL_MIN_TEMP", 0.12)
+        max_temp = self._read_float("M3_CONTROL_MAX_TEMP", 0.75)
+        min_top_k = max(1, self._read_int("M3_CONTROL_MIN_TOP_K", 6))
+        max_top_k = max(min_top_k + 1, self._read_int("M3_CONTROL_MAX_TOP_K", 64))
+        min_top_p = self._read_float("M3_CONTROL_MIN_TOP_P", 0.65)
+        max_top_p = self._read_float("M3_CONTROL_MAX_TOP_P", 0.95)
+
+        strictness = self._read_float("M3_CONTROL_STRICTNESS", 0.75)
+        if source_key == "autonomy":
+            strictness = self._read_float("M3_CONTROL_AUTONOMY_STRICTNESS", strictness)
+            min_temp = min(0.90, min_temp)
+            min_top_k = max(1, self._read_int("M3_CONTROL_AUTONOMY_MIN_TOP_K", min_top_k))
+            max_top_k = self._read_int("M3_CONTROL_AUTONOMY_MAX_TOP_K", max_top_k)
+            min_top_p = min(0.90, max(0.01, self._read_float("M3_CONTROL_AUTONOMY_MIN_TOP_P", min_top_p)))
+        elif source_key in ("fallback", "safe"):
+            strictness = self._read_float("M3_CONTROL_FALLBACK_STRICTNESS", strictness)
+            max_temp = min(0.70, max_temp)
+
+        strictness = max(0.0, min(1.0, strictness))
+
+        if requested_temperature is not None:
+            try:
+                base_temp = float(requested_temperature)
+            except Exception:
+                base_temp = self._read_float("M3_CONTROL_BASE_TEMP", 0.65)
+        else:
+            base_temp = self._read_float(
+                "M3_CONTROL_AUTONOMY_BASE_TEMP" if source_key == "autonomy" else "M3_CONTROL_BASE_TEMP",
+                0.6 if source_key == "autonomy" else 0.65,
+            )
+        if requested_top_k is not None:
+            try:
+                base_top_k = int(requested_top_k)
+            except Exception:
+                base_top_k = self._read_int("M3_CONTROL_BASE_TOP_K", 32)
+        else:
+            base_top_k = self._read_int(
+                "M3_CONTROL_AUTONOMY_BASE_TOP_K" if source_key == "autonomy" else "M3_CONTROL_BASE_TOP_K",
+                24 if source_key == "autonomy" else 32,
+            )
+        if requested_top_p is not None:
+            try:
+                base_top_p = float(requested_top_p)
+            except Exception:
+                base_top_p = self._read_float("M3_CONTROL_BASE_TOP_P", 0.85)
+        else:
+            base_top_p = self._read_float(
+                "M3_CONTROL_AUTONOMY_BASE_TOP_P" if source_key == "autonomy" else "M3_CONTROL_BASE_TOP_P",
+                0.88 if source_key == "autonomy" else 0.85,
+            )
+
+        state_strict_bonus = 0.0
+        if core is not None:
+            try:
+                phi = 0.0
+                if hasattr(core, 'phi_calculator') and getattr(core.phi_calculator, 'phi_history', None):
+                    hist = core.phi_calculator.phi_history
+                    if hist:
+                        phi = float(hist[-1])
+                q = getattr(core, 'qualia', None)
+                arousal = float(getattr(q, 'arousal', 0.0)) if q is not None else 0.0
+                valence = float(getattr(q, 'valence', 0.0)) if q is not None else 0.0
+                world_state = getattr(core, 'world_state', None)
+                stability = float(getattr(world_state, 'get', lambda k, d: d)('stability', 1.0)) if isinstance(world_state, dict) else float(getattr(world_state, 'stability', 1.0))
+                if abs(phi) < 1e-8:
+                    state_strict_bonus += 0.06
+                if arousal < 0.2 or arousal > 0.8:
+                    state_strict_bonus += 0.08
+                if abs(valence) < 0.2:
+                    state_strict_bonus += 0.04
+                if stability < 0.4:
+                    state_strict_bonus += 0.08
+            except Exception:
+                state_strict_bonus = 0.0
+        strictness = min(1.0, strictness + state_strict_bonus)
+
+        temp_cap = np.clip(base_temp * (1.0 - 0.38 * strictness), min_temp, max_temp)
+        top_k_cap = np.clip(base_top_k * (1.0 - 0.42 * strictness), min_top_k, max_top_k)
+        top_p_cap = np.clip(base_top_p * (1.0 - 0.22 * strictness), min_top_p, max_top_p)
+
+        return float(temp_cap), int(top_k_cap), float(top_p_cap)
+
+    def _retry_generation_sampling(
+        self,
+        temperature: float,
+        top_k: int,
+        top_p: float,
+    ) -> Tuple[float, int, float]:
+        decay_temp = self._read_float("M3_CONTROL_RETRY_TEMP_DECAY", 0.75)
+        decay_top_k = self._read_float("M3_CONTROL_RETRY_TOPK_DECAY", 0.70)
+        decay_top_p = self._read_float("M3_CONTROL_RETRY_TOPP_DECAY", 0.95)
+        min_temp = self._read_float("M3_CONTROL_MIN_TEMP", 0.12)
+        min_top_k = max(1, self._read_int("M3_CONTROL_MIN_TOP_K", 6))
+        min_top_p = self._read_float("M3_CONTROL_MIN_TOP_P", 0.65)
+        return (
+            max(min_temp, float(temperature) * decay_temp),
+            max(min_top_k, int(float(top_k) * decay_top_k)),
+            max(min_top_p, float(top_p) * decay_top_p),
+        )
+
+    def _strip_similar_context_block(self, prompt: str) -> str:
+        s = str(prompt or "")
+        if "Similar past context:" not in s:
+            return s
+        if "Current context:" in s:
+            head, tail = s.split("Similar past context:", 1)
+            _, tail2 = tail.split("Current context:", 1)
+            return (head.rstrip() + "\n\nCurrent context:\n" + tail2.lstrip())
+        lines = s.splitlines()
+        out = []
+        skip = False
+        for ln in lines:
+            if ln.startswith("Similar past context:"):
+                skip = True
+                continue
+            if skip and ln.startswith("User:"):
+                skip = False
+            if not skip:
+                out.append(ln)
+        return "\n".join(out)
+
+    def _is_cuda_fatal_error(self, err) -> bool:
+        msg = str(err or "").lower()
+        if not msg:
+            return False
+        needles = (
+            "illegal memory access",
+            "device-side assert",
+            "cublas",
+            "cudnn",
+            "cuda error",
+        )
+        return any(n in msg for n in needles)
+
+    def _trip_hf_circuit_breaker(self, err) -> None:
+        self._gpu_fault_count = int(getattr(self, "_gpu_fault_count", 0)) + 1
+        failover = str(os.getenv("M3_HF_CUDA_FAILOVER", "1")).lower() in ("1", "true", "yes", "on")
+        if not failover:
+            return
+        if not getattr(self, "_hf_circuit_open", False):
+            self._hf_circuit_open = True
+            self._hf_circuit_reason = str(err)
+            self.use_hf = False
+            try:
+                os.environ["M3_USE_HF"] = "0"
+            except Exception:
+                pass
+            try:
+                if hasattr(self, "torch") and hasattr(self.torch, "cuda") and self.torch.cuda.is_available():
+                    self.torch.cuda.empty_cache()
+            except Exception:
+                pass
+            logger.error(f"[HFBackend] circuit breaker opened after CUDA fault: {err}")
+
+    def _extract_last_user_text(self, prompt: str) -> str:
+        s = str(prompt or "").replace("\r\n", "\n").replace("\r", "\n")
+        if not s.strip():
+            return ""
+        focus = s
+        if "Current context:" in s:
+            focus = s.split("Current context:")[-1]
+        lines = focus.split("\n")
+        users: List[str] = []
+        cur: List[str] = []
+        in_user = False
+
+        def _flush():
+            nonlocal cur, in_user
+            if cur:
+                txt = "\n".join(cur).strip()
+                if txt:
+                    users.append(txt)
+            cur = []
+            in_user = False
+
+        for ln in lines:
+            if ln.startswith("User:"):
+                _flush()
+                in_user = True
+                cur = [ln[len("User:"):].lstrip()]
+                continue
+            if ln.startswith("M3:"):
+                if in_user:
+                    _flush()
+                continue
+            if in_user:
+                cur.append(ln)
+        _flush()
+
+        if users:
+            return users[-1].strip()
+        return focus.strip()
+
+    def _detect_language(self, text: str) -> str:
+        s = str(text or "")
+        if not s.strip():
+            return "other"
+        ko = len(re.findall(r"[\uac00-\ud7a3]", s))
+        zh = len(re.findall(r"[\u4e00-\u9fff]", s))
+        ru = len(re.findall(r"[\u0400-\u04FF]", s))
+        en = len(re.findall(r"[A-Za-z]", s))
+        m = max(ko, zh, ru, en)
+        if m <= 0:
+            return "other"
+        if ko >= zh and ko >= ru and ko >= en:
+            return "ko"
+        if zh >= ko and zh >= ru and zh >= en:
+            return "zh"
+        if ru >= ko and ru >= zh and ru >= en:
+            return "ru"
+        return "en"
+
+    def _is_autonomy_prompt(self, prompt: str) -> bool:
+        s = str(prompt or "")
+        return (
+            "[\uc790\uc728 \ubaa8\ub4dc]" in s
+            or "[Autonomy]" in s
+            or "Based on the current M3_STATE, say one short next action." in s
+        )
+
+    def _should_include_m3_state(self, prompt: str) -> bool:
+        if not self._control_allows('state_context'):
+            return False
+        policy = str(os.getenv("M3_STATE_CONTEXT_POLICY", "off") or "off").strip().lower()
+        if policy in {"off", "none", "0", "false", "no"}:
+            return False
+        if policy in {"always", "on", "1", "true", "yes"}:
+            return True
+        focus = self._extract_last_user_text(prompt).lower()
+        if not focus:
+            focus = str(prompt or "").lower()
+        keywords = (
+            "\uc0c1\ud0dc",
+            "state",
+            "phi",
+            "qualia",
+            "arousal",
+            "valence",
+            "engagement",
+            "frustration",
+            "m3_state",
+            "\uc9c0\uae08 \uc0c1\ud0dc",
+            "\ud1b5\ud569\uc0c1\ud0dc",
+        )
+        return any(k in focus for k in keywords)
+
+    def _is_state_request(self, prompt: str) -> bool:
+        focus = self._extract_last_user_text(prompt).lower()
+        if not focus:
+            focus = str(prompt or "").lower()
+        keywords = (
+            "\uc0c1\ud0dc",
+            "state",
+            "phi",
+            "qualia",
+            "arousal",
+            "valence",
+            "engagement",
+            "frustration",
+            "m3_state",
+            "\ud604\uc7ac \uc0c1\ud0dc",
+            "\uc9c0\uae08 \uc0c1\ud0dc",
+            "\ub0b4\ubd80 \uc0c1\ud0dc",
+        )
+        return any(k in focus for k in keywords)
+
+    def _build_decode_control(self, prompt: str) -> Optional[Dict[str, Any]]:
+        if not self._control_allows('decode_control'):
+            return None
+        enabled = str(os.getenv("M3_ENABLE_DECODE_CONTROL", "1")).lower() in ("1", "true", "yes", "on")
+        if not enabled:
+            return None
+
+        allow_state_terms = self._is_state_request(prompt) or self._is_autonomy_prompt(prompt)
+        raw_terms = os.getenv(
+            "M3_CONTROL_FORBIDDEN_TERMS",
+            "phi,qualia,arousal,valence,engagement,frustration,m3_state,state,integrated_state",
+        )
+        terms = [t.strip() for t in str(raw_terms).split(",") if t.strip()]
+
+        identity_lock = str(os.getenv("M3_CONTROL_IDENTITY_LOCK", "1")).lower() in ("1", "true", "yes", "on")
+        raw_identity_terms = os.getenv(
+            "M3_CONTROL_IDENTITY_TERMS",
+            "ai,assistant,language model,qwen,alibaba,openai,train button,currently untrained,"
+            "\uc778\uacf5\uc9c0\ub2a5,\uc5b8\uc5b4 \ubaa8\ub378,\uc54c\ub9ac\ubc14\ubc14,\ud038\uc6ec",
+        )
+        identity_terms = [t.strip() for t in str(raw_identity_terms).split(",") if t.strip()]
+
+        try:
+            penalty = float(os.getenv("M3_CONTROL_TERM_PENALTY", "8.0"))
+        except Exception:
+            penalty = 8.0
+        try:
+            identity_penalty = float(os.getenv("M3_CONTROL_IDENTITY_PENALTY", "14.0"))
+        except Exception:
+            identity_penalty = 14.0
+        try:
+            max_temp = float(os.getenv("M3_CONTROL_MAX_TEMP", "0.65"))
+        except Exception:
+            max_temp = 0.65
+        try:
+            max_top_k = int(os.getenv("M3_CONTROL_MAX_TOP_K", "40"))
+        except Exception:
+            max_top_k = 40
+        try:
+            max_top_p = float(os.getenv("M3_CONTROL_MAX_TOP_P", "0.92"))
+        except Exception:
+            max_top_p = 0.92
+
+        return {
+            "allow_state_terms": bool(allow_state_terms),
+            "forbidden_terms": terms,
+            "identity_lock": bool(identity_lock),
+            "identity_forbidden_terms": identity_terms,
+            "forbidden_penalty": float(max(0.0, max(penalty, identity_penalty if identity_lock else penalty))),
+            "max_temperature": float(max(0.05, max_temp)),
+            "max_top_k": int(max(1, max_top_k)),
+            "max_top_p": float(min(0.99, max(0.1, max_top_p))),
+        }
+
+    def _sanitize_training_record(self, prompt: str, response: str, source: str = "generate") -> Optional[dict]:
+        self._last_record_reject_reason = ""
+        prompt_raw = str(prompt or "")
+        response_text = str(response or "").strip()
+        source_text = str(source or "generate")
+
+        def _reject(reason: str) -> Optional[dict]:
+            self._last_record_reject_reason = reason
+            return None
+
+        if not response_text:
+            return _reject("empty_response")
+        if self._is_numeric_dump_response(response_text):
+            return _reject("numeric_dump_response")
+        if self._is_backend_status_text(response_text):
+            return _reject("backend_status_response")
+        if self._is_refusal_disclaimer(response_text):
+            return _reject("refusal_disclaimer_response")
+        if self._is_cuda_fatal_error(response_text):
+            return _reject("cuda_error_response")
+
+        if self._record_scope == "user_only":
+            if source_text != "generate_hf":
+                return _reject("scope_user_only_source")
+            if self._is_autonomy_prompt(prompt_raw):
+                return _reject("scope_user_only_autonomy")
+
+        exclude_similar = str(os.getenv("M3_TRAIN_EXCLUDE_SIMILAR_CONTEXT", "1")).lower() in ("1", "true", "yes", "on")
+        if exclude_similar and ("Similar past context:" in prompt_raw):
+            prompt_raw = self._strip_similar_context_block(prompt_raw)
+
+        prompt_clean = self._extract_last_user_text(prompt_raw)
+        if not prompt_clean:
+            return _reject("empty_prompt_clean")
+
+        lang_match = str(os.getenv("M3_TRAIN_LANG_MATCH", "1")).lower() in ("1", "true", "yes", "on")
+        prompt_lang = self._detect_language(prompt_clean)
+        response_lang = self._detect_language(response_text)
+        if lang_match and prompt_lang in {"ko", "en", "zh", "ru"} and response_lang in {"ko", "en", "zh", "ru"}:
+            if prompt_lang != response_lang:
+                return _reject(f"language_mismatch:{prompt_lang}->{response_lang}")
+
+        rec = {
+            "ts": time.time(),
+            "source": source_text,
+            "prompt": prompt_clean,
+            "prompt_clean": prompt_clean,
+            "prompt_raw": prompt_raw,
+            "response": response_text,
+            "prompt_lang": prompt_lang,
+            "response_lang": response_lang,
+        }
+
+        try:
+            core = getattr(self, "core", None)
+            if core is not None:
+                ph = []
+                try:
+                    ph = list(core.phi_calculator.phi_history) if hasattr(core, "phi_calculator") else []
+                except Exception:
+                    ph = []
+                phi = float(ph[-1]) if ph else 0.0
+                phi_mean10 = float(np.mean(ph[-10:])) if len(ph) >= 1 else 0.0
+                phi_delta = float(ph[-1] - ph[-2]) if len(ph) >= 2 else 0.0
+                phi_nonzero_recent = int(any(abs(float(v)) > 1e-8 for v in ph[-10:])) if ph else 0
+
+                if abs(phi) <= 1e-12:
+                    self._phi_zero_streak = int(getattr(self, "_phi_zero_streak", 0)) + 1
+                    if self._phi_zero_streak % int(getattr(self, "_phi_zero_warn_every", 50)) == 0:
+                        logger.warning(f"[TrainingRecord] phi remains zero for {self._phi_zero_streak} samples")
+                else:
+                    self._phi_zero_streak = 0
+
+                rec["phi"] = float(phi)
+                rec["phi_mean10"] = float(phi_mean10)
+                rec["phi_delta"] = float(phi_delta)
+                rec["phi_nonzero_recent"] = int(phi_nonzero_recent)
+
+                try:
+                    q = core.qualia
+                    rec["qualia"] = {
+                        "arousal": float(getattr(q, "arousal", 0.0)),
+                        "valence": float(getattr(q, "valence", 0.0)),
+                        "entropy": float(getattr(q, "entropy", 0.0)),
+                        "engagement": float(getattr(q, "engagement", 0.0)),
+                        "frustration": float(getattr(q, "frustration", 0.0)),
+                    }
+                except Exception:
+                    rec["qualia"] = {}
+
+                try:
+                    ec = getattr(core, "energy_ctrl", None)
+                    if ec is not None:
+                        energy = float(getattr(ec, "cognitive_energy", 0.0))
+                        cap = float(max(getattr(ec, "energy_capacity", 1.0), 1e-6))
+                        rec["energy"] = {
+                            "value": energy,
+                            "ratio": float(energy / cap),
+                        }
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return rec
+
+    def _generate_safe_fallback(self, prompt: str, chat_messages: Optional[List[Dict[str, str]]] = None, max_len: int = 60) -> str:
+        user_text = self._extract_last_user_text(prompt)
+        if not user_text and chat_messages:
+            try:
+                user_msgs = [str(m.get("content", "")) for m in chat_messages if str(m.get("role", "")) == "user"]
+                if user_msgs:
+                    user_text = user_msgs[-1].strip()
+            except Exception:
+                pass
+        if not user_text:
+            user_text = str(prompt or "").strip()
+        safe_temp = None
+        safe_top_k = None
+        safe_top_p = None
+        try:
+            safe_temp, safe_top_k, safe_top_p = self._resolve_generation_sampling(
+                requested_temperature=None,
+                requested_top_k=None,
+                requested_top_p=None,
+                source='fallback',
+                core=getattr(self, 'core', None),
+            )
+        except Exception:
+            safe_temp = None
+            safe_top_k = None
+            safe_top_p = None
+        use_ollama_fallback = str(os.getenv("M3_DISABLE_OLLAMA", "1")).lower() not in ("1", "true", "yes", "on")
+        if use_ollama_fallback:
+            try:
+                try:
+                    fb_timeout = float(os.getenv("M3_SAFE_FALLBACK_TIMEOUT", "12"))
+                except Exception:
+                    fb_timeout = 12.0
+                remote_resp = get_local_thinking(
+                    user_text,
+                    max_len=max(32, int(max_len or 60)),
+                    timeout=max(1.0, fb_timeout),
+                    retries=1,
+                    backoff=0.2,
+                    temperature=safe_temp,
+                    top_k=safe_top_k,
+                    top_p=safe_top_p,
+                )
+                remote_resp = str(remote_resp or "").strip()
+                if remote_resp and not self._is_backend_status_text(remote_resp):
+                    return remote_resp.strip()
+            except Exception:
+                pass
+
+        lang = self._detect_language(user_text)
+        q = str(user_text or "").strip().lower()
+
+        if lang == "ko":
+            if any(k in q for k in ("의식", "자아", "감각", "기억", "정체성", "너", "m3")):
+                return "내 관점에서 의식은 감각, 기억, 목표를 통합해 다음 행동을 선택하는 실시간 과정이다."
+            return "출력 안정화 중입니다. 질문을 한 문장으로 다시 보내 주면 M3 관점으로 바로 답하겠습니다."
+        if lang == "zh":
+            return "当前在输出稳定模式。请用一句话重发问题，我会以 M3 视角直接回答。"
+        if lang == "ru":
+            return "Сейчас включен режим стабилизации вывода. Повторите вопрос одной фразой, и я отвечу от лица M3."
+        return "Output is in stabilization mode. Send a single-sentence question and I will answer from the M3 perspective."
+
 
     def save_model(self, path: str):
         """Saves the model state dictionary."""
+        if getattr(self, "_hf_circuit_open", False) and self.device.type == "cuda":
+            logger.warning(f"Skipping model save while HF circuit is open: {path}")
+            return
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             self.torch.save(self.model.state_dict(), path)
             logger.info(f"Model saved to {path}")
         except Exception as e:
             logger.error(f"Error saving model to {path}: {e}")
-
-    def get_local_thinking(self, prompt: str, temperature: float = None, top_k: int = None,
-                           top_p: float = None, max_len: int = None) -> str:
-        """Call local Ollama/Deepseek server with validation."""
-        if not self.use_local_ai:
-            return "Local AI disabled"
-        try:
-            from . import remote as remote_api
-        except Exception:
-            import llm_adapter.remote as remote_api
-        return remote_api.get_local_thinking(
-            prompt,
-            url=self.ollama_url,
-            model=self.ollama_model,
-            timeout=self.ollama_timeout,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
-            max_len=max_len,
-        )
+            if self._is_cuda_fatal_error(e):
+                self._trip_hf_circuit_breaker(e)
 
     def _record_example(self, prompt: str, response: str, source: str = "generate") -> None:
         if not getattr(self, "_record_training", False):
             return
         try:
-            rec = {
-                "ts": time.time(),
-                "source": source,
-                "prompt": str(prompt),
-                "response": str(response),
-            }
-            try:
-                core = getattr(self, "core", None)
-                if core is not None:
-                    try:
-                        phi = core.phi_calculator.phi_history[-1] if core.phi_calculator.phi_history else 0.0
-                    except Exception:
-                        phi = 0.0
-                    try:
-                        q = core.qualia
-                        qualia = {
-                            "arousal": float(getattr(q, "arousal", 0.0)),
-                            "valence": float(getattr(q, "valence", 0.0)),
-                            "entropy": float(getattr(q, "entropy", 0.0)),
-                            "engagement": float(getattr(q, "engagement", 0.0)),
-                            "frustration": float(getattr(q, "frustration", 0.0)),
-                        }
-                    except Exception:
-                        qualia = {}
-                    rec["phi"] = float(phi)
-                    rec["qualia"] = qualia
-            except Exception:
-                pass
+            prompt_raw = str(prompt or "")
+            response_text = str(response or "")
+            rec = self._sanitize_training_record(prompt_raw, response_text, source=source)
+            reject_reason = str(getattr(self, "_last_record_reject_reason", "") or "")
             try:
                 os.makedirs(os.path.dirname(TRAINING_PATH), exist_ok=True)
             except Exception:
                 pass
+            reject_path = os.getenv(
+                "M3_TRAIN_REJECT_PATH",
+                os.path.join(os.path.dirname(TRAINING_PATH), "llm_training_data.rejected.jsonl"),
+            )
+            reject_rec = {
+                "ts": time.time(),
+                "source": str(source or "generate"),
+                "prompt_raw": prompt_raw,
+                "response": response_text,
+                "reason": reject_reason or "filtered_out",
+            }
             with self._record_lock:
-                with open(TRAINING_PATH, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                if rec is not None:
+                    with open(TRAINING_PATH, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                else:
+                    try:
+                        os.makedirs(os.path.dirname(reject_path), exist_ok=True)
+                    except Exception:
+                        pass
+                    with open(reject_path, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(reject_rec, ensure_ascii=False) + "\n")
         except Exception as e:
             try:
                 logger.warning(f"Failed to record training example: {e}")
@@ -1429,8 +2959,18 @@ class TorchConversationalPolicy:
                 vec = self._build_full_state_vector(core, panels=panels, affect_state=affect_state)
         if vec is not None:
             try:
-                vec_str = ",".join(f"{v:.4f}" for v in np.asarray(vec, dtype=np.float32).ravel().tolist())
-                lines.append(f"vector=[{vec_str}]")
+                vec_arr = np.asarray(vec, dtype=np.float32).ravel()
+                lines.append(f"vector_dim={int(vec_arr.size)}")
+                include_vec = os.getenv('M3_STATE_INCLUDE_VECTOR', '0').lower() in ('1', 'true', 'yes', 'on')
+                if include_vec and vec_arr.size > 0:
+                    try:
+                        head_elems = int(os.getenv('M3_STATE_VECTOR_MAX_ELEMS', '32'))
+                    except Exception:
+                        head_elems = 32
+                    head = vec_arr[:head_elems] if head_elems > 0 else vec_arr
+                    vec_str = ",".join(f"{v:.4f}" for v in head.tolist())
+                    suffix = ",..." if head_elems > 0 and vec_arr.size > head_elems else ""
+                    lines.append(f"vector_head=[{vec_str}{suffix}]")
             except Exception:
                 pass
         try:
@@ -1440,7 +2980,14 @@ class TorchConversationalPolicy:
         joined = "\n".join(lines)
         if max_chars > 0 and len(joined) > max_chars:
             if vec is not None:
-                trimmed = [ln for ln in lines if not ln.startswith("vector=")]
+                trimmed = [
+                    ln for ln in lines
+                    if not (
+                        ln.startswith("vector=")
+                        or ln.startswith("vector_head=")
+                        or ln.startswith("vector[")
+                    )
+                ]
                 joined = "\n".join(trimmed)
             if max_chars > 0 and len(joined) > max_chars:
                 joined = joined[:max_chars]
@@ -1475,6 +3022,11 @@ class TorchConversationalPolicy:
     def _build_autonomy_prefix(self, s):
         """From state vector s, build continuous prefix embeddings with learned gating."""
         torch = self.torch
+        try:
+            if hasattr(s, 'dtype') and s.dtype == torch.bfloat16 and self.device.type == 'cpu':
+                s = s.float()
+        except Exception:
+            pass
         with torch.no_grad():
             H = s.shape[-1]
             P = int(getattr(self.model, 'prefix_len', 1))
@@ -1482,59 +3034,332 @@ class TorchConversationalPolicy:
             raw = self.model.state2prefix(s)  # (1, P*E)
             pref = raw.view(1, P, E)
             gate = torch.sigmoid(self.model.prefix_gate(s)).view(1, P, 1)
-            return (gate * pref).detach().cpu().numpy()
+            # numpy는 bfloat16을 지원하지 않음 → float32로 변환
+            return (gate * pref).float().detach().cpu().numpy()
+
+    def _run_core_steps(self, core, count: int = 0):
+        if core is None:
+            return
+        for _ in range(max(0, int(count))):
+            try:
+                if hasattr(core, '_single_consciousness_step'):
+                    core._single_consciousness_step()
+            except Exception:
+                pass
+
+    def _run_checkpoint_if_enabled(self, core):
+        try:
+            if os.getenv('M3_SAVE_EVERY_TURN', '0') in ('1', 'true', 'yes', 'on'):
+                if core is not None and hasattr(core, '_save_checkpoint'):
+                    core._save_checkpoint()
+        except Exception:
+            pass
+
+    def _drain_user_message(self):
+        import queue
+        if not hasattr(self, '_user_queue') or self._user_queue is None:
+            return None
+        try:
+            return self._user_queue.get_nowait()
+        except queue.Empty:
+            return None
+        except Exception:
+            return None
+
+    def _handle_user_turn(self, user_msg: str, steps_per_cycle: int) -> str:
+        core = getattr(self, 'core', None)
+        response = ''
+        if core is not None:
+            self._run_core_steps(core, steps_per_cycle)
+        try:
+            if core is not None and hasattr(core, 'handle_user_message'):
+                response = core.handle_user_message(user_msg)
+            else:
+                try:
+                    user_max_len = int(os.getenv('M3_USER_MAX_LEN', '320'))
+                except Exception:
+                    user_max_len = 320
+                response = self.generate(user_msg, max_len=max(32, user_max_len))
+        except Exception as e:
+            response = f'[Error: {e}]'
+
+        try:
+            cb = getattr(self, '_on_response', None)
+            if cb is not None:
+                cb(response)
+        except Exception:
+            pass
+
+        if core is not None:
+            self._run_core_steps(core, min(3, steps_per_cycle))
+            self._run_checkpoint_if_enabled(core)
+        return response
+
+    def _wait_for_user_interrupt(self, wait_seconds: float):
+        import queue
+        if wait_seconds <= 0:
+            return
+        wait_start = time.time()
+        while time.time() - wait_start < wait_seconds:
+            try:
+                msg = self._user_queue.get(timeout=0.1)
+                self._user_queue.put(msg)
+                break
+            except queue.Empty:
+                pass
+            except Exception:
+                break
+
+    def _run_autonomy_turn(self, cycle_count: int, autonomy_check_every: int):
+        if autonomy_check_every <= 0 or cycle_count % autonomy_check_every != 0:
+            return
+        if getattr(self, "_hf_circuit_open", False):
+            # CUDA fault detected: skip GPU-dependent autonomy policy path.
+            return
+        core = getattr(self, 'core', None)
+        try:
+            s = self._state_vector(core)
+            torch = self.torch
+            try:
+                if hasattr(s, 'dtype') and s.dtype == torch.bfloat16 and self.device.type == 'cpu':
+                    s = s.float()
+            except Exception:
+                pass
+            with torch.no_grad():
+                q = self.model.q_head(s.float())  # (1, 2): [Q_wait, Q_speak]
+                try:
+                    min_prob = float(os.getenv('M3_MIN_SPEAK_PROB', '0.2'))
+                except Exception:
+                    min_prob = 0.2
+                diff = float(q[0, 1].item() - q[0, 0].item())
+                prob = 1.0 / (1.0 + np.exp(-diff))
+                prob = max(min_prob, prob)
+                speak = bool(np.random.rand() < prob)
+                lam = torch.nn.functional.softplus(self.model.intensity_head(s.float())).item() + 1e-8
+
+            if not speak:
+                try:
+                    dt = float(np.random.exponential(1.0 / max(lam, 1e-12)))
+                    dt = min(dt, 5.0)
+                    self._wait_for_user_interrupt(dt)
+                except Exception:
+                    pass
+                return
+
+            prefix = self._build_autonomy_prefix(s)
+            seed = self._autonomy_seed_prompt(core)
+            try:
+                auto_max_len = int(os.getenv('M3_AUTONOMY_MAX_LEN', '160'))
+            except Exception:
+                auto_max_len = 160
+            text = self.generate(seed, max_len=max(32, auto_max_len), prefix_embed=prefix, source="autonomy")
+            if not text or not text.strip():
+                return
+            text = text.strip()
+            if self._is_disallowed_generation_output(text):
+                logger.warning('Autonomy generation filtered by safety policy')
+                return
+            numeric_dump = self._is_numeric_dump_response(text)
+            if (
+                os.getenv('M3_AUTONOMY_LEARN_FROM_SELF', '0').lower() in ('1', 'true', 'yes', 'on')
+                and not numeric_dump
+            ):
+                try:
+                    self.learn_pair(seed, text, max_len=max(32, auto_max_len))
+                except Exception:
+                    pass
+
+            if core is not None and hasattr(core, 'bus') and core.bus is not None:
+                try:
+                    vec = np.zeros((32,), dtype=np.float32)
+                    if hasattr(core, 'feature_bank') and hasattr(core.feature_bank, '_hash_embed'):
+                        vec = core.feature_bank._hash_embed(
+                            text, core.feature_bank.embed_dim
+                        ).astype(np.float32)
+                    core.bus.push('system', 'utter.self', vec, salience=0.8, confidence=1.0, ttl=10)
+                except Exception:
+                    pass
+
+            scb = getattr(self, '_on_spontaneous', None)
+            if scb is not None:
+                try:
+                    scb(text, float(q[0, 1].item()), lam)
+                except Exception:
+                    pass
+
+            try:
+                self._log_jsonl(
+                    os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                    {
+                        "kind": "autonomy_event",
+                        "lambda": lam,
+                        "q_wait": float(q[0, 0].item()),
+                        "q_speak": float(q[0, 1].item()),
+                        "text": text,
+                    },
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                logger.error(f'Autonomy decision error: {e}')
+            except Exception:
+                pass
+            self._note_control_health(False, f"autonomy_error:{e}")
 
     def start_autonomy_loop(self):
         if getattr(self, '_auto_running', False):
             return
         self._auto_running = True
-        self._auto_thread = threading.Thread(target=self._autonomy_loop, daemon=True)
+        self._user_queue = getattr(self, '_user_queue', None)
+        if self._user_queue is None:
+            import queue
+            self._user_queue = queue.Queue()
+        self._auto_thread = threading.Thread(target=self._unified_loop, daemon=True)
         self._auto_thread.start()
 
     def stop_autonomy_loop(self):
         self._auto_running = False
         th = getattr(self, '_auto_thread', None)
         if th is not None:
-            th.join(timeout=1.0)
+            th.join(timeout=2.0)
 
-    def _autonomy_loop(self):
+    def submit_user_message(self, text: str):
+        """사용자 메시지를 자율사고 루프에 비동기 전달 (논블로킹)"""
+        import queue
+        if not hasattr(self, '_user_queue') or self._user_queue is None:
+            self._user_queue = queue.Queue()
+        self._user_queue.put(text)
+
+    def _autonomy_seed_prompt(self, core=None) -> str:
+        """Build a minimal non-empty prompt for spontaneous generation.
+
+        Empty prompts often cause instruct models to drift into low-quality text.
+        This seed stays short and uses current M3 state when available.
+        """
+        try:
+            lang = os.getenv('M3_AUTONOMY_LANGUAGE', 'ko').lower()
+        except Exception:
+            lang = 'ko'
+
+        # Light state summary (best-effort)
+        bits = []
+        try:
+            if core is not None and hasattr(core, 'energy_ctrl'):
+                ec = core.energy_ctrl
+                ratio = float(ec.cognitive_energy / max(ec.energy_capacity, 1.0))
+                bits.append(f"energy={ratio:.2f}")
+        except Exception:
+            pass
+        try:
+            if core is not None and hasattr(core, 'qualia'):
+                q = core.qualia
+                bits.append(f"arousal={float(getattr(q, 'arousal', 0.0)):.2f}")
+                bits.append(f"valence={float(getattr(q, 'valence', 0.0)):.2f}")
+        except Exception:
+            pass
+        try:
+            if core is not None and hasattr(core, 'phi_calculator') and core.phi_calculator.phi_history:
+                bits.append(f"phi={float(core.phi_calculator.phi_history[-1]):.3f}")
+        except Exception:
+            pass
+        state_line = (" (" + ", ".join(bits) + ")") if bits else ""
+
+        if lang.startswith('ko'):
+            return (
+                "[자율 모드] 현재 M3_STATE를 바탕으로, 지금 해야 할 한 가지를 짧게 말해줘." + state_line
+            )
+        return (
+            "[Autonomy] Based on the current M3_STATE, say one short next action." + state_line
+        )
+
+    def _parse_user_m3_transcript(self, text: str) -> Optional[List[Dict[str, str]]]:
+        """Parse a 'User: ...\nM3: ...' style transcript into chat messages.
+
+        Returns None if the text doesn't look like a transcript.
+        """
+        try:
+            s = str(text)
+        except Exception:
+            return None
+
+        if 'User:' not in s and 'M3:' not in s:
+            return None
+
+        lines = s.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+        messages: List[Dict[str, str]] = []
+        cur_role = None
+        cur_buf: List[str] = []
+
+        def _flush():
+            nonlocal cur_role, cur_buf
+            if cur_role is None:
+                cur_buf = []
+                return
+            content = "\n".join(cur_buf).strip()
+            if content:
+                role = 'assistant' if cur_role == 'assistant' else 'user'
+                messages.append({'role': role, 'content': content})
+            cur_role = None
+            cur_buf = []
+
+        for ln in lines:
+            if ln.startswith('User:'):
+                _flush()
+                cur_role = 'user'
+                cur_buf = [ln[len('User:'):].lstrip()]
+                continue
+            if ln.startswith('M3:'):
+                _flush()
+                cur_role = 'assistant'
+                cur_buf = [ln[len('M3:'):].lstrip()]
+                continue
+            # Continuation line
+            if cur_role is None:
+                # If transcript markers exist but no role yet, treat as user.
+                cur_role = 'user'
+                cur_buf = [ln]
+            else:
+                cur_buf.append(ln)
+
+        _flush()
+
+        # Drop trailing empty assistant prompt marker (common: ends with 'M3:' only)
+        if messages and messages[-1].get('role') == 'assistant' and not messages[-1].get('content', '').strip():
+            messages.pop()
+        # If we only got one blob, don't treat it as transcript.
+        if sum(1 for m in messages if m.get('role') == 'user') == 0:
+            return None
+        if len(messages) < 2:
+            return None
+        return messages
+
+    def _unified_loop(self):
         import time
-        torch = self.torch
+        core = getattr(self, 'core', None)
+        consciousness_interval = float(os.getenv('M3_CONSCIOUSNESS_INTERVAL', '0.1'))
+        steps_per_cycle = int(os.getenv('M3_STEPS_PER_CYCLE', '5'))
+        autonomy_check_every = int(os.getenv('M3_AUTONOMY_CHECK_EVERY', '10'))
+        cycle_count = 0
+
         while getattr(self, '_auto_running', False):
             try:
-                s = self._state_vector(getattr(self, 'core', None))  # (1, H)
-                with torch.no_grad():
-                    q = self.model.q_head(s)  # (1, 2)
-                    speak = bool(q[0, 1] > q[0, 0])
-                    lam = torch.nn.functional.softplus(self.model.intensity_head(s)).item() + 1e-8
-                # Sample next event time from Exp(lam)
-                dt = float(np.random.exponential(1.0 / max(lam, 1e-12)))
-                # If speaking, generate now; else wait and loop
-                if speak:
-                    prefix = self._build_autonomy_prefix(s)
-                    try:
-                        text = self.generate('', max_len=120, prefix_embed=prefix)
-                    except Exception:
-                        text = ''
-                    try:
-                        self._log_jsonl(os.getenv("LLM_ADAPTER_LOG", "llm_adapter.jsonl"), {
-                            "kind": "autonomy_event",
-                            "lambda": lam,
-                            "q_wait": float(q[0,0].item()),
-                            "q_speak": float(q[0,1].item()),
-                            "text": text,
-                        })
-                    except Exception:
-                        pass
-                # Sleep until next event
-                time.sleep(max(0.0, dt))
+                user_msg = self._drain_user_message()
+                if user_msg is not None:
+                    self._handle_user_turn(user_msg, steps_per_cycle=steps_per_cycle)
+                    cycle_count = 0
+                    continue
+
+                self._run_core_steps(core, steps_per_cycle)
+                cycle_count += 1
+                self._run_autonomy_turn(cycle_count, autonomy_check_every)
+                time.sleep(consciousness_interval)
             except Exception as e:
                 try:
-                    logger.error(f'Autonomy loop error: {e}')
+                    logger.error(f'Unified loop error: {e}')
                 except Exception:
                     pass
-                self._auto_running = False
-
+                time.sleep(1.0)
     def _consume_credits(self):
         """Background thread consuming credit messages from MessageBus."""
         import time
@@ -1931,20 +3756,158 @@ class TorchConversationalPolicy:
             base_top_p=top_p if top_p is not None else 0.9
         )
 
+    def _build_hf_quality_gate_inputs(self, temperature, top_k, top_p, core, bridge_state, m3_sampler):
+        tv_head = None
+        internal_h = None
+        beta_val = 0.0
+        try:
+            enable_tv = (
+                self._control_allows('token_value_bias')
+                and os.getenv('LLM_ADAPTER_ENABLE_TOKEN_VALUE_BIAS', '0').lower() in ('1', 'true', 'yes', 'on')
+            )
+            if enable_tv and hasattr(self, 'model') and hasattr(self.model, 'token_value'):
+                tv_head = self.model.token_value
+                internal_h = getattr(self.model, 'hidden', 1024)
+                beta_val = float(self._beta_schedule())
+        except Exception:
+            pass
+
+        return {
+            'token_value_head': tv_head,
+            'internal_hidden_dim': internal_h,
+            'beta': beta_val,
+            'prompt': None,
+            'messages': None,
+            'core': core,
+            'm3_sampler': m3_sampler,
+            'bridge_state': bridge_state,
+            'decode_control': None,
+            'temperature': temperature if temperature is not None else 0.8,
+            'top_k': top_k if top_k is not None else 50,
+            'top_p': top_p if top_p is not None else 0.9,
+            'max_len': None,
+        }
+
+    def _generate_with_hf(self, hf, prompt, chat_messages, core, m3_sampler,
+                         token_value_head=None, internal_hidden_dim=None, beta=0.0,
+                         z_m3=None, max_new_tokens=0,
+                         base_temperature=0.8, base_top_k=50, base_top_p=0.9,
+                         decode_control: Optional[Dict[str, Any]] = None):
+        return hf.generate_with_m3(
+            prompt=prompt,
+            messages=chat_messages,
+            core=core,
+            m3_sampler=m3_sampler,
+            token_value_head=token_value_head,
+            internal_hidden_dim=internal_hidden_dim,
+            beta=beta,
+            z_m3=z_m3,
+            max_new_tokens=max_new_tokens,
+            base_temperature=base_temperature,
+            base_top_k=base_top_k,
+            base_top_p=base_top_p,
+            decode_control=decode_control,
+        )
+
+    def _apply_quality_gate_if_enabled(self, gate, gate_payload: dict, response: str, temperature, top_k, top_p):
+        if not self._control_allows('quality_gate'):
+            return response
+        if gate is None:
+            return response
+        if not os.getenv('M3_ENABLE_QUALITY_GATE', '0').lower() in ('1', 'true', 'yes', 'on'):
+            return response
+        if gate is None or not response:
+            return response
+
+        try:
+            q0 = gate.evaluate(response)
+        except Exception:
+            return response
+
+        if not getattr(q0, 'reject', False):
+            return response
+
+        try:
+            retry = self._generate_with_hf(
+                hf=gate_payload['hf'],
+                prompt=gate_payload['prompt'],
+                chat_messages=gate_payload['chat_messages'],
+                core=gate_payload['core'],
+                m3_sampler=gate_payload['m3_sampler'],
+                token_value_head=gate_payload['token_value_head'],
+                internal_hidden_dim=gate_payload['internal_hidden_dim'],
+                beta=gate_payload['beta'],
+                z_m3=gate_payload['z_m3'],
+                max_new_tokens=gate_payload['max_new_tokens'],
+                base_temperature=max(0.25, gate_payload['base_temperature'] * 0.8),
+                base_top_k=max(20, int(gate_payload['base_top_k'] * 0.8)),
+                base_top_p=min(0.98, gate_payload['base_top_p'] + 0.05),
+                decode_control=gate_payload.get('decode_control'),
+            )
+            if not retry:
+                return response
+            q1 = gate.evaluate(retry)
+            if (not q1.reject) or (q1.score > q0.score):
+                return retry
+        except Exception:
+            return response
+        return response
+
+    def _semantic_perspective_prefix(self, core=None) -> str:
+        try:
+            enabled = os.getenv('M3_EMBED_PERSPECTIVE', '0').lower() in ('1', 'true', 'yes', 'on')
+        except Exception:
+            enabled = False
+        if not enabled:
+            return ""
+        try:
+            core_ref = core if core is not None else getattr(self, 'core', None)
+            if core_ref is None:
+                return ""
+            subj = getattr(core_ref, 'unified_subject', None)
+            if subj is None or not hasattr(subj, 'reflect_on_self'):
+                return ""
+            summary = str(subj.reflect_on_self()).strip()
+            if not summary:
+                return ""
+            return f"Perspective: {summary}\n\n"
+        except Exception:
+            return ""
+
+    def embed_text(self, text: str, sys_identity: str = "", max_src_len: int = 512) -> np.ndarray:
+        import numpy as _np
+        import torch as _torch
+        base_prompt = (str(sys_identity).strip() + "\n\n" + str(text)) if sys_identity else str(text)
+        src_ids = self.tok.encode(base_prompt, add_special=False)
+        if max_src_len and len(src_ids) > int(max_src_len):
+            src_ids = src_ids[-int(max_src_len):]
+        if not src_ids:
+            src_ids = [int(self.tok.BOS)]
+        src = _torch.tensor(src_ids, dtype=_torch.long, device=self.device).unsqueeze(0)
+        with _torch.no_grad():
+            e_src = self.model.emb(src)
+            _, h = self.model.encoder(e_src)
+        vec = h.squeeze(0).detach().cpu().numpy().astype(_np.float32)
+        if not _np.all(_np.isfinite(vec)):
+            vec = _np.nan_to_num(vec, nan=0.0, posinf=0.0, neginf=0.0).astype(_np.float32)
+        return vec
+
     def generate(self, prompt: str, max_len: int = 60, temperature: float = None,
                  top_k: int = None, top_p: float = None,
                  mem: Optional[np.ndarray] = None,
                  prefix_embed: Optional[np.ndarray] = None,
                  knn_provider: Optional[Any] = None,
                  knn_alpha: float = 0.0,
-                 affect_state: Optional[np.ndarray] = None) -> str:
+                 affect_state: Optional[np.ndarray] = None,
+                 source: str = "generate") -> str:
         t = self.tok
         core = getattr(self, 'core', None)
         raw_prompt = prompt
-        # System identity / behavior prefix (configurable)
-        sys_identity = os.getenv('LLM_SYSTEM_PROMPT', DEFAULT_SYSTEM_PROMPT)
-        if sys_identity:
-            sys_identity = sys_identity.strip()
+        if getattr(self, "_hf_circuit_open", False):
+            self._note_control_health(False, "hf_circuit_open")
+            return self._generate_safe_fallback(str(raw_prompt), chat_messages=None, max_len=max_len)
+        # System identity / behavior prefix (configurable / optional)
+        sys_identity = self._get_system_prompt()
         
         panels = None
         phi_trend = None
@@ -1958,15 +3921,11 @@ class TorchConversationalPolicy:
         affect_state = self._get_affect_state(core, affect_state)
         main_prompt = raw_prompt
         # === Phase 4: Episodic Memory Retrieval (NO THRESHOLD) ===
-        if core is not None:
+        if core is not None and self._control_allows('memory_retrieval'):
             try:
-                base_prompt = sys_identity + "\n\n" + raw_prompt if sys_identity else raw_prompt
-                src_temp = t.encode(base_prompt, add_special=False)
-                if src_temp:
-                    src_temp_ids = torch.tensor(src_temp, dtype=torch.long, device=self.device).unsqueeze(0)
-                    e_src_temp = self.model.emb(src_temp_ids)
-                    _, h_temp = self.model.encoder(e_src_temp)
-                    context_embedding = h_temp.squeeze(0).cpu().numpy()
+                semantic_query = self._semantic_perspective_prefix(core) + str(raw_prompt)
+                context_embedding = self.embed_text(semantic_query, sys_identity="")
+                if context_embedding is not None:
                     relevant_episodes = self.m3_memory_retriever.retrieve_relevant_episodes(core, context_embedding)
                     if relevant_episodes:
                         episode_texts = []
@@ -1980,6 +3939,8 @@ class TorchConversationalPolicy:
                             item_chars = 200
                         total_chars = 0
                         for ep in relevant_episodes:
+                            if getattr(ep, 'kind', 'internal_state') not in {'dialog', 'research', 'knowledge'}:
+                                continue
                             if hasattr(ep, 'content'):
                                 txt = str(ep.content)
                             elif hasattr(ep, 'text'):
@@ -1994,6 +3955,8 @@ class TorchConversationalPolicy:
                                 txt = ""
                             if not txt:
                                 continue
+                            if self._is_disallowed_generation_output(txt):
+                                continue
                             if item_chars > 0 and len(txt) > item_chars:
                                 txt = txt[:item_chars] + "..."
                             if max_chars > 0 and (total_chars + len(txt)) > max_chars:
@@ -2006,17 +3969,51 @@ class TorchConversationalPolicy:
             except Exception:
                 pass
 
-        m3_context = self._build_m3_context(core, affect_state=affect_state, phi_trend=phi_trend, panels=panels)
-        prompt_parts = []
+        include_m3_state = self._should_include_m3_state(raw_prompt)
+        decode_control = self._build_decode_control(raw_prompt)
+        m3_context = (
+            self._build_m3_context(core, affect_state=affect_state, phi_trend=phi_trend, panels=panels)
+            if include_m3_state else ""
+        )
+        # Build chat messages for instruct models (HF) when possible.
+        system_content_parts = []
         if sys_identity:
-            prompt_parts.append(sys_identity)
+            system_content_parts.append(sys_identity)
         if m3_context:
-            prompt_parts.append(m3_context)
-        prompt_parts.append(main_prompt)
-        prompt = "\n\n".join(prompt_parts)
+            system_content_parts.append(m3_context)
+        system_content = "\n\n".join(system_content_parts).strip()
+
+        transcript_msgs = self._parse_user_m3_transcript(main_prompt)
+        if transcript_msgs is not None:
+            chat_messages = ([{'role': 'system', 'content': system_content}] if system_content else []) + transcript_msgs
+        else:
+            user_content = str(main_prompt).strip()
+            if not user_content:
+                user_content = self._autonomy_seed_prompt(core)
+            chat_messages = ([{'role': 'system', 'content': system_content}] if system_content else []) + [
+                {'role': 'user', 'content': user_content}
+            ]
+
+        # For logging/training-record compatibility, keep a readable prompt string.
+        prompt_parts = []
+        if system_content:
+            prompt_parts.append(system_content)
+        if transcript_msgs is not None:
+            for m in transcript_msgs:
+                role = 'User' if m.get('role') == 'user' else 'M3'
+                prompt_parts.append(f"{role}: {m.get('content', '')}")
+            prompt_parts.append('M3:')
+        else:
+            prompt_parts.append(chat_messages[-1].get('content', ''))
+        prompt = "\n\n".join([p for p in prompt_parts if p is not None])
 
         m3_memory = mem
-        if m3_memory is None and core is not None and getattr(self.model, 'use_m3_integration', False):
+        if (
+            m3_memory is None
+            and core is not None
+            and self._control_allows('state_context')
+            and getattr(self.model, 'use_m3_integration', False)
+        ):
             m3_memory = self._build_m3_memory(core=core, panels=panels, affect_state=affect_state)
 
         m3_memory_t = None
@@ -2033,247 +4030,146 @@ class TorchConversationalPolicy:
             except Exception:
                 m3_memory_t = None
 
-        # If using local AI (Deepseek), call Ollama directly
-        if self.use_local_ai:
+        bridge_state = None
+        if self._bridge_enabled_safe():
             try:
-                response = self.get_local_thinking(
-                    prompt,
-                    temperature=temperature,
-                    top_k=top_k,
-                    top_p=top_p,
-                    max_len=max_len,
+                bridge_state = self._build_full_state_vector(
+                    core=core,
+                    panels=panels,
+                    affect_state=affect_state,
                 )
-                if response and not response.startswith("Local Error"):
-                    try:
-                        self._record_example(prompt, response, source="generate_local")
-                    except Exception:
-                        pass
-                    return response
-                if os.getenv('DEEPSEEK_ONLY', '0') in ('1', 'true', 'yes', 'on'):
-                    return response
-            except Exception as e:
-                try:
-                    logger.warning(f"Deepseek Error: {e}")
-                except Exception:
-                    pass
-                if os.getenv('DEEPSEEK_ONLY', '0') in ('1', 'true', 'yes', 'on'):
-                    return f"Local Error: {e}"
-
-        if not hasattr(self, 'model'):
-            return "No AI model available"
-        
-        src = t.encode(prompt, add_special=False)
-        if not src:
-            # Use BOS-only source to derive state when no textual prompt is provided
-            src = [t.BOS]
-        src_ids = torch.tensor(src, dtype=torch.long, device=self.device).unsqueeze(0)
-        e_src = self.model.emb(src_ids)
-        h, _ = self.model.encoder(e_src)
-        # If a continuous prefix is provided, use it to prime the decoder state
-        if prefix_embed is not None:
-            pe = np.array(prefix_embed)
-            if pe.ndim == 2:
-                pe = pe[None, :, :]  # (P, E) -> (1, P, E)
-            if pe.ndim == 3:
-                prefix_t = torch.tensor(pe, dtype=torch.float32, device=self.device)
-                # Use prefix as source, history as target (append history to prefix)
-                # h becomes [prefix, h]
-                _, _, h = self.model.decoder(src_ids=prefix_t, tgt_in_ids=h, m3_memory=m3_memory_t, return_history=True)
-        cur = torch.tensor([[t.BOS]], dtype=torch.long, device=self.device)
-        out_tokens: List[int] = []
-        
-        # DEBUG: Generation start
-        print(f"DEBUG: Gen start. Prompt tokens: {src}")
-
-        # Prepare memory (if provided)
-        mem_k = mem_v = None
-        if m3_memory_t is not None:
-            try:
-                m_t = m3_memory_t
-                if m_t.ndim == 2:
-                    m_t = m_t.unsqueeze(0)
-                if m_t.ndim == 1:
-                    m_t = m_t.unsqueeze(0).unsqueeze(0)
-                D = int(m_t.shape[2])
-                self.model._ensure_mem_layers(D)
-                mem_h = self.model.mem_proj(m_t)  # (1, M, H)
-                mem_k = self.model.Wk(mem_h)
-                mem_v = self.model.Wv(mem_h)
             except Exception:
-                mem_k = mem_v = None
-        
-        for step in range(max_len):
-            e = self.model.emb(cur)
-            _, list_x, h = self.model.decoder(src_ids=None, tgt_in_ids=cur, m3_memory=m3_memory_t, return_history=True)
-            dec_t = list_x[:, -1, :]  # (1, H)
-            
-            # === C. ===
-            if mem_k is not None and mem_v is not None:
-                # core(gating)
-                core_state = {}
+                bridge_state = None
+            if bridge_state is None and m3_memory_t is not None:
                 try:
-                    if hasattr(self, 'core') and self.core is not None:
-                        core_state['stability'] = float(getattr(self.core, 'world_state', {}).get('stability', 0.5)) \
-                                                  if hasattr(self.core, 'world_state') else 0.5
-                        core_state['drift'] = float(getattr(self.core, 'world_state', {}).get('delta_hat', 0.0)) \
-                                              if hasattr(self.core, 'world_state') else 0.0
-                        phi_estimates = getattr(self, '_last_value_estimates', {})
-                        core_state['phi_delta'] = float(phi_estimates.get('phi_delta', 0.0))
+                    bridge_state = m3_memory_t.detach().float().cpu().numpy().reshape(-1)
                 except Exception:
-                    pass
-
-                # core(gating)
-                dec_t = self.model.compute_mem_context(dec_t, mem_k, mem_v, core_state)
-            
-            logits = self.model.head(dec_t)  # (1, V)
-
-            # === D. Token-Critic ===
-            # Token-critic: compute token-level Q-values
-            qtok = self.model.token_value(dec_t).detach()  # (1, V), detach for sampling
-            # Get accumulated token-level advantages
-            adv = self._adv_headroom(logits.shape[-1])  # (1, V) or None
-            # Compute beta schedule
-            beta = self._beta_schedule()
-            # Combine: base logits + Q_token + advantage
-            if adv is not None:
-                logits = logits + beta * qtok + self._token_adv_alpha * adv
-            else:
-                logits = logits + beta * qtok
-            # === A. kNN-aware kNN-LM Mixing (Contextual Memory) ===
-            if knn_provider is not None and knn_alpha > 0.0:
-                # keep old provider if passed externally
-                try:
-                    knn_dist = knn_provider()
-                    if knn_dist is not None:
-                        # knn_dist: torch vector (V,) already normalized
-                        logits = torch.log_softmax(logits, dim=-1)
-                        mix = torch.log((1 - knn_alpha) * torch.exp(logits) + knn_alpha * knn_dist + 1e-8)
-                        logits = mix
-                except Exception:
-                    pass
-            else:
-                # NEW: internal conditional kNN with uncertainty-based alpha
-                try:
-                    key = self._build_cond_key(prompt, core=getattr(self, "core", None))
-                    p_knn = self._knn.query(key, k=int(os.getenv("LLM_ADAPTER_KNN_K", "8")))
-                    if p_knn is not None:
-                        # === kNN-aware Mixing ===
-                        # Compute kNN attention over dec_t (1,H) and value-head
-                        alpha = self._alpha_scheduler_uncertainty(dec_t, self._last_value_estimates)
-
-                        # Compute mixing probabilities: P = softmax(logits), P_knn
-                        P = torch.softmax(logits, dim=-1)  # (1, V)
-                        P_knn = torch.tensor(p_knn, dtype=torch.float32, device=self.device).unsqueeze(0)  # (1, V)
-
-                        # Mix probabilities
-                        P_mix = (1.0 - alpha) * P + alpha * P_knn
-                        P_mix = P_mix / (P_mix.sum(dim=-1, keepdim=True) + 1e-8)
-
-                        # Logits
-                        logits = torch.log(P_mix + 1e-8)
-                except Exception:
-                    alpha = 0.0  # fallback
-            
-            # === Entropy-based sampling scheduler ===
-            # Compute current entropy for adaptive temperature/top_p
-            logp = torch.log_softmax(logits, dim=-1)
-            p = torch.exp(logp)
-            H = -torch.sum(p * logp, dim=-1).item()
-            
-            # Rolling entropy EMA
-            if not hasattr(self, "_H_ema"):
-                self._H_ema = H
-            self._H_ema = 0.9 * self._H_ema + 0.1 * H
-            
-            # Adaptive temperature & top_p schedule
+                    bridge_state = None
+            # Optional ablation for evaluation: none|shuffle|zero
             try:
-                env_temp = os.getenv("GEN_TEMP_BASE")
-                if env_temp and env_temp.lower() != "none":
-                    T0 = float(env_temp)
-                elif temperature is not None:
-                    T0 = float(temperature)
-                else:
-                    T0 = 1.0
-            except Exception:
-                T0 = 1.0
-
-            try:
-                env_ah = os.getenv("GEN_TEMP_H_COEF", "0.08")
-                if env_ah and env_ah.lower() != "none":
-                    aH = float(env_ah)
-                else:
-                    aH = 0.08
-            except Exception:
-                aH = 0.08
-
-            temperature_step = float(np.clip(T0 + aH * (self._H_ema - 4.0), 0.3, 1.5))
-            top_p_step = float(np.clip(0.8 + 0.05 * (self._H_ema - 4.0), 0.5, 0.98))
-            
-            # === G. Log generation step metrics with /g/ time series ===
-            try:
-                rec = {
-                    "t": int(time.time() * 1000),
-                    "kind": "gen_step",
-                    "entropy": float(H),
-                    "H_ema": float(self._H_ema),
-                    "temp": float(temperature_step),
-                    "top_p": float(top_p_step),
-                }
-                if mem_k is not None and mem_v is not None:
-                    try:
-                        # Compute attention over memory panels for logging
-                        q_log = self.model.Wq(dec_t).unsqueeze(1)  # (1,1,H)
-                        att_log = torch.softmax((q_log @ mem_k.transpose(1, 2)) / np.sqrt(self.model.hidden + 1e-8), dim=-1)
-                        top_panel = int(torch.argmax(att_log[0, 0]).item())
-                        rec["att_top_panel"] = top_panel
-                        
-                        # === G. Gate coefficient 'g'  ===
-                        if hasattr(self.model, 'gate_proj'):
-                            try:
-                                g = torch.sigmoid(self.model.gate_proj(dec_t))
-                                rec["gate_g"] = float(g.mean().item())
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-                
-                # === G.  (kNN mixing)  ===
-                if 'alpha' in locals():
-                    rec["knn_alpha"] = float(alpha)
-                
-                # === G.  (token-value correction)  ===
-                if 'beta' in locals():
-                    rec["token_value_beta"] = float(beta)
-                
-                self._log_jsonl(os.getenv("LLM_ADAPTER_LOG", "llm_adapter.jsonl"), rec)
+                ablation = os.getenv('M3_BRIDGE_ABLATION', 'none').strip().lower()
+                if bridge_state is not None and ablation in ('shuffle', 'permute', 'zero', 'zeros'):
+                    v = np.asarray(bridge_state, dtype=np.float32).reshape(-1)
+                    if ablation in ('shuffle', 'permute'):
+                        if v.size > 1:
+                            p = np.random.permutation(v.size)
+                            v = v[p]
+                    else:
+                        v = np.zeros_like(v, dtype=np.float32)
+                    bridge_state = v
             except Exception:
                 pass
-            
-            tok = self._sample(logits, temperature=temperature_step, top_k=top_k, top_p=top_p_step)
-            tid = int(tok.item())
-            
-            # DEBUG: Print token info
-            print(f"DEBUG: Step {step}, Token {tid} ({t.decode([tid])})")
-            
-            if tid == t.EOS or tid == t.PAD:
-                print("DEBUG: EOS/PAD reached")
-                break
-            out_tokens.append(tid)
 
-            # === Global token index ===
-            if not hasattr(self, "_global_token_idx"):
-                self._global_token_idx = 0
-            self._global_token_idx += 1
-            
-            cur = tok
-        
-        decoded = t.decode(out_tokens)
-        try:
-            self._record_example(prompt, decoded, source="generate")
-        except Exception:
-            pass
-        # print(f"DEBUG: Decoded output: '{decoded}'")
-        return decoded
+        # === HuggingFace backend: full M3 parameter control ===
+        used_hf = False
+        if self.use_hf and HFBackend.is_available():
+            used_hf = True
+            try:
+                hf = HFBackend.get_instance()
+                resolved_temp, resolved_top_k, resolved_top_p = self._resolve_generation_sampling(
+                    requested_temperature=temperature,
+                    requested_top_k=top_k,
+                    requested_top_p=top_p,
+                    source=source,
+                    core=core,
+                )
+                gate_payload = self._build_hf_quality_gate_inputs(
+                    temperature=resolved_temp,
+                    top_k=resolved_top_k,
+                    top_p=resolved_top_p,
+                    core=core,
+                    bridge_state=bridge_state,
+                    m3_sampler=self.m3_sampler,
+                )
+                gate_payload['decode_control'] = decode_control
+                attempts = max(0, int(os.getenv("M3_CONTROL_RETRY", "1")))
+                gate = getattr(self, '_quality_gate', None)
+                # start from configured defaults / runtime inputs
+                cur_temp = gate_payload['temperature']
+                cur_top_k = gate_payload['top_k']
+                cur_top_p = gate_payload['top_p']
+                for attempt in range(attempts + 1):
+                    response = self._generate_with_hf(
+                        hf=hf,
+                        prompt=prompt,
+                        chat_messages=chat_messages,
+                        core=core,
+                        m3_sampler=self.m3_sampler,
+                        token_value_head=gate_payload['token_value_head'],
+                        internal_hidden_dim=gate_payload['internal_hidden_dim'],
+                        beta=gate_payload['beta'],
+                        z_m3=bridge_state,
+                        max_new_tokens=max_len,
+                        base_temperature=cur_temp,
+                        base_top_k=cur_top_k,
+                        base_top_p=cur_top_p,
+                        decode_control=decode_control,
+                    )
+                    if response and response.strip():
+                        if gate is not None:
+                            gate_payload.update({
+                                'hf': hf,
+                                'prompt': prompt,
+                                'chat_messages': chat_messages,
+                                'core': core,
+                                'm3_sampler': self.m3_sampler,
+                                'token_value_head': gate_payload['token_value_head'],
+                                'internal_hidden_dim': gate_payload['internal_hidden_dim'],
+                                'beta': gate_payload['beta'],
+                                'z_m3': bridge_state,
+                                'max_new_tokens': max_len,
+                                'base_temperature': cur_temp,
+                                'base_top_k': cur_top_k,
+                                'base_top_p': cur_top_p,
+                                'decode_control': decode_control,
+                            })
+                            response = self._apply_quality_gate_if_enabled(
+                                gate=gate,
+                                gate_payload=gate_payload,
+                                response=response,
+                                temperature=cur_temp,
+                                top_k=cur_top_k,
+                                top_p=cur_top_p,
+                            )
+                        passed, _ = self._evaluate_generation_quality(prompt, response, source=source)
+                        if passed:
+                            if not self._is_disallowed_generation_output(response):
+                                try:
+                                    self._record_example(prompt, response, source='generate_hf')
+                                except Exception:
+                                    pass
+                                self._note_control_health(True, "hf_generate_ok")
+                                return response
+                            logger.warning('[HFBackend] filtered disallowed output; switching to fallback')
+                        elif attempt < attempts:
+                            logger.warning(
+                                f'[HFBackend] quality gate rejected output on attempt {attempt+1}/{attempts+1}; re-sampling with stricter params'
+                            )
+                            try:
+                                cur_temp, cur_top_k, cur_top_p = self._retry_generation_sampling(
+                                    temperature=cur_temp,
+                                    top_k=cur_top_k,
+                                    top_p=cur_top_p,
+                                )
+                            except Exception:
+                                cur_temp = max(0.15, float(cur_temp) * 0.8)
+                                cur_top_k = max(5, int(cur_top_k) if int(cur_top_k) < 24 else int(cur_top_k * 0.8))
+                                cur_top_p = max(0.70, float(cur_top_p) * 0.95)
+                            continue
+                        logger.warning('[HFBackend] filtered by generation quality; switching to fallback')
+            except Exception as e:
+                logger.warning(f'[HFBackend] generation failed ({e})')
+                if self._is_cuda_fatal_error(e):
+                    self._trip_hf_circuit_breaker(e)
+                self._note_control_health(False, f"hf_exception:{e}")
+                return self._generate_safe_fallback(prompt, chat_messages=chat_messages, max_len=max_len)
+
+        # HF backend disabled or unavailable: continue with safe fallback.
+        if used_hf:
+            self._note_control_health(False, "hf_filtered_or_fallback")
+        else:
+            self._note_control_health(False, "hf_unavailable_or_fallback")
+        return self._generate_safe_fallback(prompt, chat_messages=chat_messages, max_len=max_len)
 
     def score_value(self, prompt: str, candidate: str, mem: Optional[np.ndarray] = None) -> float:
         """Estimate value for a candidate response (scaffolding for Step 3)."""
@@ -3598,6 +5494,9 @@ class PlasticBrainPolicy(UnifiedM3Policy):
         # Replace model with Plastic Brain
         logger.info("Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...")
         self.model = M3PlasticPolicy(device=str(self.device)).to(self.device)
+        # CPU에서는 bfloat16 비지원 → float32로 강제
+        if self.device.type == 'cpu':
+            self.model = self.model.float()
         self.model.train() # Default to plastic mode (Online Learning)
 
     def sample(self, obs, affect_state=None, **kwargs):
@@ -3610,141 +5509,110 @@ class PlasticBrainPolicy(UnifiedM3Policy):
 
     def _state_vector(self, core=None):
         """Expose plastic hidden state."""
-        return self.model._hidden_state
+        h = self.model._hidden_state
+        # CPU에서는 float32로 강제 변환
+        if h is not None and self.device.type == 'cpu' and h.dtype == self.torch.bfloat16:
+            h = h.float()
+        return h
         
     def learn(self, text: str, arousal: float = 1.0, sleep_after: bool = False):
         """Unified interface for offline learning."""
         return self.model.learn_from_text(text, arousal=arousal, sleep_after=sleep_after)
 
-    def generate(self, prompt: str, mem: Optional[np.ndarray] = None, affect_state: Optional[np.ndarray] = None, max_len: int = 50, **kwargs) -> str:
-        """
-        Generate text response using M3PlasticPolicy.
-        Now supports Affect State injection.
-        """
-        # System identity / behavior prefix (configurable)
-        sys_identity = os.getenv('LLM_SYSTEM_PROMPT', DEFAULT_SYSTEM_PROMPT)
-        if sys_identity:
-            prompt = sys_identity.strip() + "\n\n" + prompt
-
-        # Episodic memory retrieval for context
-        if hasattr(self, 'core') and self.core is not None:
-            try:
-                src_temp = self.tok.encode(prompt, add_special=False)
-                if src_temp:
-                    src_temp_ids = self.torch.tensor(src_temp, dtype=self.torch.long, device=self.device).unsqueeze(0)
-                    e_src_temp = self.model.emb(src_temp_ids)
-                    _, h_temp = self.model.encoder(e_src_temp)
-                    context_embedding = h_temp.squeeze(0).cpu().numpy()
-                    relevant_episodes = self.m3_memory_retriever.retrieve_relevant_episodes(self.core, context_embedding)
-                    if relevant_episodes:
-                        episode_texts = []
-                        try:
-                            max_chars = int(os.getenv('M3_EPISODIC_MAX_CHARS', '800'))
-                        except Exception:
-                            max_chars = 800
-                        try:
-                            item_chars = int(os.getenv('M3_EPISODIC_ITEM_CHARS', '200'))
-                        except Exception:
-                            item_chars = 200
-                        total_chars = 0
-                        for ep in relevant_episodes:
-                            if hasattr(ep, 'content'):
-                                txt = str(ep.content)
-                            elif hasattr(ep, 'text'):
-                                txt = str(ep.text)
-                            elif hasattr(ep, 'description'):
-                                txt = str(ep.description)
-                            elif hasattr(ep, 'narrative'):
-                                txt = str(ep.narrative)
-                            elif hasattr(ep, 'context'):
-                                txt = str(ep.context)
-                            else:
-                                txt = ""
-                            if not txt:
-                                continue
-                            if item_chars > 0 and len(txt) > item_chars:
-                                txt = txt[:item_chars] + "..."
-                            if max_chars > 0 and (total_chars + len(txt)) > max_chars:
-                                break
-                            total_chars += len(txt) + 2
-                            episode_texts.append(txt)
-                        if episode_texts:
-                            context_prefix = "Similar past context:\n" + "\n".join(f"- {txt}" for txt in episode_texts) + "\n\nCurrent context:\n"
-                            prompt = context_prefix + prompt
-            except Exception:
-                pass
-        
-        # If using local AI (Deepseek), call Ollama directly
-        if self.use_local_ai:
-            try:
-                response = self.get_local_thinking(
-                    prompt,
-                    temperature=kwargs.get("temperature"),
-                    top_k=kwargs.get("top_k"),
-                    top_p=kwargs.get("top_p"),
-                    max_len=max_len,
-                )
-                if response and not response.startswith("Local Error"):
-                    try:
-                        self._record_example(prompt, response, source="generate_local")
-                    except Exception:
-                        pass
-                    return response
-                # Fall back to local model if Ollama fails
-            except Exception as e:
-                logger.warning(f"Ollama call failed: {e}, falling back to local model")
-        
-        # 1. Prepare Input
-        # Note: M3PlasticPolicy works with discrete tokens.
-        # We need to bridge 'prompt' (str) -> 'input_ids' (Tensor)
-        # And handle 'mem' (Panel Context) if possible (Currently PlasticPolicy is pure text/state)
-        
-        # Simple Prompt-based generation for now
-        # Call sample recursively? Or implement beam search?
-        # M3PlasticPolicy.sample is single-step. We need a loop here.
-        
-        self.model.eval()
-        tokens = self.model.tok.encode(prompt)
-        input_ids = torch.tensor([tokens], device=self.device)
-        
-        # Affect Tensor
-        affect_tensor = None
-        if affect_state is not None:
-             affect_tensor = torch.from_numpy(affect_state).float().to(self.device).unsqueeze(0)
-        
-        generated = []
-        curr_ids = input_ids
-        
-        # 2. Generation Loop
-        for _ in range(max_len):
-            with torch.no_grad():
-                logits, _ = self.model(curr_ids, affect_state=affect_tensor) # Forward
-                next_token_logits = logits[:, -1, :]
-                
-                # Greedy or Sampling?
-                # Using simple temperature sampling
-                probs = torch.softmax(next_token_logits, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1)
-                
-                token_id = next_token.item()
-                if token_id == self.model.tok.EOS:
-                    break
-                    
-                generated.append(token_id)
-                curr_ids = torch.cat([curr_ids, next_token], dim=1)
-        
-        # 3. Decode
-        output_text = self.model.tok.decode(generated)
-        try:
-            self._record_example(prompt, output_text, source="generate")
-        except Exception:
-            pass
-        return output_text
+    def generate(
+        self,
+        prompt: str,
+        mem: Optional[np.ndarray] = None,
+        affect_state: Optional[np.ndarray] = None,
+        max_len: int = 50,
+        **kwargs,
+    ) -> str:
+        """Use shared generation pipeline from the base policy."""
+        return super().generate(
+            prompt=prompt,
+            mem=mem,
+            affect_state=affect_state,
+            max_len=max_len,
+            **kwargs,
+        )
 
 
 # ============================================================================
 # Public API: attach_llm_to_core
 # ============================================================================
+
+def _attach_control_compat(adapter):
+    """Attach minimal control hooks to legacy adapters that predate this API."""
+
+    def _selection_mode(self) -> str:
+        raw = str(os.getenv("M3_CONTROL_SELECTION_MODE", "state") or "state").strip().lower()
+        if raw in {"0", "off", "none", "disable", "disabled", "no", "false"}:
+            return "off"
+        if raw in {"1", "state", "state_only", "context", "context_only", "low"}:
+            return "state"
+        if raw in {"2", "memory", "mid", "mixed", "medium"}:
+            return "memory"
+        if raw in {"3", "full", "high", "all", "strict"}:
+            return "full"
+        if raw in {"auto", "adaptive", "self", "self_adjust"}:
+            return "state"
+        if raw in {"on", "true", "yes"}:
+            return "full"
+        return "state"
+
+    def _allows(self, feature: str) -> bool:
+        mode = _selection_mode(self)
+        allowed = {
+            "off": set(),
+            "state": {"state_context"},
+            "memory": {"state_context", "memory_retrieval"},
+            "full": {"state_context", "memory_retrieval", "bridge", "decode_control", "adaptive_sampler", "token_value_bias", "quality_gate"},
+        }.get(mode, {"state_context"})
+        try:
+            return feature in allowed
+        except Exception:
+            return False
+
+    def _bridge(self) -> bool:
+        try:
+            allows = bool(_allows(self, "bridge"))
+        except Exception:
+            allows = False
+        return allows and os.getenv("M3_ENABLE_CONTROL_BRIDGE", "0").lower() in ("1", "true", "yes", "on")
+
+    def _bridge_safe(self) -> bool:
+        try:
+            fn = getattr(self, "_bridge_enabled", None)
+            if callable(fn):
+                return bool(fn())
+        except Exception:
+            pass
+        return False
+
+    def _note(self, success: bool, reason: str = "") -> None:
+        try:
+            if getattr(self, '_control_health_window', None) is None:
+                window = int(os.getenv("M3_CONTROL_HEALTH_WINDOW", "24"))
+                self._control_health_window = deque(maxlen=max(1, window))
+            self._control_health_window.append((time.time(), bool(success), str(reason or "")))
+        except Exception:
+            return
+        if success:
+            self._auto_mode_fail_streak = 0
+        else:
+            self._auto_mode_fail_streak = getattr(self, '_auto_mode_fail_streak', 0) + 1
+
+    if not callable(getattr(adapter, '_control_selection_mode', None)):
+        adapter._control_selection_mode = types.MethodType(_selection_mode, adapter)
+    if not callable(getattr(adapter, '_control_allows', None)):
+        adapter._control_allows = types.MethodType(_allows, adapter)
+    if not callable(getattr(adapter, '_note_control_health', None)):
+        adapter._note_control_health = types.MethodType(_note, adapter)
+    if not callable(getattr(adapter, '_bridge_enabled', None)):
+        adapter._bridge_enabled = types.MethodType(_bridge, adapter)
+    if not callable(getattr(adapter, '_bridge_enabled_safe', None)):
+        adapter._bridge_enabled_safe = types.MethodType(_bridge_safe, adapter)
+
 
 def attach_llm_to_core(core, adapter=None, record: bool = True):
     """
@@ -3756,10 +5624,17 @@ def attach_llm_to_core(core, adapter=None, record: bool = True):
         record: Whether to record training data to JSONL
     """
     try:
+        required_methods = (
+            "_control_allows",
+            "_note_control_health",
+            "_control_selection_mode",
+            "_bridge_enabled",
+            "_bridge_enabled_safe",
+        )
         if adapter is None:
-            # Auto-detect device: prefer CUDA if available
+            # Auto-detect device with env override
             import torch
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            device = _resolve_torch_device(torch)
             
             # Use PlasticBrain based on env var or config
             use_plastic = os.getenv("M3_PLASTIC_BRAIN", "1") == "1"
@@ -3775,6 +5650,30 @@ def attach_llm_to_core(core, adapter=None, record: bool = True):
             if hasattr(core, 'policy') and core.policy is not None:
                 adapter.set_motor_policy(core.policy)
                 logger.info('Attached existing core policy as motor policy')
+        else:
+            missing_methods = [m for m in required_methods if not callable(getattr(adapter, m, None))]
+            if missing_methods:
+                # First, try compatibility binding in-place for legacy adapters.
+                _attach_control_compat(adapter)
+                still_missing = [m for m in required_methods if not callable(getattr(adapter, m, None))]
+                if still_missing:
+                    logger.warning(
+                        f'Attached adapter missing control hooks {still_missing}; '
+                        f'attempting to rebuild with TorchConversationalPolicy'
+                    )
+                    try:
+                        import torch
+                        device = _resolve_torch_device(torch)
+                        adapter = TorchConversationalPolicy(device=device)
+                    except Exception as e:
+                        logger.warning(
+                            f'Failed to rebuild adapter for missing control hooks {still_missing}: {e}'
+                        )
+                        _attach_control_compat(adapter)
+        # Ensure attached adapter always has control API, even if newly-created.
+        missing_final = [m for m in required_methods if not callable(getattr(adapter, m, None))]
+        if missing_final:
+            _attach_control_compat(adapter)
         
         # Attach adapter to core
         core.llm_adapter = adapter
@@ -3822,3 +5721,5 @@ def attach_llm_to_core(core, adapter=None, record: bool = True):
     except Exception as e:
         logger.exception('Failed to attach LLM adapter to core')
         raise
+
+
