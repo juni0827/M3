@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import argparse, os, time, math, json
+import argparse, os, time, math, json, heapq
 import re
 import os as _os
 import logging
@@ -20,6 +20,78 @@ def _write_jsonl_safe(path, obj):
             f.write(_json.dumps(obj, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+def _normalize_phi_policy(raw: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
+    base = {
+        "floor": 0.01,
+        "low": 0.10,
+        "mid": 0.30,
+        "high": 0.50,
+        "very_high": 0.70,
+        "announce_high": 0.50,
+    }
+    if isinstance(raw, dict):
+        for k in list(base.keys()):
+            try:
+                if k in raw:
+                    base[k] = float(raw[k])
+            except Exception:
+                pass
+    base["low"] = float(max(base["floor"] + 1e-6, base["low"]))
+    base["mid"] = float(max(base["low"] + 1e-6, base["mid"]))
+    base["high"] = float(max(base["mid"] + 1e-6, base["high"]))
+    base["very_high"] = float(max(base["high"] + 1e-6, base["very_high"]))
+    base["announce_high"] = float(max(base["high"], base["announce_high"]))
+    return base
+
+
+def _compute_phi_policy_from_history(
+    phi_history: Optional[List[float]] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Dict[str, float]:
+    policy = _normalize_phi_policy(None)
+    if cfg is None:
+        cfg = {}
+    try:
+        enabled = bool(cfg.get("enabled", True))
+    except Exception:
+        enabled = True
+    try:
+        floor_min = float(cfg.get("phi_floor_min", 0.005))
+        floor_max = float(cfg.get("phi_floor_max", 0.05))
+    except Exception:
+        floor_min, floor_max = 0.005, 0.05
+    if not enabled:
+        return policy
+    vals = np.asarray(phi_history if phi_history is not None else [], dtype=np.float32)
+    if vals.size <= 0:
+        return policy
+    vals = vals[np.isfinite(vals)]
+    if vals.size <= 0:
+        return policy
+    try:
+        warmup = int(max(0, cfg.get("warmup_steps", 256)))
+    except Exception:
+        warmup = 256
+    if vals.size < warmup:
+        p75 = float(np.quantile(vals, 0.75))
+        policy["floor"] = float(np.clip(0.5 * max(0.0, p75), floor_min, floor_max))
+        return _normalize_phi_policy(policy)
+    try:
+        q_low = float(np.quantile(vals, float(cfg.get("quantile_low", 0.50))))
+        q_mid = float(np.quantile(vals, float(cfg.get("quantile_mid", 0.75))))
+        q_high = float(np.quantile(vals, float(cfg.get("quantile_high", 0.90))))
+        hyst = float(max(0.0, cfg.get("announce_hysteresis", 0.02)))
+    except Exception:
+        q_low, q_mid, q_high, hyst = 0.10, 0.30, 0.50, 0.02
+    policy["floor"] = float(np.clip(0.5 * max(0.0, q_low), floor_min, floor_max))
+    policy["low"] = float(max(policy["floor"] + 1e-4, q_low))
+    policy["mid"] = float(max(policy["low"] + 1e-4, q_mid))
+    policy["high"] = float(max(policy["mid"] + 1e-4, q_high))
+    policy["very_high"] = float(max(policy["high"] + 1e-4, q_high + max(0.05, hyst)))
+    policy["announce_high"] = float(max(policy["high"], q_high + hyst))
+    return _normalize_phi_policy(policy)
 
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict, Any, Set, Union, Callable, cast
@@ -1668,7 +1740,7 @@ class SharedRepresentation:
         
         return False, "insufficient_triggers"
     
-    def adaptive_grow(self, current_time: float, core: Any) -> Optional[Dict[str, Any]]:
+    def adaptive_grow(self, current_time: float, core: Any, apply: bool = True) -> Optional[Dict[str, Any]]:
         """조건이 충족되면 자동으로 성장"""
         should, reason = self.should_grow(current_time, core)
         
@@ -1696,21 +1768,25 @@ class SharedRepresentation:
         
         # Execute growth
         old_max_dim = self.max_dim
-        self.grow(new_max_dim, new_embed_dim)
+        old_embed_dim = self.embed_dim
+        if bool(apply):
+            self.grow(new_max_dim, new_embed_dim)
         
         growth_report = {
             'timestamp': current_time,
             'old_max_dim': old_max_dim,
-            'new_max_dim': self.max_dim,
-            'old_embed_dim': self.embed_dim,
-            'new_embed_dim': self.embed_dim,
+            'new_max_dim': int(self.max_dim if bool(apply) else new_max_dim),
+            'old_embed_dim': old_embed_dim,
+            'new_embed_dim': int(self.embed_dim if bool(apply) else new_embed_dim),
             'reason': reason,
             'complexity': complexity,
-            'growth_factor': growth_factor
+            'growth_factor': growth_factor,
+            'applied': bool(apply),
         }
         
-        self.growth_history.append(growth_report)
-        self.last_growth_time = current_time
+        if bool(apply):
+            self.growth_history.append(growth_report)
+            self.last_growth_time = current_time
         
         logging.info(f"FeatureBank adaptive growth: {old_max_dim} → {self.max_dim} | Reason: {reason}")
         
@@ -2223,8 +2299,8 @@ class IITPhiCalculator:
         # Compute trend
         trend = 'stable'
         if len(self.phi_history) >= 10:
-            recent = list(self.phi_history)[-10:]
-            slope = np.mean(np.diff(recent))
+            recent_states= list(self.phi_history)[-10:]
+            slope = np.mean(np.diff(recent_states))
             if slope > 0.001:
                 trend = 'rising'
             elif slope < -0.001:
@@ -2840,6 +2916,7 @@ class CauseEffectStructure:
         self.n_elements = n_elements or 0
         self.current_mip = None
         self.mip_history: deque = deque(maxlen=50)
+        self.phi_history: deque = deque(maxlen=256)
 
     def add(self, src: int, dst: int, w: int = 1) -> None:
         """Record transition count w from src to dst. May trigger compaction/decay."""
@@ -3000,7 +3077,12 @@ class CauseEffectStructure:
         phi = max(0.0, full_integrated_info - min_partitioned_info)
         self.current_mip = best_mip
         self.mip_history.append({'mip': best_mip, 'phi': phi, 'full_info': full_integrated_info, 'partitioned_info': min_partitioned_info, 'method': 'cutset_sampling', 'sampled_partitions': len(candidate_partitions)})
-        return self._normalize_phi(phi, cause_rep)
+        norm_phi = self._normalize_phi(phi, cause_rep)
+        try:
+            self.phi_history.append(float(norm_phi))
+        except Exception:
+            pass
+        return norm_phi
 
     def _find_connected_component(self, start: int, excluded: Set[int], n: int) -> Set[int]:
         return {start}
@@ -3044,7 +3126,12 @@ class CauseEffectStructure:
         phi = max(0.0, full_integrated_info - min_partitioned_info)
         self.current_mip = best_mip
         self.mip_history.append({'mip': best_mip, 'phi': phi, 'full_info': full_integrated_info, 'partitioned_info': min_partitioned_info, 'method': 'community_cluster', 'num_communities': len(communities), 'community_sizes': [len(c) for c in communities]})
-        return self._normalize_phi(phi, cause_rep)
+        norm_phi = self._normalize_phi(phi, cause_rep)
+        try:
+            self.phi_history.append(float(norm_phi))
+        except Exception:
+            pass
+        return norm_phi
 
     def _detect_communities_greedy(self, n: int) -> List[Set[int]]:
         return [set(range(n))]
@@ -3097,11 +3184,16 @@ class CauseEffectStructure:
         
         integrated_info = base_info * integration_multiplier * element_factor
         
-        # 5. MINIMUM THRESHOLD: Systems with actual causal structure get non-zero floor
+        # 5. MINIMUM THRESHOLD: adapt floor to observed phi scale.
         if (n_elements > 1 and 
             np.any(np.abs(cause_rep) > 1e-08) and 
             np.any(np.abs(effect_rep) > 1e-08)):
-            integrated_info = max(integrated_info, 0.01)
+            try:
+                pol = _compute_phi_policy_from_history(list(self.phi_history), cfg=None)
+                phi_floor = float(pol.get("floor", 0.01))
+            except Exception:
+                phi_floor = 0.01
+            integrated_info = max(integrated_info, float(phi_floor))
         
         return float(np.clip(integrated_info, 0.0, 20.0))
 
@@ -3259,15 +3351,19 @@ class CauseEffectStructure:
             return 'stable'
 
     def get_consciousness_level(self, phi: float) -> str:
-        if phi < 0.01:
+        try:
+            pol = _compute_phi_policy_from_history(list(self.phi_history), cfg=None)
+        except Exception:
+            pol = _normalize_phi_policy(None)
+        if phi < float(pol.get("floor", 0.01)):
             return '(unconscious)'
-        elif phi < 0.1:
+        elif phi < float(pol.get("low", 0.1)):
             return '(minimal)'
-        elif phi < 0.3:
+        elif phi < float(pol.get("mid", 0.3)):
             return '(low)'
-        elif phi < 0.5:
+        elif phi < float(pol.get("high", 0.5)):
             return '(moderate)'
-        elif phi < 0.7:
+        elif phi < float(pol.get("very_high", 0.7)):
             return '(high)'
         else:
             return '(very high)'
@@ -3384,11 +3480,11 @@ class EvolutionVisualizer:
                 self.scope_image = image
             except Exception:
                 self.scope_image = np.zeros((256,256), dtype=np.uint8)
-        # Adjusted thresholds for more visible variability
-        if self.phi_value > 0.25:
+        phi_policy = _normalize_phi_policy(system_state.get("phi_policy") if isinstance(system_state, dict) else None)
+        if self.phi_value > float(phi_policy.get("high", 0.5)):
             self.consciousness_level = 4
             self.growth_stage = 'transcendent'
-        elif self.phi_value > 0.08:
+        elif self.phi_value > float(phi_policy.get("mid", 0.3)):
             self.consciousness_level = 3
             self.growth_stage = 'adult'
         elif meta_awareness > 0.3:
@@ -3886,11 +3982,12 @@ class GrowingSOM(EvolutionVisualizer):
             self.scope_image = image
         except Exception as e:
             self.scope_image = _np.zeros((256,256), dtype=_np.uint8)
-        # consciousness/growth stage update   
-        if self.phi_value > 0.5:
+        # consciousness/growth stage update
+        phi_policy = _normalize_phi_policy(system_state.get("phi_policy") if isinstance(system_state, dict) else None)
+        if self.phi_value > float(phi_policy.get("high", 0.5)):
             self.consciousness_level = 4
             self.growth_stage = 'transcendent'
-        elif self.phi_value > 0.1:
+        elif self.phi_value > float(phi_policy.get("mid", 0.3)):
             self.consciousness_level = 3
             self.growth_stage = 'adult'
         elif meta_awareness > 0.5:
@@ -9440,9 +9537,37 @@ class ConsciousnessBus:
     Tokens are dicts: {source,key,vector_len,salience,confidence,ttl}.
     Only top-K by salience are considered active for gating.
     """
-    def __init__(self, top_k: int = 4, outdir: Optional[str] = None):
+    def __init__(
+        self,
+        top_k: int = 4,
+        outdir: Optional[str] = None,
+        async_dispatch: bool = False,
+        max_queue: int = 4096,
+        drop_policy: str = "drop_low_priority",
+        min_dispatch_interval_ms: int = 0,
+        default_topic: str = "bus",
+    ):
         self.top_k = int(top_k)
         self.tokens: List[Dict[str, Any]] = []
+        self._subs: Dict[int, Dict[str, Any]] = {}
+        self._sub_seq: int = 0
+        self._event_heap: List[Tuple[float, float, int, Dict[str, Any]]] = []
+        self._event_seq: int = 0
+        self._lock = threading.Lock()
+        self._async_dispatch = bool(async_dispatch)
+        self._worker: Optional[threading.Thread] = None
+        self._worker_running: bool = False
+        self._max_queue = int(max(1, max_queue))
+        self._drop_policy = str(drop_policy or "drop_low_priority").strip().lower()
+        self._min_dispatch_interval = float(max(0.0, min_dispatch_interval_ms)) / 1000.0
+        self._last_dispatch_ts: float = 0.0
+        self._default_topic = str(default_topic or "bus")
+        self._stats: Dict[str, int] = {
+            "published": 0,
+            "dispatched": 0,
+            "dropped": 0,
+            "handler_errors": 0,
+        }
         self._log_path = None
         if outdir is not None:
             try:
@@ -9450,6 +9575,194 @@ class ConsciousnessBus:
                 self._log_path = os.path.join(outdir, 'bus.jsonl')
             except Exception:
                 self._log_path = None
+
+    def _log(self, obj: Dict[str, Any]) -> None:
+        if not self._log_path:
+            return
+        try:
+            with open(self._log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+    def _enqueue(self, event: Dict[str, Any]) -> bool:
+        with self._lock:
+            if len(self._event_heap) >= self._max_queue:
+                if self._drop_policy == "drop_oldest":
+                    oldest_idx = min(
+                        range(len(self._event_heap)),
+                        key=lambda i: float(self._event_heap[i][1]),
+                    )
+                    self._event_heap.pop(oldest_idx)
+                    heapq.heapify(self._event_heap)
+                    self._stats["dropped"] += 1
+                else:
+                    # drop_low_priority: replace one lowest-priority pending item only if incoming is higher priority.
+                    lowest_idx = max(
+                        range(len(self._event_heap)),
+                        key=lambda i: float(self._event_heap[i][0]),
+                    )
+                    lowest_pri = -float(self._event_heap[lowest_idx][0])
+                    if float(event.get("priority", 0.0)) <= lowest_pri:
+                        self._stats["dropped"] += 1
+                        return False
+                    self._event_heap.pop(lowest_idx)
+                    heapq.heapify(self._event_heap)
+                    self._stats["dropped"] += 1
+            self._event_seq += 1
+            pri = float(event.get("priority", 0.0))
+            ts = float(event.get("ts", time.time()))
+            heapq.heappush(self._event_heap, (-pri, ts, int(self._event_seq), event))
+        return True
+
+    def _dispatch_event(self, event: Dict[str, Any]) -> None:
+        if self._min_dispatch_interval > 0:
+            dt = float(time.time()) - float(self._last_dispatch_ts)
+            if dt < self._min_dispatch_interval:
+                try:
+                    time.sleep(self._min_dispatch_interval - dt)
+                except Exception:
+                    pass
+        self._last_dispatch_ts = float(time.time())
+        topic = str(event.get("topic", self._default_topic))
+        pri = float(event.get("priority", 0.0))
+        payload = event.get("payload", {})
+        for _, sub in list(self._subs.items()):
+            try:
+                st = sub.get("topic")
+                if st and str(st) != topic:
+                    continue
+                if pri < float(sub.get("min_priority", 0.0)):
+                    continue
+                pred = sub.get("predicate")
+                if callable(pred) and (not bool(pred(event))):
+                    continue
+                handler = sub.get("handler")
+                if callable(handler):
+                    handler(payload)
+            except Exception:
+                self._stats["handler_errors"] += 1
+                self._log(
+                    {
+                        "kind": "consciousness_bus_dispatch",
+                        "event": "handler_error",
+                        "topic": topic,
+                        "priority": pri,
+                        "ts": time.time(),
+                    }
+                )
+        self._stats["dispatched"] += 1
+        self._log(
+            {
+                "kind": "consciousness_bus_dispatch",
+                "event": "dispatch",
+                "topic": topic,
+                "priority": pri,
+                "ts": time.time(),
+            }
+        )
+
+    def publish(
+        self,
+        topic: str,
+        payload: Dict[str, Any],
+        priority: float = 0.0,
+        async_dispatch: Optional[bool] = None,
+    ) -> bool:
+        event = {
+            "topic": str(topic or self._default_topic),
+            "payload": dict(payload or {}),
+            "priority": float(priority),
+            "ts": float(time.time()),
+        }
+        self._stats["published"] += 1
+        use_async = self._async_dispatch if async_dispatch is None else bool(async_dispatch)
+        if use_async:
+            ok = self._enqueue(event)
+            if ok and self._async_dispatch and (self._worker is None or not self._worker.is_alive()):
+                self.start_async_worker()
+            return bool(ok)
+        self._dispatch_event(event)
+        return True
+
+    def subscribe(
+        self,
+        handler: Callable[[Dict[str, Any]], None],
+        topic: Optional[str] = None,
+        min_priority: float = 0.0,
+        predicate: Optional[Callable[[Dict[str, Any]], bool]] = None,
+    ) -> int:
+        with self._lock:
+            self._sub_seq += 1
+            sid = int(self._sub_seq)
+            self._subs[sid] = {
+                "handler": handler,
+                "topic": None if topic is None else str(topic),
+                "min_priority": float(min_priority),
+                "predicate": predicate,
+            }
+            return sid
+
+    def unsubscribe(self, sub_id: int) -> bool:
+        with self._lock:
+            return self._subs.pop(int(sub_id), None) is not None
+
+    def start_async_worker(self) -> None:
+        if self._worker_running:
+            return
+        self._worker_running = True
+
+        def _run():
+            while self._worker_running:
+                evt = None
+                with self._lock:
+                    if self._event_heap:
+                        _, _, _, evt = heapq.heappop(self._event_heap)
+                if evt is None:
+                    time.sleep(0.002)
+                    continue
+                self._dispatch_event(evt)
+
+        self._worker = threading.Thread(target=_run, daemon=True)
+        self._worker.start()
+
+    def stop_async_worker(self) -> None:
+        self._worker_running = False
+        if self._worker is not None:
+            try:
+                self._worker.join(timeout=1.0)
+            except Exception:
+                pass
+
+    def drain(self, max_items: Optional[int] = None) -> int:
+        dispatched = 0
+        limit = int(max_items) if max_items is not None else 1_000_000
+        while dispatched < max(0, limit):
+            evt = None
+            with self._lock:
+                if self._event_heap:
+                    _, _, _, evt = heapq.heappop(self._event_heap)
+            if evt is None:
+                break
+            self._dispatch_event(evt)
+            dispatched += 1
+        return int(dispatched)
+
+    def stats(self) -> Dict[str, Any]:
+        with self._lock:
+            q_len = int(len(self._event_heap))
+            n_sub = int(len(self._subs))
+        out = dict(self._stats)
+        out.update(
+            {
+                "queue_len": q_len,
+                "subscribers": n_sub,
+                "top_k": int(self.top_k),
+                "async_dispatch": bool(self._async_dispatch),
+                "drop_policy": str(self._drop_policy),
+            }
+        )
+        return out
 
     def push(self, source: str, key: str, vector: np.ndarray, salience: float, confidence: float = 1.0, ttl: int = 5) -> None:
         try:
@@ -9463,9 +9776,10 @@ class ConsciousnessBus:
                 'vector_len': int(np.asarray(vector).size),
             }
             self.tokens.append(tok)
-            if self._log_path:
-                with open(self._log_path, 'a', encoding='utf-8') as f:
-                    f.write(json.dumps(tok, ensure_ascii=False) + "\n")
+            if len(self.tokens) > self._max_queue:
+                self.tokens = self.tokens[-self._max_queue:]
+            self.publish(topic="token", payload=tok, priority=float(salience), async_dispatch=None)
+            self._log(tok)
         except Exception:
             pass
 
@@ -9476,6 +9790,8 @@ class ConsciousnessBus:
             if t['ttl'] > 0:
                 nxt.append(t)
         self.tokens = nxt
+        if not self._async_dispatch:
+            self.drain(max_items=256)
 
     def top(self) -> List[Dict[str, Any]]:
         return sorted(self.tokens, key=lambda d: d.get('salience', 0.0), reverse=True)[: self.top_k]
@@ -9569,6 +9885,17 @@ def _m3_torch_device() -> str:
 
 
 if _TORCH_OK:
+    def _moe_switch_aux_terms(logits: _t.Tensor, probs: _t.Tensor, top1_idx: _t.Tensor, n_experts: int) -> tuple[_t.Tensor, _t.Tensor, _t.Tensor, _t.Tensor]:
+        p = probs.reshape(-1, int(n_experts))
+        mean_prob = p.mean(dim=0)
+        assign = _F.one_hot(top1_idx.reshape(-1), num_classes=int(n_experts)).float()
+        mean_assign = assign.mean(dim=0)
+        aux_lb = float(n_experts) * _t.sum(mean_prob * mean_assign)
+        z_loss = _t.mean(logits.reshape(-1, int(n_experts)) ** 2)
+        entropy = -_t.sum(mean_assign * _t.log(mean_assign + 1e-8))
+        max_load = _t.max(mean_assign)
+        return aux_lb, z_loss, entropy, max_load
+
     class _MoEExpert(_nn.Module):
         def __init__(self, d: int, d_ff: int):
             super().__init__()
@@ -9585,12 +9912,15 @@ if _TORCH_OK:
             self.top_k = int(max(1, top_k))
             self.gate = _nn.Linear(d, n_experts)
             self.experts = _nn.ModuleList([_MoEExpert(d, d_ff) for _ in range(n_experts)])
+            self.router_noise_std = float(os.environ.get("M3_MOE_ROUTER_NOISE_STD", "0.02"))
+            self.router_z_loss_coef = float(os.environ.get("M3_MOE_ROUTER_Z_LOSS_COEF", "0.001"))
 
-        def forward(self, x: _t.Tensor) -> tuple[_t.Tensor, _t.Tensor]:
+        def forward(self, x: _t.Tensor) -> tuple[_t.Tensor, _t.Tensor, dict]:
             logits = self.gate(x)
+            if self.training and self.router_noise_std > 0:
+                logits = logits + _t.randn_like(logits) * float(self.router_noise_std)
             probs = _F.softmax(logits, dim=-1)
             topv, topi = _t.topk(probs, k=min(self.top_k, self.n_experts), dim=-1)
-            lb = (probs.mean(dim=0) ** 2).sum() * float(self.n_experts)
             y = _t.zeros_like(x)
             B = x.size(0)
             for k in range(topv.size(-1)):
@@ -9602,7 +9932,15 @@ if _TORCH_OK:
                         xe = x[m]
                         ye = self.experts[e](xe)
                         y[m] = y[m] + w[m] * ye
-            return y, lb
+            aux_lb, z_loss, entropy, max_load = _moe_switch_aux_terms(logits, probs, topi[:, 0], self.n_experts)
+            aux = aux_lb + float(self.router_z_loss_coef) * z_loss
+            stats = {
+                'expert_usage_entropy': entropy.detach(),
+                'max_expert_load': max_load.detach(),
+                'aux_lb': aux_lb.detach(),
+                'router_z_loss': z_loss.detach(),
+            }
+            return y, aux, stats
 
     class _SDMModel(_nn.Module):
         def __init__(self, in_dim: int, z_dim: int, d_model: int = 2048, n_layers: int = 16,
@@ -9642,15 +9980,30 @@ if _TORCH_OK:
                     pass
             h = self.proj_z(z) + self.proj_a(a)
             lb = h.new_tensor(0.0)
+            ent_sum = h.new_tensor(0.0)
+            max_load = h.new_tensor(0.0)
+            n_moe = 0
             for f in self.layers:
                 if isinstance(f, _MoEFFN):
                     h_in = h
-                    hf, lbi = f(h)
+                    hf, lbi, stats = f(h)
                     h = h_in + hf
                     lb = lb + lbi
+                    if isinstance(stats, dict):
+                        if 'expert_usage_entropy' in stats:
+                            ent_sum = ent_sum + stats['expert_usage_entropy']
+                        if 'max_expert_load' in stats:
+                            max_load = _t.maximum(max_load, stats['max_expert_load'])
+                        n_moe += 1
                 else:
                     h = h + f(h)
             h = self.norm(h)
+            if n_moe > 0:
+                self.last_expert_usage_entropy = ent_sum / float(n_moe)
+                self.last_max_expert_load = max_load
+            else:
+                self.last_expert_usage_entropy = h.new_tensor(0.0)
+                self.last_max_expert_load = h.new_tensor(0.0)
             out = {
                 'delta_hat': self.h_delta(h).squeeze(-1),
                 'stability': self.h_stab(h).squeeze(-1),
@@ -9683,8 +10036,12 @@ if _TORCH_OK:
                     pass
             if self.fsdp and _dist.is_initialized():
                 self.model = _FSDP(self.model, auto_wrap_policy=_fsdp_auto_wrap)
-            self.optim = _t.optim.AdamW(self.model.parameters(), lr=1e-3, betas=(0.9, 0.95), weight_decay=0.01)
+            wd = float(os.environ.get("M3_STABILITY_WEIGHT_DECAY", "0.01"))
+            self.optim = _t.optim.AdamW(self.model.parameters(), lr=1e-3, betas=(0.9, 0.95), weight_decay=wd)
             self.scaler = _GradScaler(enabled=(dev.type == 'cuda'))
+            self._last_expert_usage_entropy = 0.0
+            self._last_max_expert_load = 0.0
+            self._stability_skip_steps = 0
 
         def forward(self, x: np.ndarray) -> dict:
             self.model.eval()
@@ -9723,9 +10080,37 @@ if _TORCH_OK:
             if self.device.type == 'cuda':
                 self.scaler.unscale_(self.optim)
             _nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.scaler.step(self.optim)
+            finite_ok = True
+            for p in self.model.parameters():
+                if p.grad is not None and not _t.isfinite(p.grad).all():
+                    finite_ok = False
+                    break
+                if not _t.isfinite(p.data).all():
+                    finite_ok = False
+                    break
+            if finite_ok:
+                self.scaler.step(self.optim)
+            else:
+                self._stability_skip_steps += 1
             self.scaler.update()
             self.optim.zero_grad(set_to_none=True)
+            if finite_ok:
+                max_w = float(os.environ.get("M3_STABILITY_MAX_WEIGHT_NORM", "10.0"))
+                with _t.no_grad():
+                    for p in self.model.parameters():
+                        if p.ndim <= 1:
+                            continue
+                        n = p.data.norm()
+                        if _t.isfinite(n) and float(n.item()) > max_w:
+                            p.data.mul_(max_w / (n + 1e-8))
+            try:
+                self._last_expert_usage_entropy = float(getattr(self.model, 'last_expert_usage_entropy', _t.tensor(0.0)).detach().item())
+            except Exception:
+                self._last_expert_usage_entropy = 0.0
+            try:
+                self._last_max_expert_load = float(getattr(self.model, 'last_max_expert_load', _t.tensor(0.0)).detach().item())
+            except Exception:
+                self._last_max_expert_load = 0.0
             return float(loss.detach().item())
 
         def save(self, path: str) -> None:
@@ -9760,6 +10145,50 @@ class M3ConsciousnessCore:
         self.K = K
         self.max_iterations: Optional[int] = max_iterations
         self.outdir = outdir
+        self._adaptive_threshold_cfg: Dict[str, Any] = {
+            "enabled": True,
+            "warmup_steps": 256,
+            "quantile_low": 0.50,
+            "quantile_mid": 0.75,
+            "quantile_high": 0.90,
+            "announce_cooldown": 200,
+            "announce_hysteresis": 0.02,
+            "phi_floor_min": 0.005,
+            "phi_floor_max": 0.05,
+        }
+        self._observation_adapter_cfg: Dict[str, Any] = {
+            "enabled": True,
+            "target_policy_dim": 0,
+            "projection_eps": 1e-6,
+            "allow_policy_recreate": False,
+        }
+        self._consciousness_bus_cfg: Dict[str, Any] = {
+            "enabled": True,
+            "async_dispatch": True,
+            "max_queue": 4096,
+            "drop_policy": "drop_low_priority",
+            "min_dispatch_interval_ms": 0,
+            "default_topic": "bus",
+        }
+        try:
+            from llm_adapter.config import get_global_config as _llm_get_cfg
+            _cfg = _llm_get_cfg()
+            for _k in list(self._adaptive_threshold_cfg.keys()):
+                self._adaptive_threshold_cfg[_k] = getattr(getattr(_cfg, "adaptive_threshold", object()), _k, self._adaptive_threshold_cfg[_k])
+            for _k in list(self._observation_adapter_cfg.keys()):
+                self._observation_adapter_cfg[_k] = getattr(getattr(_cfg, "observation_adapter", object()), _k, self._observation_adapter_cfg[_k])
+            for _k in list(self._consciousness_bus_cfg.keys()):
+                self._consciousness_bus_cfg[_k] = getattr(getattr(_cfg, "consciousness_bus", object()), _k, self._consciousness_bus_cfg[_k])
+        except Exception:
+            pass
+        self._phi_policy_last: Optional[Dict[str, float]] = None
+        self._phi_policy_last_t: int = -10**9
+        self._last_phi_announce_t: int = -10**9
+        self._last_phi_announce_value: float = -1e9
+        self._obs_adapter_W: Optional[np.ndarray] = None
+        self._obs_adapter_in_dim: int = 0
+        self._obs_adapter_out_dim: int = 0
+        self._obs_adapter_last_sig: Optional[Tuple[int, int]] = None
         
         # MULTI-LOOP INFRASTRUCTURE: Create message bus FIRST
         self.message_bus = MessageBus(capacity=10000)
@@ -9804,7 +10233,20 @@ class M3ConsciousnessCore:
         self._prev_meta = 0.5
         # Consciousness Bus
         try:
-            self.bus = ConsciousnessBus(top_k=4, outdir=outdir)
+            if bool(self._consciousness_bus_cfg.get("enabled", True)):
+                self.bus = ConsciousnessBus(
+                    top_k=int(os.environ.get("M3_BUS_TOPK", "4")),
+                    outdir=outdir,
+                    async_dispatch=bool(self._consciousness_bus_cfg.get("async_dispatch", True)),
+                    max_queue=int(max(1, int(self._consciousness_bus_cfg.get("max_queue", 4096)))),
+                    drop_policy=str(self._consciousness_bus_cfg.get("drop_policy", "drop_low_priority")),
+                    min_dispatch_interval_ms=int(max(0, int(self._consciousness_bus_cfg.get("min_dispatch_interval_ms", 0)))),
+                    default_topic=str(self._consciousness_bus_cfg.get("default_topic", "bus")),
+                )
+                if bool(self._consciousness_bus_cfg.get("async_dispatch", True)):
+                    self.bus.start_async_worker()
+            else:
+                self.bus = None
         except Exception:
             self.bus = None
         try:
@@ -10816,6 +11258,20 @@ class M3ConsciousnessCore:
                                         pass
                         should_continue, processing_intensity = self.energy_ctrl.should_continue()
                         if not should_continue:
+                            # --- Energy deadlock prevention: passive recovery even when halted ---
+                            # Without this, energy stays below critical threshold forever
+                            # because update_energy is never called in the halted path.
+                            try:
+                                self.energy_ctrl.update_energy(0.0)  # zero cost → pure recovery
+                            except Exception:
+                                # Manual minimum recovery as ultimate fallback
+                                self.energy_ctrl.cognitive_energy += max(
+                                    0.5, self.energy_ctrl.recovery_rate_max * 0.3
+                                )
+                                self.energy_ctrl.cognitive_energy = min(
+                                    self.energy_ctrl.cognitive_energy,
+                                    self.energy_ctrl.energy_capacity
+                                )
                             self.t += 1
                             continue
                         if processing_intensity < 0.2:
@@ -10907,18 +11363,13 @@ class M3ConsciousnessCore:
                                 
                                 # 3. FeatureBank adaptive growth
                                 if hasattr(self, 'feature_bank'):
-                                    growth_result = self.feature_bank.adaptive_grow(float(self.t), self)
+                                    growth_result = self._maybe_adaptive_feature_bank_growth()
                                     if growth_result:
                                         print(f"\n[t={self.t}] FEATURE BANK GROWTH:")
-                                        print(f"  {growth_result['old_max_dim']} → {growth_result['new_max_dim']}")
-                                        print(f"  Reason: {growth_result['reason']}")
-                                        
-                                        # Policy dimension mismatch handling
-                                        try:
-                                            if hasattr(self.policy, 'in_dim') and self.policy.in_dim != self.feature_bank.max_dim:
-                                                print(f" Policy resize needed: {self.policy.in_dim} → {self.feature_bank.max_dim}")
-                                        except Exception:
-                                            pass
+                                        print(f"  {growth_result.get('old_max_dim')} -> {growth_result.get('new_max_dim')}")
+                                        print(f"  Reason: {growth_result.get('reason', 'n/a')}")
+                                        if not bool(growth_result.get("applied", False)):
+                                            print("  Growth proposal rejected by synchronized grow path.")
                             
                             except Exception as e:
                                 logging.debug(f"Autonomous expansion error: {e}")
@@ -11198,21 +11649,30 @@ class M3ConsciousnessCore:
                 action['complexity'] = 0.01
                 action['learning_rate'] = 0.0
         # Learned policy override (policy-first, heuristic fallback)
-        obs = self._policy_obs()
+        obs = self._policy_obs_adapted()
         # ensure policy exists and input dim matches
         if not hasattr(self, 'policy') or self.policy is None:
             self.policy = PolicyMLP(in_dim=obs.size, out_dim=12, hidden=max(128, obs.size), rng=self.rngr.get('policy'))
         else:
-            # supports PolicyMLP resizing
             try:
-                self.policy.resize_input(obs.size)
+                pol_in = int(getattr(self.policy, 'in_dim', obs.size))
             except Exception:
-                # resize may fail for incompatible legacy policy; re-create instead
-                old_policy = getattr(self, 'policy')
-                in_dim = int(obs.size)
-                out_dim = getattr(old_policy, 'out_dim', 12)
-                hidden = max(128, in_dim)
-                self.policy = PolicyMLP(in_dim=in_dim, out_dim=out_dim, hidden=hidden, rng=self.rngr.get('policy'))
+                pol_in = int(obs.size)
+            if pol_in > 0 and int(obs.size) != pol_in:
+                obs = self._project_obs_to_dim(obs, target_dim=pol_in)
+            try:
+                if hasattr(self.policy, 'resize_input') and int(getattr(self.policy, 'in_dim', obs.size)) != int(obs.size):
+                    self.policy.resize_input(obs.size)
+            except Exception:
+                allow_recreate = bool(self._observation_adapter_cfg.get("allow_policy_recreate", False))
+                if allow_recreate:
+                    out_dim = int(getattr(getattr(self, 'policy', None), 'out_dim', 12))
+                    self._recreate_policy_with_transfer(in_dim=int(obs.size), out_dim=out_dim)
+                else:
+                    try:
+                        obs = self._project_obs_to_dim(obs, target_dim=int(getattr(self.policy, 'in_dim', obs.size)))
+                    except Exception:
+                        pass
         # Provide Bus-routed active specs to BRPolicy if available
         try:
             if hasattr(self, 'feature_bank') and getattr(self, 'feature_bank', None) is not None and hasattr(self.feature_bank, '_ranges'):
@@ -11629,7 +12089,7 @@ class M3ConsciousnessCore:
             pass
         # Fallback: policy observation (small vector) padded
         try:
-            obs = self._policy_obs()
+            obs = self._policy_obs_adapted()
             arr = np.asarray(obs, dtype=np.float32).ravel()
             out = np.zeros((target_dim,), dtype=np.float32)
             take = min(arr.size, target_dim)
@@ -11818,14 +12278,20 @@ class M3ConsciousnessCore:
         # Resize policy input
         if hasattr(self, 'policy') and self.policy is not None:
             try:
-                self.policy.resize_input(fb_dim_new)
+                if hasattr(self.policy, 'resize_input'):
+                    self.policy.resize_input(fb_dim_new)
             except Exception:
-                # re-create policy preserving basic config when resize fails
-                old_policy = getattr(self, 'policy')
-                in_dim = fb_dim_new
-                out_dim = getattr(old_policy, 'out_dim', 12)
-                hidden = max(128, in_dim)
-                self.policy = PolicyMLP(in_dim=in_dim, out_dim=out_dim, hidden=hidden, rng=self.rngr.get('policy'))
+                allow_recreate = bool(self._observation_adapter_cfg.get("allow_policy_recreate", False))
+                if allow_recreate:
+                    out_dim = int(getattr(getattr(self, 'policy', None), 'out_dim', 12))
+                    self._recreate_policy_with_transfer(in_dim=int(fb_dim_new), out_dim=out_dim)
+                else:
+                    self._log_runtime_event(
+                        "obs_adapter",
+                        mode="keep_policy_dim",
+                        policy_dim=int(getattr(getattr(self, 'policy', None), 'in_dim', fb_dim_new)),
+                        feature_dim=int(fb_dim_new),
+                    )
         # Resize SDM (input dim = fb_dim + act_dim)
         act_dim = 5
         self._sdm_in_dim = int(self.feature_bank.max_dim + act_dim)
@@ -12816,6 +13282,149 @@ class M3ConsciousnessCore:
     def _should_terminate(self, goal: Optional[Goal]) -> bool:
         return False
 
+    def _log_runtime_event(self, kind: str, **payload: Any) -> None:
+        try:
+            path = os.path.join(self.outdir, "llm_adapter.log")
+            rec = {"kind": str(kind), "t": int(getattr(self, "t", 0))}
+            rec.update(payload)
+            _write_jsonl_safe(path, rec)
+        except Exception:
+            pass
+
+    def _phi_threshold_policy(self) -> Dict[str, float]:
+        hist = []
+        try:
+            hist = list(getattr(self.phi_calculator, "phi_history", []) or [])
+        except Exception:
+            hist = []
+        pol = _compute_phi_policy_from_history(hist, cfg=self._adaptive_threshold_cfg)
+        t_now = int(getattr(self, "t", 0))
+        if (
+            self._phi_policy_last is None
+            or any(abs(float(pol.get(k, 0.0)) - float(self._phi_policy_last.get(k, 0.0))) > 1e-6 for k in ("floor", "low", "mid", "high", "very_high", "announce_high"))
+        ) and (t_now - int(self._phi_policy_last_t)) >= 50:
+            self._log_runtime_event(
+                "phi_threshold_policy",
+                floor=float(pol.get("floor", 0.01)),
+                low=float(pol.get("low", 0.1)),
+                mid=float(pol.get("mid", 0.3)),
+                high=float(pol.get("high", 0.5)),
+                very_high=float(pol.get("very_high", 0.7)),
+                announce_high=float(pol.get("announce_high", 0.5)),
+                history_len=int(len(hist)),
+            )
+            self._phi_policy_last_t = t_now
+        self._phi_policy_last = dict(pol)
+        return pol
+
+    @staticmethod
+    def _copy_state_overlap(src_sd: Dict[str, Any], dst_sd: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(dst_sd)
+        for k, dst_t in dst_sd.items():
+            src_t = src_sd.get(k)
+            if src_t is None:
+                continue
+            try:
+                if tuple(src_t.shape) == tuple(dst_t.shape):
+                    out[k] = src_t.clone().to(device=dst_t.device, dtype=dst_t.dtype)
+                    continue
+                if src_t.ndim != dst_t.ndim:
+                    continue
+                merged = dst_t.clone()
+                slices = tuple(slice(0, min(int(src_t.shape[i]), int(dst_t.shape[i]))) for i in range(src_t.ndim))
+                merged[slices] = src_t[slices].to(device=dst_t.device, dtype=dst_t.dtype)
+                out[k] = merged
+            except Exception:
+                continue
+        return out
+
+    def _recreate_policy_with_transfer(self, in_dim: int, out_dim: int = 12) -> None:
+        old_policy = getattr(self, "policy", None)
+        hidden = max(128, int(in_dim))
+        new_policy = PolicyMLP(in_dim=int(in_dim), out_dim=int(out_dim), hidden=hidden, rng=self.rngr.get('policy'))
+        try:
+            if old_policy is not None and hasattr(old_policy, "state_dict") and hasattr(new_policy, "load_state_dict"):
+                src_sd = old_policy.state_dict()
+                dst_sd = new_policy.state_dict()
+                merged = self._copy_state_overlap(src_sd, dst_sd)
+                new_policy.load_state_dict(merged, strict=False)
+        except Exception:
+            pass
+        self.policy = new_policy
+
+    def _project_obs_to_dim(self, obs: np.ndarray, target_dim: int) -> np.ndarray:
+        arr = np.asarray(obs, dtype=np.float32).ravel()
+        tgt = int(max(1, target_dim))
+        if arr.size == tgt:
+            return arr.astype(np.float32, copy=False)
+        if not bool(self._observation_adapter_cfg.get("enabled", True)):
+            out = np.zeros((tgt,), dtype=np.float32)
+            take = min(arr.size, tgt)
+            if take > 0:
+                out[:take] = arr[:take]
+            return out
+        if (
+            self._obs_adapter_W is None
+            or int(self._obs_adapter_in_dim) != int(arr.size)
+            or int(self._obs_adapter_out_dim) != int(tgt)
+        ):
+            rng = self.rngr.get("obs_adapter")
+            scale = 1.0 / max(1.0, float(np.sqrt(max(1, arr.size))))
+            self._obs_adapter_W = rng.normal(0.0, scale, size=(int(arr.size), int(tgt))).astype(np.float32)
+            self._obs_adapter_in_dim = int(arr.size)
+            self._obs_adapter_out_dim = int(tgt)
+            sig = (int(arr.size), int(tgt))
+            if sig != self._obs_adapter_last_sig:
+                self._log_runtime_event("obs_adapter", in_dim=int(arr.size), out_dim=int(tgt), mode="project")
+                self._obs_adapter_last_sig = sig
+        x = arr
+        try:
+            eps = float(max(1e-9, self._observation_adapter_cfg.get("projection_eps", 1e-6)))
+            mu = float(np.mean(x)) if x.size > 0 else 0.0
+            sd = float(np.std(x)) if x.size > 0 else 0.0
+            x = (x - mu) / (sd + eps)
+        except Exception:
+            pass
+        try:
+            out = np.tanh(x @ self._obs_adapter_W).astype(np.float32)
+            return out
+        except Exception:
+            out = np.zeros((tgt,), dtype=np.float32)
+            take = min(arr.size, tgt)
+            if take > 0:
+                out[:take] = arr[:take]
+            return out
+
+    def _policy_obs_adapted(self) -> np.ndarray:
+        raw = self._policy_obs()
+        raw = np.asarray(raw, dtype=np.float32).ravel()
+        target_cfg = int(max(0, int(self._observation_adapter_cfg.get("target_policy_dim", 0))))
+        policy_dim = int(getattr(getattr(self, "policy", None), "in_dim", 0) or 0)
+        if policy_dim > 0:
+            target = policy_dim
+        elif target_cfg > 0:
+            target = target_cfg
+        else:
+            target = int(raw.size)
+        return self._project_obs_to_dim(raw, target_dim=target)
+
+    def _maybe_adaptive_feature_bank_growth(self) -> Optional[Dict[str, Any]]:
+        if getattr(self, "feature_bank", None) is None:
+            return None
+        if not hasattr(self.feature_bank, "adaptive_grow"):
+            return None
+        try:
+            proposal = self.feature_bank.adaptive_grow(float(self.t), self, apply=False)
+            if not proposal:
+                return None
+            new_dim = int(proposal.get("new_max_dim", getattr(self.feature_bank, "max_dim", 0)))
+            new_embed = int(proposal.get("new_embed_dim", getattr(self.feature_bank, "embed_dim", 0)))
+            applied = self.grow_feature_bank(new_max_dim=new_dim, new_embed_dim=new_embed, force=True)
+            proposal["applied"] = bool(applied)
+            return proposal
+        except Exception:
+            return None
+
     def _update_visualization(self):
         phi = 0.0
         if len(self.log_buffer) > 0:
@@ -12826,7 +13435,9 @@ class M3ConsciousnessCore:
         som_stats = self.growing_som.get_statistics()
         meta_awareness = self.self_model.meta_awareness if hasattr(self.self_model, 'meta_awareness') else 0.0
         knows_it_knows = self.self_model.knows_it_knows if hasattr(self.self_model, 'knows_it_knows') else False
+        phi_policy = self._phi_threshold_policy()
         system_state = {'phi': phi, 'meta_awareness': meta_awareness, 'strange_loop': knows_it_knows, 'energy': self.energy_ctrl.cognitive_energy, 'qualia': {'arousal': self.qualia.arousal, 'valence': self.qualia.valence, 'entropy': self.qualia.entropy, 'engagement': self.qualia.engagement, 'frustration': self.qualia.frustration}, 'unity': self.unified_subject.unity_score, 'memories': mem_stats['total_memories'], 'memory_consolidation': mem_stats['avg_consolidation'], 'current_experience': current_experience, 'neuron_count': som_stats.get('neuron_count', 4), 'connection_count': som_stats.get('connection_count', 4), 'growth_events': som_stats.get('growth_events', 0), 'u_matrix': self.U, 'timestamp': self.t, 'vision_mode': getattr(self, 'vision_mode', 'internal')}
+        system_state['phi_policy'] = dict(phi_policy)
         system_state['pred_err_map'] = self._scope_build_pred_err_map()
         # Self-vision Phase 2: foveated retina + disparity/flow-based depth
         try:
@@ -12910,11 +13521,17 @@ class M3ConsciousnessCore:
             if not hasattr(self, '_loop_announced'):
                 self.visualizer.add_major_event('STRANGE LOOP EMERGED!')
                 self._loop_announced = True
-        # Lowered High-  announcement threshold to surface variability earlier
-        if phi > 0.05 and self.t > 0:
-            if not hasattr(self, '_high_phi_announced'):
-                self.visualizer.add_major_event(f'High  : {phi:.3f}')
-                self._high_phi_announced = True
+        ann_thr = float(phi_policy.get("announce_high", phi_policy.get("high", 0.5)))
+        ann_hys = float(max(0.0, self._adaptive_threshold_cfg.get("announce_hysteresis", 0.02)))
+        ann_cd = int(max(0, self._adaptive_threshold_cfg.get("announce_cooldown", 200)))
+        if phi >= ann_thr and self.t > 0:
+            if (
+                (int(self.t) - int(self._last_phi_announce_t)) >= ann_cd
+                and float(phi - self._last_phi_announce_value) >= ann_hys
+            ):
+                self.visualizer.add_major_event(f'High phi: {phi:.3f}')
+                self._last_phi_announce_t = int(self.t)
+                self._last_phi_announce_value = float(phi)
         if mem_stats['total_memories'] == 1 and (not hasattr(self, '_first_memory')):
             self.visualizer.add_major_event('First episodic memory!')
             self._first_memory = True
@@ -15892,6 +16509,17 @@ if _GUI_AVAILABLE:
             while self.running:
                 should_continue, intensity = self.core.energy_ctrl.should_continue()
                 if not should_continue:
+                    # Energy deadlock prevention: passive recovery while halted
+                    try:
+                        self.core.energy_ctrl.update_energy(0.0)
+                    except Exception:
+                        self.core.energy_ctrl.cognitive_energy += max(
+                            0.5, self.core.energy_ctrl.recovery_rate_max * 0.3
+                        )
+                        self.core.energy_ctrl.cognitive_energy = min(
+                            self.core.energy_ctrl.cognitive_energy,
+                            self.core.energy_ctrl.energy_capacity
+                        )
                     self.core.t += 1
                     _time.sleep(0.01)
                     continue

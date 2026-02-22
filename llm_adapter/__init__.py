@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from llm_adapter.config import (
+    AutonomyRLConfig,
+    BridgeAdaptConfig,
+    DPOAutoCollectConfig,
+    EarlyStopConfig,
+    EpisodicANNConfig,
     KNNIndexConfig,
     M3AdaptiveSamplerConfig,
     M3AwareDecoderLayerConfig,
     M3EpisodicMemoryConfig,
     M3LLMConfig,
+    StabilityConfig,
+    TokenizerAutoVocabConfig,
     M3StateCacheConfig,
     M3StateEncoderConfig,
     TokenizerConfig,
@@ -35,6 +42,9 @@ from llm_adapter.m3_control_bridge import (
     GenerationQualityGate,
     QualityGateResult,
     find_decoder_layers,
+    NeuroModulator,
+    NeuroModulatorRuntime,
+    NeuroModControls,
 )
 from llm_adapter.remote import get_local_thinking
 
@@ -45,8 +55,11 @@ __all__ = [
     'ConditionalKNNIndex', 'M3EpisodicMemoryRetriever', 'KNNItem',
     'PlasticBitLinear',
     'M3ControlBridge', 'LayerGateRuntime', 'GenerationQualityGate', 'QualityGateResult', 'find_decoder_layers',
+    'NeuroModulator', 'NeuroModulatorRuntime', 'NeuroModControls',
     'get_local_thinking',
     'M3LLMConfig', 'M3StateEncoderConfig', 'M3StateCacheConfig', 'M3AwareDecoderLayerConfig', 'M3AdaptiveSamplerConfig',
     'M3EpisodicMemoryConfig', 'KNNIndexConfig', 'TokenizerConfig', 'TorchPolicyConfig',
+    'AutonomyRLConfig', 'EpisodicANNConfig', 'DPOAutoCollectConfig', 'EarlyStopConfig',
+    'BridgeAdaptConfig', 'TokenizerAutoVocabConfig', 'StabilityConfig',
     'set_global_config', 'get_global_config', 'create_default_config_file', 'load_config_from_file', 'print_config_summary', 'validate_config',
 ]

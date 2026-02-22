@@ -1,0 +1,416 @@
+import copy
+import json
+import os
+import sys
+import tempfile
+import types
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import numpy as np
+import torch
+
+# Allow direct execution: `python tests/test_m3_plan_features.py`
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from llm_adapter.config import BridgeAdaptConfig, EarlyStopConfig, TorchPolicyConfig
+from llm_adapter.llm_core import TorchConversationalPolicy
+from llm_adapter.m3_control_bridge import M3ControlBridge
+from llm_adapter.memory import M3EpisodicMemoryRetriever
+from m3.m3_core import CauseEffectStructure, ConsciousnessBus, EvolutionVisualizer, GrowingSOM
+from m3.torch_policy import MoEFFN
+
+
+def _make_policy() -> TorchConversationalPolicy:
+    os.environ["M3_USE_HF"] = "0"
+    os.environ["M3_AUTONOMY_RL_ENABLE"] = "1"
+    os.environ["M3_TRAIN_EARLY_STOP"] = "1"
+    os.environ["M3_DPO_AUTO_COLLECT"] = "1"
+    os.environ["M3_TOKENIZER_AUTO_VOCAB"] = "1"
+    os.environ["M3_BRIDGE_ONLINE_ADAPT"] = "1"
+    os.environ["M3_STABILITY_WEIGHT_DECAY"] = "0.01"
+    os.environ["M3_STABILITY_SPECTRAL_NORM"] = "0"
+    os.environ["LLM_CHECKPOINT_PATH"] = os.path.join(tempfile.gettempdir(), "missing_llm_checkpoint.pt")
+    cfg = TorchPolicyConfig(embed_dim=16, hidden_dim=32, num_layers=1, learning_rate=3e-3)
+    p = TorchConversationalPolicy(config=cfg, device="cpu")
+    p.autonomy_rl_cfg.batch_size = 1
+    p.autonomy_rl_cfg.replay_size = 64
+    p.autonomy_rl_cfg.learning_rate = 1e-3
+    p.early_stop_cfg = EarlyStopConfig(
+        enabled=True,
+        val_fraction=0.5,
+        patience=1,
+        min_delta=0.0,
+        max_epochs=5,
+        restore_best_weights=True,
+    )
+    return p
+
+
+class _DummyEpisode:
+    def __init__(self, idx: int, emb: np.ndarray):
+        self.idx = idx
+        self.embedding = emb.astype(np.float32)
+        self.affect_state = {}
+        self.drive_reduction = {}
+        self.retrieval_count = 0
+
+
+class _DummyBus:
+    def push(self, *args, **kwargs):
+        return None
+
+
+class _DummyFeatureBank:
+    embed_dim = 32
+
+    @staticmethod
+    def _hash_embed(text: str, dim: int) -> np.ndarray:
+        rng = np.random.default_rng(abs(hash(text)) % (2**32))
+        return rng.normal(0.0, 1.0, size=(dim,)).astype(np.float32)
+
+
+class _DummyCore:
+    def __init__(self):
+        self.bus = _DummyBus()
+        self.feature_bank = _DummyFeatureBank()
+        self.affect_kernel = types.SimpleNamespace(get_state=lambda: {})
+        self.drives = types.SimpleNamespace(get_drive_state=lambda: {})
+        self.qualia = types.SimpleNamespace(entropy=0.2, engagement=0.7, arousal=0.0, valence=0.1, frustration=0.0)
+
+    @staticmethod
+    def _evaluate_dialog_accuracy(prompt: str, response: str):
+        score = 0.7 if response else 0.0
+        return {"score": score, "overlap": 0.5}
+
+
+class _FakeTokenizer:
+    def __init__(self, vocab_size: int):
+        self.vocab_size = vocab_size
+
+    def __call__(self, text: str, return_tensors: str = "pt", add_special_tokens: bool = True):
+        ids = [max(1, (ord(c) % max(2, self.vocab_size - 1))) for c in (text or "x")]
+        return {"input_ids": torch.tensor([ids], dtype=torch.long)}
+
+
+class _FakeModel(torch.nn.Module):
+    def __init__(self, vocab_size: int, hidden: int = 12):
+        super().__init__()
+        self.emb = torch.nn.Embedding(vocab_size, hidden)
+        self.head = torch.nn.Linear(hidden, vocab_size)
+
+    def forward(self, input_ids=None, attention_mask=None, use_cache=False, output_hidden_states=False):
+        h = self.emb(input_ids)
+        logits = self.head(h)
+        return types.SimpleNamespace(logits=logits)
+
+
+class M3PlanFeatureTests(unittest.TestCase):
+    def test_01_q_head_rl_updates_for_speak_and_wait(self):
+        policy = _make_policy()
+        policy.autonomy_rl_cfg.gamma = 0.0
+        policy.model.q_head = torch.nn.Linear(policy.model.hidden, 2, bias=True).to(policy.device)
+        policy.model.intensity_head = torch.nn.Linear(policy.model.hidden, 1, bias=True).to(policy.device)
+        s = torch.ones((1, policy.model.hidden), dtype=torch.float32, device=policy.device)
+
+        def reset_model():
+            with torch.no_grad():
+                policy.model.q_head.weight.zero_()
+                policy.model.q_head.bias.zero_()
+                policy.model.intensity_head.weight.zero_()
+                policy.model.intensity_head.bias.zero_()
+            policy._autonomy_replay.clear()
+            wd = float(os.environ.get("M3_STABILITY_WEIGHT_DECAY", "0.01"))
+            policy._autonomy_opt = torch.optim.AdamW(
+                list(policy.model.q_head.parameters()) + list(policy.model.intensity_head.parameters()),
+                lr=0.2,
+                weight_decay=wd,
+            )
+
+        reset_model()
+        for _ in range(30):
+            policy._update_autonomy_q(s, action=1, reward=1.0, next_state_t=s, done=False)
+        q_speak_pos = float(policy.model.q_head(s).detach().cpu().numpy()[0, 1])
+
+        reset_model()
+        for _ in range(30):
+            policy._update_autonomy_q(s, action=1, reward=-1.0, next_state_t=s, done=False)
+        q_speak_neg = float(policy.model.q_head(s).detach().cpu().numpy()[0, 1])
+
+        reset_model()
+        for _ in range(30):
+            policy._update_autonomy_q(s, action=0, reward=1.0, next_state_t=s, done=False)
+        q_wait_pos = float(policy.model.q_head(s).detach().cpu().numpy()[0, 0])
+
+        reset_model()
+        for _ in range(30):
+            policy._update_autonomy_q(s, action=0, reward=-1.0, next_state_t=s, done=False)
+        q_wait_neg = float(policy.model.q_head(s).detach().cpu().numpy()[0, 0])
+
+        self.assertGreater(q_speak_pos, q_speak_neg)
+        self.assertGreater(q_wait_pos, q_wait_neg)
+
+    def test_02_ann_backend_auto_selection(self):
+        retriever = M3EpisodicMemoryRetriever()
+        retriever._supports_module = lambda m: m == "faiss"
+        retriever.set_ann_backend("auto")
+        self.assertEqual(retriever._ann_backend_name, "faiss")
+        retriever._supports_module = lambda m: m == "annoy"
+        retriever.set_ann_backend("auto")
+        self.assertEqual(retriever._ann_backend_name, "annoy")
+        retriever._supports_module = lambda m: False
+        retriever.set_ann_backend("auto")
+        self.assertEqual(retriever._ann_backend_name, "numpy")
+
+    def test_03_ann_query_matches_bruteforce_topk(self):
+        retriever = M3EpisodicMemoryRetriever()
+        retriever.set_ann_backend("numpy")
+        rng = np.random.default_rng(7)
+        episodes = [_DummyEpisode(i, rng.normal(size=(16,)).astype(np.float32)) for i in range(50)]
+        core = types.SimpleNamespace(
+            episodic_memory=types.SimpleNamespace(episodes=episodes),
+            affect_kernel=types.SimpleNamespace(get_state=lambda: {}),
+            drives=types.SimpleNamespace(get_drive_state=lambda: {}),
+            qualia=types.SimpleNamespace(entropy=0.2, engagement=0.8, arousal=0.0, valence=0.0, frustration=0.0),
+        )
+        retriever.refresh_index(core)
+        q = rng.normal(size=(16,)).astype(np.float32)
+        ann = retriever.query_candidates(q, k=8)
+        qn = q / (np.linalg.norm(q) + 1e-8)
+        sims = []
+        for ep in episodes:
+            en = ep.embedding / (np.linalg.norm(ep.embedding) + 1e-8)
+            sims.append((ep.idx, float(np.dot(qn, en))))
+        sims.sort(key=lambda x: x[1], reverse=True)
+        brute_ids = [i for i, _ in sims[:8]]
+        ann_ids = [ep.idx for ep in ann]
+        self.assertEqual(ann_ids, brute_ids)
+
+    def test_04_moe_aux_loss_penalizes_collapse(self):
+        moe = MoEFFN(d=8, d_ff=16, n_experts=4, top_k=1)
+        moe.eval()
+        x = torch.randn(128, 8)
+        with torch.no_grad():
+            moe.gate.weight.zero_()
+            moe.gate.bias.zero_()
+            moe.gate.bias[0] = 10.0
+            _, aux_c, stats_c = moe(x)
+            moe.gate.weight.normal_(0.0, 0.2)
+            moe.gate.bias.zero_()
+            _, aux_u, stats_u = moe(x)
+        self.assertGreater(float(aux_c.item()), float(aux_u.item()))
+        self.assertLess(float(stats_c["expert_usage_entropy"].item()), float(stats_u["expert_usage_entropy"].item()))
+
+    def test_05_dpo_auto_collect_from_logs(self):
+        policy = _make_policy()
+        with tempfile.TemporaryDirectory() as td:
+            chosen_path = os.path.join(td, "llm_training_data.jsonl")
+            rejected_path = os.path.join(td, "llm_training_data.rejected.jsonl")
+            chat_path = os.path.join(td, "chat_history.jsonl")
+            out_path = os.path.join(td, "llm_training_data.preference.auto.jsonl")
+            chosen = {"ts": 1000.0, "prompt_raw": "p", "response": "good answer"}
+            rejected = {"ts": 1002.0, "prompt_raw": "p", "response": "1,2,3,4,5,6,7,8,9"}
+            with open(chosen_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(chosen, ensure_ascii=False) + "\n")
+                f.write(json.dumps(chosen, ensure_ascii=False) + "\n")
+            with open(rejected_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(rejected, ensure_ascii=False) + "\n")
+            with open(chat_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"role": "user", "content": "p", "ts": 1003.0}, ensure_ascii=False) + "\n")
+                f.write(json.dumps({"role": "assistant", "content": "as an ai i cannot", "ts": 1004.0}, ensure_ascii=False) + "\n")
+            res = policy.collect_dpo_preferences_from_logs(logs_dir=td, out_path=out_path, max_pairs=8)
+            self.assertGreaterEqual(int(res["num_pairs"]), 1)
+            with open(out_path, "r", encoding="utf-8") as f:
+                lines = [ln for ln in f.read().splitlines() if ln.strip()]
+            self.assertGreaterEqual(len(lines), 1)
+            self.assertEqual(len(lines), len(set(lines)))
+
+    def test_06_supervised_early_stopping_stops_on_plateau(self):
+        policy = _make_policy()
+        pairs = [(f"p{i}", f"r{i}") for i in range(20)]
+        policy._iter_supervised_records_from_dir = lambda _d: iter(pairs)
+        policy.learn_pair = lambda _p, _r, max_len=120: None
+        policy._sequence_logprob = lambda _p, _r, max_len=120: -1.0
+        policy.early_stop_cfg = EarlyStopConfig(
+            enabled=True,
+            val_fraction=0.5,
+            patience=1,
+            min_delta=0.0,
+            max_epochs=5,
+            restore_best_weights=False,
+        )
+        res = policy.train_supervised_with_early_stopping(epochs=5, data_dir="dummy")
+        self.assertTrue(bool(res["stopped_early"]))
+        self.assertLess(int(res["epochs_run"]), 5)
+
+    def test_07_bridge_adaptation_on_off_parameter_change(self):
+        policy = _make_policy()
+        policy.bridge_adapt_cfg = BridgeAdaptConfig(
+            enabled=True,
+            learning_rate=5e-2,
+            reward_scale=1.0,
+            gate_reg=1e-3,
+            bias_reg=1e-4,
+            min_quality_score=0.0,
+            cooldown_steps=3,
+        )
+        policy._evaluate_generation_quality = lambda prompt, response, source="generate": (True, {"score": 0.8})
+        hf = types.SimpleNamespace()
+        hf.device = torch.device("cpu")
+        hf._tokenizer = _FakeTokenizer(vocab_size=24)
+        hf._model = _FakeModel(vocab_size=24, hidden=12)
+        hf._control_bridge = M3ControlBridge(
+            state_dim=4,
+            model_hidden_dim=12,
+            vocab_size=24,
+            num_layers=1,
+            prefix_len=2,
+            logit_rank=4,
+        )
+        hf._prepare_bridge_state = lambda z_m3, state_dim, device: torch.as_tensor(np.asarray(z_m3, dtype=np.float32)).view(1, -1).to(device)
+
+        before = [p.detach().clone() for p in hf._control_bridge.parameters()]
+        policy._bridge_adapt_enabled = True
+        policy._adapt_bridge_online(hf, prompt="abc", response="def", z_m3=np.ones((4,), dtype=np.float32))
+        after = [p.detach().clone() for p in hf._control_bridge.parameters()]
+        delta_on = float(sum((a - b).abs().sum().item() for a, b in zip(after, before)))
+        self.assertGreater(delta_on, 0.0)
+
+        before2 = [p.detach().clone() for p in hf._control_bridge.parameters()]
+        policy._bridge_adapt_enabled = False
+        policy._adapt_bridge_online(hf, prompt="abc", response="def", z_m3=np.ones((4,), dtype=np.float32))
+        after2 = [p.detach().clone() for p in hf._control_bridge.parameters()]
+        delta_off = float(sum((a - b).abs().sum().item() for a, b in zip(after2, before2)))
+        self.assertEqual(delta_off, 0.0)
+
+    def test_08_tokenizer_reload_and_vocab_resize_forward(self):
+        policy = _make_policy()
+        with tempfile.TemporaryDirectory() as td:
+            out_tok = os.path.join(td, "tok.json")
+            try:
+                from tokenizers import Tokenizer, decoders, models, pre_tokenizers
+                from tokenizers.trainers import BpeTrainer
+            except Exception as e:
+                self.skipTest(f"tokenizers unavailable: {e}")
+            tok = Tokenizer(models.BPE(unk_token="<|unk|>"))
+            tok.pre_tokenizer = pre_tokenizers.ByteLevel()
+            tok.decoder = decoders.ByteLevel()
+            trainer = BpeTrainer(vocab_size=200, special_tokens=policy.tok.special_tokens, show_progress=False)
+            tok.train_from_iterator(["hello world", "autonomy learning", "m3 bridge"], trainer=trainer)
+            tok.save(out_tok)
+            res = policy.reload_tokenizer_and_resize(out_tok)
+            self.assertTrue(bool(res.get("ok", False)))
+            src = torch.tensor([[policy.tok.BOS]], dtype=torch.long)
+            tgt = torch.tensor([[policy.tok.BOS]], dtype=torch.long)
+            out = policy.model(src, tgt)
+            self.assertEqual(int(out.shape[-1]), int(policy.vocab_size))
+
+    def test_09_stability_guard_skips_non_finite_and_renorms(self):
+        policy = _make_policy()
+        params = list(policy.model.parameters())
+        p0 = params[0]
+        p0.grad = torch.full_like(p0.data, float("nan"))
+        ok = policy._guarded_optimizer_step(policy.opt, params, tag="unit_non_finite")
+        self.assertFalse(ok)
+        self.assertGreater(policy._stability_skip_steps, 0)
+
+        with torch.no_grad():
+            p0.data.fill_(1e5)
+        for p in params:
+            p.grad = torch.zeros_like(p.data)
+        ok2 = policy._guarded_optimizer_step(policy.opt, params, tag="unit_finite")
+        self.assertTrue(ok2)
+        with torch.no_grad():
+            n = torch.norm(p0.data)
+            self.assertLessEqual(float(n.item()), float(policy.stability_cfg.max_weight_norm) + 0.2)
+
+    def test_10_e2e_smoke_autonomy_cycle_logs(self):
+        policy = _make_policy()
+        core = _DummyCore()
+        policy.core = core
+        with tempfile.TemporaryDirectory() as td:
+            log_path = os.path.join(td, "llm_adapter.log")
+            os.environ["LLM_ADAPTER_LOG"] = log_path
+            with torch.no_grad():
+                if getattr(policy.model.q_head, "bias", None) is not None:
+                    policy.model.q_head.bias[0].fill_(-2.0)
+                    policy.model.q_head.bias[1].fill_(2.0)
+            with mock.patch.object(policy, "generate", return_value="smoke response"), mock.patch("numpy.random.rand", return_value=0.0):
+                policy._run_autonomy_turn(cycle_count=1, autonomy_check_every=1)
+            self.assertTrue(os.path.exists(log_path))
+            with open(log_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("autonomy_rl", content)
+
+    def test_11_ann_backend_selection_dedup_keeps_state(self):
+        retriever = M3EpisodicMemoryRetriever()
+        retriever.ann_config.log_select_once = True
+        retriever._supports_module = lambda _m: False
+        retriever.set_ann_backend("auto")
+        retriever._ann_refresh_count = 7
+        retriever.set_ann_backend("auto")
+        self.assertEqual(retriever._ann_backend_name, "numpy")
+        self.assertEqual(retriever._ann_refresh_count, 7)
+
+    def test_12_consciousness_bus_priority_filter_async(self):
+        bus = ConsciousnessBus(
+            top_k=4,
+            outdir=None,
+            async_dispatch=True,
+            max_queue=32,
+            drop_policy="drop_low_priority",
+        )
+        seen = []
+        sid = bus.subscribe(lambda payload: seen.append(payload.get("id")), topic="token", min_priority=0.3)
+        bus.publish("token", {"id": "low"}, priority=0.1, async_dispatch=True)
+        bus.publish("other", {"id": "wrong_topic"}, priority=1.0, async_dispatch=True)
+        bus.publish("token", {"id": "mid"}, priority=0.5, async_dispatch=True)
+        bus.publish("token", {"id": "high"}, priority=0.9, async_dispatch=True)
+        drained = bus.drain()
+        bus.unsubscribe(sid)
+        bus.stop_async_worker()
+        self.assertGreaterEqual(int(drained), 2)
+        self.assertEqual(seen, ["high", "mid"])
+
+    def test_13_phi_threshold_policy_shared_consumers(self):
+        system_state = {
+            "u_matrix": np.zeros((4, 4), dtype=np.float32),
+            "qualia": {},
+            "current_experience": "x",
+            "memories": 0,
+            "unity": 0.5,
+            "neuron_count": 4,
+            "connection_count": 4,
+            "growth_events": 0,
+            "strange_loop": False,
+            "meta_awareness": 0.1,
+            "phi": 0.18,
+            "energy": 0.5,
+            "phi_policy": {
+                "floor": 0.01,
+                "low": 0.05,
+                "mid": 0.15,
+                "high": 0.25,
+                "very_high": 0.40,
+                "announce_high": 0.25,
+            },
+        }
+        ev = EvolutionVisualizer()
+        ev.update(dict(system_state))
+        gs = GrowingSOM(input_dim=5, initial_size=2)
+        gs.update(dict(system_state))
+        self.assertEqual(int(ev.consciousness_level), 3)
+        self.assertEqual(int(gs.consciousness_level), 3)
+
+        ces = CauseEffectStructure(n_elements=4)
+        for v in np.linspace(0.02, 0.5, num=32):
+            ces.phi_history.append(float(v))
+        lvl = ces.get_consciousness_level(0.2)
+        self.assertIn(lvl, {"(low)", "(moderate)", "(high)", "(very high)"})
+
+
+if __name__ == "__main__":
+    unittest.main()

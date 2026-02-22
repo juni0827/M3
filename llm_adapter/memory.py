@@ -2,14 +2,121 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+import json
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from llm_adapter.config import KNNIndexConfig, M3EpisodicMemoryConfig, get_global_config
+from llm_adapter.config import (
+    EpisodicANNConfig,
+    KNNIndexConfig,
+    M3EpisodicMemoryConfig,
+    get_global_config,
+)
 
 logger = logging.getLogger('llm_adapter')
+
+
+class _ANNBackendBase:
+    """Minimal ANN backend interface."""
+
+    name: str = "numpy"
+
+    def fit(self, vectors: np.ndarray) -> None:
+        raise NotImplementedError
+
+    def query(self, vector: np.ndarray, k: int) -> np.ndarray:
+        raise NotImplementedError
+
+
+class _NumpyANNBackend(_ANNBackendBase):
+    name = "numpy"
+
+    def __init__(self):
+        self._vectors = np.empty((0, 1), dtype=np.float32)
+
+    def fit(self, vectors: np.ndarray) -> None:
+        self._vectors = np.asarray(vectors, dtype=np.float32)
+        if self._vectors.ndim != 2:
+            self._vectors = self._vectors.reshape(self._vectors.shape[0], -1)
+        norms = np.linalg.norm(self._vectors, axis=1, keepdims=True) + 1e-8
+        self._vectors = self._vectors / norms
+
+    def query(self, vector: np.ndarray, k: int) -> np.ndarray:
+        if self._vectors.size == 0:
+            return np.empty((0,), dtype=np.int64)
+        q = np.asarray(vector, dtype=np.float32).reshape(-1)
+        q = q / (np.linalg.norm(q) + 1e-8)
+        sims = self._vectors @ q
+        kk = max(1, min(int(k), sims.shape[0]))
+        idx = np.argpartition(-sims, kk - 1)[:kk]
+        idx = idx[np.argsort(-sims[idx])]
+        return idx.astype(np.int64)
+
+
+class _AnnoyANNBackend(_ANNBackendBase):
+    name = "annoy"
+
+    def __init__(self, dim: int, trees: int = 10):
+        from annoy import AnnoyIndex  # type: ignore
+
+        self._dim = int(dim)
+        self._trees = int(max(1, trees))
+        self._AnnoyIndex = AnnoyIndex
+        self._index = None
+        self._n = 0
+
+    def fit(self, vectors: np.ndarray) -> None:
+        vec = np.asarray(vectors, dtype=np.float32)
+        if vec.ndim != 2:
+            vec = vec.reshape(vec.shape[0], -1)
+        self._n = int(vec.shape[0])
+        idx = self._AnnoyIndex(self._dim, metric='angular')
+        for i in range(self._n):
+            idx.add_item(i, vec[i].tolist())
+        idx.build(self._trees)
+        self._index = idx
+
+    def query(self, vector: np.ndarray, k: int) -> np.ndarray:
+        if self._index is None or self._n <= 0:
+            return np.empty((0,), dtype=np.int64)
+        kk = max(1, min(int(k), self._n))
+        q = np.asarray(vector, dtype=np.float32).reshape(-1)
+        ids = self._index.get_nns_by_vector(q.tolist(), kk, include_distances=False)
+        return np.asarray(ids, dtype=np.int64)
+
+
+class _FaissANNBackend(_ANNBackendBase):
+    name = "faiss"
+
+    def __init__(self, dim: int):
+        import faiss  # type: ignore
+
+        self._dim = int(dim)
+        self._faiss = faiss
+        self._index = faiss.IndexFlatIP(self._dim)
+        self._n = 0
+
+    def fit(self, vectors: np.ndarray) -> None:
+        vec = np.asarray(vectors, dtype=np.float32)
+        if vec.ndim != 2:
+            vec = vec.reshape(vec.shape[0], -1)
+        norms = np.linalg.norm(vec, axis=1, keepdims=True) + 1e-8
+        vec = vec / norms
+        self._index.reset()
+        self._index.add(vec)
+        self._n = int(vec.shape[0])
+
+    def query(self, vector: np.ndarray, k: int) -> np.ndarray:
+        if self._n <= 0:
+            return np.empty((0,), dtype=np.int64)
+        q = np.asarray(vector, dtype=np.float32).reshape(1, -1)
+        q = q / (np.linalg.norm(q, axis=1, keepdims=True) + 1e-8)
+        kk = max(1, min(int(k), self._n))
+        _, idx = self._index.search(q, kk)
+        return idx[0].astype(np.int64)
 
 
 class M3EpisodicMemoryRetriever:
@@ -20,8 +127,291 @@ class M3EpisodicMemoryRetriever:
     - top_k: episodic_memory.size / divisor (config.top_k_divisor)
     -  m3_param: (config.m3_param)
     """
+    _MODULE_SUPPORT_CACHE: Dict[str, bool] = {}
+
     def __init__(self, config: Optional[M3EpisodicMemoryConfig] = None):
         self.config = config or get_global_config().episodic_memory
+        self.ann_config: EpisodicANNConfig = get_global_config().episodic_ann
+        self._ann_backend: _ANNBackendBase = _NumpyANNBackend()
+        self._ann_backend_name: str = "numpy"
+        self._ann_vectors: np.ndarray = np.empty((0, 1), dtype=np.float32)
+        self._ann_episodes: List[Any] = []
+        self._ann_dim: int = 0
+        self._ann_refresh_count: int = 0
+        self._ann_last_episode_count: int = -1
+        self._ann_last_refresh_ts: float = 0.0
+        self._ann_last_query_sig: Optional[Tuple[str, int, int]] = None
+        self._ann_last_query_log_ts: float = 0.0
+        self._ann_selected_once: bool = False
+        self._ann_failed_until: Dict[str, float] = {}
+        self._ann_probe_backoff_sec: float = float(max(1.0, float(os.getenv("M3_EPISODIC_ANN_PROBE_BACKOFF_SEC", "600"))))
+        self._ann_query_log_debounce_sec: float = float(max(0.0, float(os.getenv("M3_EPISODIC_ANN_QUERY_LOG_DEBOUNCE_SEC", "1.0"))))
+        backend_name = os.getenv("M3_EPISODIC_ANN_BACKEND", self.ann_config.backend)
+        self.set_ann_backend(backend_name)
+
+    def _log_ann_event(self, event: str, **kwargs) -> None:
+        payload = {"kind": "ann_backend", "event": str(event), "t": int(time.time() * 1000)}
+        payload.update(kwargs)
+        try:
+            path = os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log")
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+    def _resolve_backend_name(self, name: Optional[str]) -> str:
+        raw = str(name or "auto").strip().lower()
+        if raw in {"np", "numpy", "bruteforce", "brute"}:
+            return "numpy"
+        if raw == "faiss":
+            return "faiss"
+        if raw == "annoy":
+            return "annoy"
+        return "auto"
+
+    def _supports_module(self, module_name: str) -> bool:
+        cache_enabled = bool(getattr(self.ann_config, "cache_backend_probe", True))
+        if cache_enabled and module_name in self._MODULE_SUPPORT_CACHE:
+            return bool(self._MODULE_SUPPORT_CACHE[module_name])
+        try:
+            __import__(module_name)
+            if cache_enabled:
+                self._MODULE_SUPPORT_CACHE[module_name] = True
+            return True
+        except Exception:
+            if cache_enabled:
+                self._MODULE_SUPPORT_CACHE[module_name] = False
+            return False
+
+    def _is_backend_blocked(self, name: str) -> bool:
+        try:
+            return float(time.time()) < float(self._ann_failed_until.get(str(name), 0.0))
+        except Exception:
+            return False
+
+    def _mark_backend_failed(self, name: str, reason: str = "") -> None:
+        key = str(name or "").strip().lower()
+        if not key:
+            return
+        self._ann_failed_until[key] = float(time.time()) + float(self._ann_probe_backoff_sec)
+        if bool(getattr(self.ann_config, "cache_backend_probe", True)):
+            self._MODULE_SUPPORT_CACHE[key] = False
+        self._log_ann_event("probe_fail", backend=key, reason=str(reason))
+
+    def _resolve_auto_backend(self) -> str:
+        if not self._is_backend_blocked("faiss") and self._supports_module("faiss"):
+            return "faiss"
+        if not self._is_backend_blocked("annoy") and self._supports_module("annoy"):
+            return "annoy"
+        return "numpy"
+
+    def set_ann_backend(self, name: str):
+        resolved = self._resolve_backend_name(name)
+        if resolved == "auto":
+            resolved = self._resolve_auto_backend()
+        log_select_once = bool(getattr(self.ann_config, "log_select_once", True))
+        if (
+            resolved == self._ann_backend_name
+            and self._ann_selected_once
+            and log_select_once
+        ):
+            if str(os.getenv("M3_EPISODIC_ANN_LOG_DEDUP", "0")).lower() in {"1", "true", "yes", "on"}:
+                self._log_ann_event(
+                    "ann_backend_dedup",
+                    backend=str(self._ann_backend_name),
+                    requested=str(name),
+                )
+            return
+        self._ann_backend_name = resolved
+        # Rebuild backend instance on next refresh to ensure right dimension.
+        self._ann_backend = _NumpyANNBackend()
+        self._ann_refresh_count = 0
+        self._ann_last_episode_count = -1
+        logger.info(
+            "ann_backend_selected name=%s env=%s",
+            self._ann_backend_name,
+            os.getenv("M3_EPISODIC_ANN_BACKEND", "auto"),
+        )
+        if (not log_select_once) or (not self._ann_selected_once):
+            self._log_ann_event(
+                "select",
+                backend=str(self._ann_backend_name),
+                requested=str(name),
+                env=str(os.getenv("M3_EPISODIC_ANN_BACKEND", "auto")),
+            )
+        self._ann_selected_once = True
+
+    def _create_backend_for_dim(self, dim: int) -> _ANNBackendBase:
+        target = self._ann_backend_name
+        if target == "faiss":
+            if self._is_backend_blocked("faiss") or not self._supports_module("faiss"):
+                target = "annoy"
+            else:
+                try:
+                    return _FaissANNBackend(dim=dim)
+                except Exception as e:
+                    self._mark_backend_failed("faiss", str(e))
+                    logger.warning("FAISS unavailable at runtime; falling back to Annoy/NumPy")
+                    target = "annoy"
+        if target == "annoy":
+            if self._is_backend_blocked("annoy") or not self._supports_module("annoy"):
+                target = "numpy"
+            else:
+                try:
+                    trees = int(max(1, getattr(self.ann_config, "annoy_trees", 10)))
+                    return _AnnoyANNBackend(dim=dim, trees=trees)
+                except Exception as e:
+                    self._mark_backend_failed("annoy", str(e))
+                    logger.warning("Annoy unavailable at runtime; falling back to NumPy")
+                    target = "numpy"
+        if target != self._ann_backend_name:
+            self._ann_backend_name = str(target)
+            self._log_ann_event("fallback_select", backend=str(target))
+        return _NumpyANNBackend()
+
+    def _maybe_log_query_event(self, total: int, candidates: int) -> None:
+        backend = str(getattr(self._ann_backend, "name", self._ann_backend_name))
+        sig = (backend, int(total), int(candidates))
+        now = float(time.time())
+        if (
+            self._ann_last_query_sig == sig
+            and (now - float(self._ann_last_query_log_ts)) < float(self._ann_query_log_debounce_sec)
+        ):
+            return
+        self._ann_last_query_sig = sig
+        self._ann_last_query_log_ts = now
+        self._log_ann_event(
+            "query",
+            backend=backend,
+            total=int(total),
+            candidates=int(candidates),
+        )
+
+    @staticmethod
+    def _dominant_dim(vectors: List[np.ndarray]) -> Optional[int]:
+        counts: Dict[int, int] = {}
+        for v in vectors:
+            if v is None:
+                continue
+            d = int(v.size)
+            counts[d] = counts.get(d, 0) + 1
+        if not counts:
+            return None
+        return max(counts.items(), key=lambda kv: kv[1])[0]
+
+    def refresh_index(self, core):
+        episodes = self._get_episode_list(core)
+        embs: List[np.ndarray] = []
+        eps: List[Any] = []
+        for ep in episodes:
+            emb = self._episode_embedding(ep)
+            if emb is None:
+                continue
+            embs.append(np.asarray(emb, dtype=np.float32).ravel())
+            eps.append(ep)
+        dim = self._dominant_dim(embs)
+        if dim is None:
+            self._ann_vectors = np.empty((0, 1), dtype=np.float32)
+            self._ann_episodes = []
+            self._ann_dim = 0
+            self._ann_refresh_count += 1
+            self._ann_last_episode_count = len(episodes)
+            return
+        filtered = []
+        filtered_eps = []
+        for ep, emb in zip(eps, embs):
+            if emb.size == dim:
+                filtered.append(emb)
+                filtered_eps.append(ep)
+        if not filtered:
+            self._ann_vectors = np.empty((0, dim), dtype=np.float32)
+            self._ann_episodes = []
+            self._ann_dim = int(dim)
+            self._ann_refresh_count += 1
+            self._ann_last_episode_count = len(episodes)
+            return
+        vec = np.stack(filtered, axis=0).astype(np.float32)
+        try:
+            self._ann_backend = self._create_backend_for_dim(int(dim))
+            self._ann_backend.fit(vec)
+            self._ann_vectors = vec
+            self._ann_episodes = filtered_eps
+            self._ann_dim = int(dim)
+            self._ann_refresh_count += 1
+            self._ann_last_episode_count = len(episodes)
+            self._ann_last_refresh_ts = float(time.time())
+            logger.debug(
+                "ann_backend_refresh backend=%s dim=%d items=%d refresh=%d",
+                getattr(self._ann_backend, "name", self._ann_backend_name),
+                self._ann_dim,
+                len(self._ann_episodes),
+                self._ann_refresh_count,
+            )
+            self._log_ann_event(
+                "refresh",
+                backend=str(getattr(self._ann_backend, "name", self._ann_backend_name)),
+                dim=int(self._ann_dim),
+                items=int(len(self._ann_episodes)),
+                refresh=int(self._ann_refresh_count),
+            )
+        except Exception as e:
+            logger.warning("ANN refresh failed (%s); using NumPy fallback", e)
+            self._ann_backend = _NumpyANNBackend()
+            self._ann_backend.fit(vec)
+            self._ann_vectors = vec
+            self._ann_episodes = filtered_eps
+            self._ann_dim = int(dim)
+            self._ann_refresh_count += 1
+            self._ann_last_episode_count = len(episodes)
+            self._log_ann_event(
+                "fallback_numpy",
+                reason=str(e),
+                dim=int(self._ann_dim),
+                items=int(len(self._ann_episodes)),
+            )
+
+    def _needs_refresh(self, core, episodes: List[Any]) -> bool:
+        n = len(episodes)
+        if n != self._ann_last_episode_count:
+            return True
+        if self._ann_dim <= 0 or len(self._ann_episodes) == 0:
+            return True
+        interval = int(max(1, getattr(self.ann_config, "rebuild_interval", 256)))
+        if self._ann_refresh_count <= 0:
+            return True
+        return (self._ann_refresh_count % interval) == 0
+
+    def query_candidates(self, vec: np.ndarray, k: int) -> List[Any]:
+        if self._ann_dim <= 0 or len(self._ann_episodes) <= 0:
+            return []
+        q = np.asarray(vec, dtype=np.float32).ravel()
+        if q.size != self._ann_dim:
+            return []
+        try:
+            idx = self._ann_backend.query(q, k=max(1, int(k)))
+        except Exception as e:
+            # Runtime backend mismatch: rebuild with NumPy fallback and retry.
+            try:
+                old_backend = str(getattr(self._ann_backend, "name", self._ann_backend_name))
+                if old_backend not in {"", "numpy"}:
+                    self._mark_backend_failed(old_backend, str(e))
+                self._ann_backend = _NumpyANNBackend()
+                self._ann_backend_name = "numpy"
+                self._ann_backend.fit(self._ann_vectors)
+                idx = self._ann_backend.query(q, k=max(1, int(k)))
+                self._log_ann_event(
+                    "runtime_fallback",
+                    from_backend=str(old_backend),
+                    to_backend="numpy",
+                    reason=str(e),
+                )
+            except Exception:
+                return []
+        out: List[Any] = []
+        for i in idx.tolist():
+            if 0 <= int(i) < len(self._ann_episodes):
+                out.append(self._ann_episodes[int(i)])
+        return out
 
     def _get_episode_list(self, core) -> List:
         if core is None or not hasattr(core, 'episodic_memory'):
@@ -181,10 +571,45 @@ class M3EpisodicMemoryRetriever:
             episodes = self._get_episode_list(core)
             if not episodes:
                 return []
+            candidates = episodes
+            min_items_for_ann = int(max(1, getattr(self.ann_config, "min_items_for_ann", 128)))
+            if len(episodes) >= min_items_for_ann:
+                try:
+                    if self._needs_refresh(core, episodes):
+                        self.refresh_index(core)
+                except Exception:
+                    pass
+                candidate_k = int(max(1, getattr(self.ann_config, "candidate_k", 64)))
+                q_for_ann = None
+                if self._ann_dim > 0:
+                    try:
+                        q = np.asarray(current_context_embedding, dtype=np.float32).ravel()
+                        if q.size == self._ann_dim:
+                            q_for_ann = q
+                    except Exception:
+                        q_for_ann = None
+                    if q_for_ann is None:
+                        try:
+                            q_qualia = self._current_qualia_vector(core)
+                            if q_qualia is not None and q_qualia.size == self._ann_dim:
+                                q_for_ann = q_qualia
+                        except Exception:
+                            q_for_ann = None
+                if q_for_ann is not None:
+                    ann_candidates = self.query_candidates(q_for_ann, k=candidate_k)
+                    if ann_candidates:
+                        candidates = ann_candidates
+                logger.debug(
+                    "ann_backend_query backend=%s total=%d candidates=%d",
+                    getattr(self._ann_backend, "name", self._ann_backend_name),
+                    len(episodes),
+                    len(candidates),
+                )
+                self._maybe_log_query_event(total=len(episodes), candidates=len(candidates))
 
             scored_episodes = []
 
-            for episode in episodes:
+            for episode in candidates:
                 try:
                     # A. Content Similarity
                     content_sim = 0.0

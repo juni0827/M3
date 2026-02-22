@@ -29,6 +29,19 @@ def _resolve_device(device: Optional[str]) -> str:
     )
 
 
+def _switch_aux_terms(logits: torch.Tensor, probs: torch.Tensor, top1_idx: torch.Tensor, n_experts: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:  # type: ignore
+    """Switch-style load balance + router z-loss + usage stats."""
+    p = probs.reshape(-1, int(n_experts))
+    mean_prob = p.mean(dim=0)
+    assign = F.one_hot(top1_idx.reshape(-1), num_classes=int(n_experts)).float()
+    mean_assign = assign.mean(dim=0)
+    aux_lb = float(n_experts) * torch.sum(mean_prob * mean_assign)
+    z_loss = torch.mean(logits.reshape(-1, int(n_experts)) ** 2)
+    entropy = -torch.sum(mean_assign * torch.log(mean_assign + 1e-8))
+    max_load = torch.max(mean_assign)
+    return aux_lb, z_loss, entropy, max_load
+
+
 # Shared representation (MoE-MLP)
 class _Expert(nn.Module):
     def __init__(self, d: int, d_ff: int):
@@ -46,9 +59,17 @@ class _MoEFFN(nn.Module):
         self.top_k = int(max(1, top_k))
         self.gate = nn.Linear(d, n_experts)
         self.experts = nn.ModuleList([_Expert(d, d_ff) for _ in range(n_experts)])
+        self.router_noise_std = float(os.getenv("M3_MOE_ROUTER_NOISE_STD", "0.02"))
+        self.router_z_loss_coef = float(os.getenv("M3_MOE_ROUTER_Z_LOSS_COEF", "0.001"))
+        self.last_aux_lb = 0.0
+        self.last_router_z_loss = 0.0
+        self.last_expert_usage_entropy = 0.0
+        self.last_max_expert_load = 0.0
 
     def forward(self, x: torch.Tensor) -> torch.Tensor: # type: ignore
         logits = self.gate(x)
+        if self.training and self.router_noise_std > 0:
+            logits = logits + torch.randn_like(logits) * float(self.router_noise_std)
         probs = F.softmax(logits, dim=-1)
         topv, topi = torch.topk(probs, k=min(self.top_k, self.n_experts), dim=-1)
         y = torch.zeros_like(x)
@@ -61,6 +82,17 @@ class _MoEFFN(nn.Module):
                     xe = x[m]
                     ye = self.experts[e](xe)
                     y[m] = y[m] + w[m] * ye
+        try:
+            aux_lb, z_loss, entropy, max_load = _switch_aux_terms(logits, probs, topi[:, 0], self.n_experts)
+            self.last_aux_lb = float(aux_lb.detach().item())
+            self.last_router_z_loss = float(z_loss.detach().item())
+            self.last_expert_usage_entropy = float(entropy.detach().item())
+            self.last_max_expert_load = float(max_load.detach().item())
+        except Exception:
+            self.last_aux_lb = 0.0
+            self.last_router_z_loss = 0.0
+            self.last_expert_usage_entropy = 0.0
+            self.last_max_expert_load = 0.0
         return y
 
 
@@ -109,12 +141,15 @@ class MoEFFN(nn.Module):
         self.top_k = top_k
         self.experts = nn.ModuleList([Expert(d, d_ff) for _ in range(n_experts)])
         self.gate = nn.Linear(d, n_experts)
+        self.router_noise_std = float(os.getenv("M3_MOE_ROUTER_NOISE_STD", "0.02"))
+        self.router_z_loss_coef = float(os.getenv("M3_MOE_ROUTER_Z_LOSS_COEF", "0.001"))
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]: # pyright: ignore[reportInvalidTypeForm]
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]: # pyright: ignore[reportInvalidTypeForm]
         logits = self.gate(x)
+        if self.training and self.router_noise_std > 0:
+            logits = logits + torch.randn_like(logits) * float(self.router_noise_std)
         probs = F.softmax(logits, dim=-1)
         topk_vals, topk_idx = torch.topk(probs, k=min(self.top_k, self.n_experts), dim=-1)
-        lb = (probs.mean(dim=0) ** 2).sum() * float(self.n_experts)
         y = torch.zeros_like(x)
         for k in range(topk_vals.size(-1)):
             idx = topk_idx[:, k]
@@ -125,7 +160,15 @@ class MoEFFN(nn.Module):
                     xe = x[mask]
                     ye = self.experts[e](xe)
                     y[mask] = y[mask] + w[mask] * ye
-        return y, lb
+        aux_lb, z_loss, entropy, max_load = _switch_aux_terms(logits, probs, topk_idx[:, 0], self.n_experts)
+        aux = aux_lb + float(self.router_z_loss_coef) * z_loss
+        stats = {
+            "expert_usage_entropy": entropy.detach(),
+            "max_expert_load": max_load.detach(),
+            "aux_lb": aux_lb.detach(),
+            "router_z_loss": z_loss.detach(),
+        }
+        return y, aux, stats
 
 
 class PolicyModel(nn.Module):
@@ -143,15 +186,30 @@ class PolicyModel(nn.Module):
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: # pyright: ignore[reportInvalidTypeForm]
         h = self.proj_in(x)
         lb_loss = h.new_tensor(0.0)
+        ent_sum = h.new_tensor(0.0)
+        max_load = h.new_tensor(0.0)
+        n_moe = 0
         for ff in self.layers:
             h_in = h
-            h_ff, lb = ff(h)
+            h_ff, lb, stats = ff(h)
             h = h_in + h_ff
             lb_loss = lb_loss + lb
+            if isinstance(stats, dict):
+                if "expert_usage_entropy" in stats:
+                    ent_sum = ent_sum + stats["expert_usage_entropy"]
+                if "max_expert_load" in stats:
+                    max_load = torch.maximum(max_load, stats["max_expert_load"])
+                n_moe += 1
         h = self.norm(h)
         mu = self.head_mu(h)
         v = self.head_v(h).squeeze(-1)
         sigma = self.log_sigma.exp().clamp_min(1e-3)
+        if n_moe > 0:
+            self.last_expert_usage_entropy = ent_sum / float(n_moe)
+            self.last_max_expert_load = max_load
+        else:
+            self.last_expert_usage_entropy = h.new_tensor(0.0)
+            self.last_max_expert_load = h.new_tensor(0.0)
         return mu, v, sigma, lb_loss
 
 
@@ -186,12 +244,16 @@ class TorchPolicy:
         
         self.model = PolicyModel(total_in_dim, out_dim, d_model=d_model, n_layers=n_layers,
                                  n_experts=n_experts, d_ff=d_ff, top_k=top_k).to(self.device)
-        self.optim = torch.optim.AdamW(self.model.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=0.1)
+        wd = float(os.environ.get("M3_STABILITY_WEIGHT_DECAY", "0.1"))
+        self.optim = torch.optim.AdamW(self.model.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=wd)
         self.scaler = GradScaler(enabled=(self.device.type == 'cuda'))
         self.storage: List[RolloutItem] = []
         self.shared_repr = shared_repr.to(self.device) if shared_repr is not None else None
         self._last_kl: float = 0.0
         self._last_clipped: bool = False
+        self._last_expert_usage_entropy: float = 0.0
+        self._last_max_expert_load: float = 0.0
+        self._stability_skip_steps: int = 0
 
     @property
     def sigma(self) -> float:
@@ -300,15 +362,43 @@ class TorchPolicy:
             if self.device.type == 'cuda':
                 self.scaler.unscale_(self.optim)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.scaler.step(self.optim)
+            finite_ok = True
+            for p in self.model.parameters():
+                if p.grad is not None and not torch.isfinite(p.grad).all():
+                    finite_ok = False
+                    break
+                if not torch.isfinite(p.data).all():
+                    finite_ok = False
+                    break
+            if finite_ok:
+                self.scaler.step(self.optim)
+            else:
+                self._stability_skip_steps += 1
             self.scaler.update()
             self.optim.zero_grad(set_to_none=True)
+            if finite_ok:
+                max_w = float(os.environ.get("M3_STABILITY_MAX_WEIGHT_NORM", "10.0"))
+                with torch.no_grad():
+                    for p in self.model.parameters():
+                        if p.ndim <= 1:
+                            continue
+                        n = p.data.norm()
+                        if torch.isfinite(n) and float(n.item()) > max_w:
+                            p.data.mul_(max_w / (n + 1e-8))
             approx_kl = torch.mean(old_logp - logp).item()
             clip_frac = torch.mean((torch.abs(ratio - 1.0) > clip_range).float()).item()
             last_approx_kl = approx_kl
             last_clip_frac = clip_frac
             if approx_kl > float(target_kl):
                 break
+        try:
+            self._last_expert_usage_entropy = float(getattr(self.model, "last_expert_usage_entropy", torch.tensor(0.0)).detach().item())
+        except Exception:
+            self._last_expert_usage_entropy = 0.0
+        try:
+            self._last_max_expert_load = float(getattr(self.model, "last_max_expert_load", torch.tensor(0.0)).detach().item())
+        except Exception:
+            self._last_max_expert_load = 0.0
         self._last_kl = float(last_approx_kl)
         self._last_clipped = bool(last_clip_frac > 0.0)
         self.storage.clear()
@@ -317,7 +407,10 @@ class TorchPolicy:
             'policy_loss': float(policy_loss.item()),
             'value_loss': float(value_loss.item()),
             'approx_kl': float(last_approx_kl),
-            'clip_frac': float(last_clip_frac)
+            'clip_frac': float(last_clip_frac),
+            'expert_usage_entropy': float(self._last_expert_usage_entropy),
+            'max_expert_load': float(self._last_max_expert_load),
+            'stability_skip_steps': float(self._stability_skip_steps),
         }
 
     def update(self, batch=None) -> Dict[str, float]:
