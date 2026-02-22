@@ -34,6 +34,8 @@ import json
 import numpy as np
 import logging
 import re
+import hashlib
+import copy
 from logging.handlers import RotatingFileHandler
 from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
 import threading
@@ -89,6 +91,11 @@ except Exception:
 
 try:
     from .config import (
+        AutonomyRLConfig,
+        BridgeAdaptConfig,
+        DPOAutoCollectConfig,
+        EarlyStopConfig,
+        EpisodicANNConfig,
         KNNIndexConfig,
         M3AdaptiveSamplerConfig,
         M3AwareDecoderLayerConfig,
@@ -96,6 +103,8 @@ try:
         M3LLMConfig,
         M3StateCacheConfig,
         M3StateEncoderConfig,
+        StabilityConfig,
+        TokenizerAutoVocabConfig,
         TokenizerConfig,
         TorchPolicyConfig,
         get_global_config,
@@ -105,6 +114,11 @@ try:
 except Exception:
     # Support running file directly (script) where package-relative imports fail
     from llm_adapter.config import (
+        AutonomyRLConfig,
+        BridgeAdaptConfig,
+        DPOAutoCollectConfig,
+        EarlyStopConfig,
+        EpisodicANNConfig,
         KNNIndexConfig,
         M3AdaptiveSamplerConfig,
         M3AwareDecoderLayerConfig,
@@ -112,6 +126,8 @@ except Exception:
         M3LLMConfig,
         M3StateCacheConfig,
         M3StateEncoderConfig,
+        StabilityConfig,
+        TokenizerAutoVocabConfig,
         TokenizerConfig,
         TorchPolicyConfig,
         get_global_config,
@@ -125,6 +141,8 @@ try:
         LayerGateRuntime,
         GenerationQualityGate,
         find_decoder_layers,
+        NeuroModulator,
+        NeuroModulatorRuntime,
     )
 except Exception:
     try:
@@ -133,11 +151,15 @@ except Exception:
             LayerGateRuntime,
             GenerationQualityGate,
             find_decoder_layers,
+            NeuroModulator,
+            NeuroModulatorRuntime,
         )
     except Exception:
         M3ControlBridge = None  # type: ignore
         LayerGateRuntime = None  # type: ignore
         GenerationQualityGate = None  # type: ignore
+        NeuroModulator = None  # type: ignore
+        NeuroModulatorRuntime = None  # type: ignore
         def find_decoder_layers(_model):  # type: ignore
             return []
 
@@ -801,6 +823,11 @@ class HFBackend:
         self._control_bridge_state_dim = 0
         self._control_bridge_layers = []
         self._decode_term_cache = {}
+        # NeuroModulator: weight-level M3 consciousness control
+        self._neuro_modulator = None
+        self._neuro_runtime = None
+        self._neuro_mod_opt = None
+        self._neuro_mod_state_dim = 0
 
     def _ensure_loaded(self):
         if self._loaded:
@@ -1013,6 +1040,62 @@ class HFBackend:
             self._control_bridge_layers = list(layers)
         return self._control_bridge
 
+    def _neuro_enabled(self) -> bool:
+        """True when NeuroModulator weight-level control is active."""
+        return (
+            NeuroModulator is not None
+            and os.getenv('M3_ENABLE_NEURO_MODULATOR', '0').lower()
+            in ('1', 'true', 'yes', 'on')
+        )
+
+    def _ensure_neuro_modulator(self, state_dim: int):
+        """Lazy-create and return the NeuroModulator instance."""
+        if NeuroModulator is None:
+            return None
+        try:
+            state_dim = int(max(8, state_dim))
+        except Exception:
+            state_dim = 256
+        if (
+            self._neuro_modulator is not None
+            and self._neuro_mod_state_dim == state_dim
+        ):
+            return self._neuro_modulator
+
+        layers = find_decoder_layers(self._model) if self._model is not None else []
+        num_layers = max(1, len(layers))
+        try:
+            hidden_rank = int(os.getenv('M3_NEURO_HIDDEN_RANK', '16'))
+            logit_rank = int(os.getenv('M3_NEURO_LOGIT_RANK', '32'))
+            trunk_dim = int(os.getenv('M3_NEURO_TRUNK_DIM', '256'))
+        except Exception:
+            hidden_rank, logit_rank, trunk_dim = 16, 32, 256
+
+        self._neuro_modulator = NeuroModulator(
+            state_dim=state_dim,
+            num_layers=num_layers,
+            model_hidden_dim=int(self.hidden_dim or 1024),
+            vocab_size=int(self.vocab_size or 32000),
+            trunk_dim=trunk_dim,
+            hidden_rank=hidden_rank,
+            logit_rank=logit_rank,
+        ).to(self.device)
+        self._neuro_modulator.eval()
+        self._neuro_mod_state_dim = state_dim
+
+        try:
+            lr = float(os.getenv('M3_NEUROMOD_LR', '1e-4'))
+        except Exception:
+            lr = 1e-4
+        self._neuro_mod_opt = torch.optim.Adam(
+            self._neuro_modulator.parameters(), lr=lr, weight_decay=1e-5
+        )
+        logging.getLogger('llm_adapter').info(
+            f'[HFBackend] NeuroModulator created: layers={num_layers}, '
+            f'state_dim={state_dim}, hidden_rank={hidden_rank}'
+        )
+        return self._neuro_modulator
+
     def _prepare_bridge_state(self, z_m3, state_dim: int, device):
         if z_m3 is None:
             return None
@@ -1205,6 +1288,49 @@ class HFBackend:
             pass
         return temperature, top_k, top_p
 
+    @staticmethod
+    def _repeat_ngram_blocklist(token_ids: List[int], ngram_size: int) -> List[int]:
+        n = int(max(0, ngram_size))
+        if n < 2 or len(token_ids) < n - 1:
+            return []
+        prefix = tuple(int(t) for t in token_ids[-(n - 1):])
+        blocked: set[int] = set()
+        lim = len(token_ids) - (n - 1)
+        for i in range(max(0, lim)):
+            if tuple(int(x) for x in token_ids[i:i + n - 1]) == prefix:
+                nxt = int(token_ids[i + n - 1])
+                blocked.add(nxt)
+        return sorted(blocked)
+
+    @staticmethod
+    def _has_suffix_loop(token_ids: List[int], min_span: int = 2, repeat_count: int = 3) -> bool:
+        if len(token_ids) < int(min_span * repeat_count):
+            return False
+        max_span = min(16, len(token_ids) // int(max(2, repeat_count)))
+        for span in range(int(max(2, min_span)), int(max_span) + 1):
+            seq = token_ids[-span:]
+            ok = True
+            for r in range(2, int(repeat_count) + 1):
+                st = -r * span
+                en = -(r - 1) * span
+                if token_ids[st:en] != seq:
+                    ok = False
+                    break
+            if ok:
+                return True
+        return False
+
+    @staticmethod
+    def _token_repetition_risk(token_ids: List[int], window: int = 24) -> float:
+        if not token_ids:
+            return 0.0
+        tail = token_ids[-max(4, int(window)):]
+        uniq_ratio = float(len(set(tail))) / float(max(1, len(tail)))
+        risk = max(0.0, min(1.0, 1.0 - uniq_ratio))
+        if HFBackend._has_suffix_loop(tail):
+            risk = min(1.0, risk + 0.35)
+        return float(risk)
+
     # ------------------------------------------------------------------ #
     #  Core generation with M3 control hooks                              #
     # ------------------------------------------------------------------ #
@@ -1380,9 +1506,54 @@ class HFBackend:
                 bridge_controls = None
                 bridge_runtime = None
 
+        # NeuroModulator: weight-level M3 consciousness control
+        neuro_controls = None
+        neuro_runtime = None
+        if self._neuro_enabled() and z_m3 is not None:
+            try:
+                try:
+                    neuro_state_dim = int(os.getenv('M3_NEURO_STATE_DIM', '256'))
+                except Exception:
+                    neuro_state_dim = 256
+                neuro_mod = self._ensure_neuro_modulator(state_dim=neuro_state_dim)
+                z_neuro = self._prepare_bridge_state(
+                    z_m3, state_dim=neuro_state_dim, device=self.device
+                )
+                if neuro_mod is not None and z_neuro is not None:
+                    try:
+                        neuro_strength = float(os.getenv('M3_NEURO_STRENGTH', '1.0'))
+                    except Exception:
+                        neuro_strength = 1.0
+                    with _torch.no_grad():
+                        neuro_controls = neuro_mod(z_neuro, strength=neuro_strength)
+                    layers = find_decoder_layers(self._model)
+                    if layers and NeuroModulatorRuntime is not None:
+                        neuro_runtime = NeuroModulatorRuntime(layers)
+                        neuro_runtime.apply(neuro_controls)
+            except Exception as e:
+                logging.getLogger('llm_adapter').debug(
+                    f'[HFBackend] neuro modulator skipped: {e}'
+                )
+                neuro_controls = None
+                neuro_runtime = None
+
         generated_ids: list = []
         past_key_values = None
         forbidden_token_ids = self._resolve_forbidden_token_ids(decode_control)
+        try:
+            no_repeat_ngram = int(os.getenv("M3_HF_NO_REPEAT_NGRAM", "4"))
+        except Exception:
+            no_repeat_ngram = 4
+        try:
+            no_repeat_penalty = float(os.getenv("M3_HF_NO_REPEAT_PENALTY", "1e9"))
+        except Exception:
+            no_repeat_penalty = 1e9
+        try:
+            suffix_repeat_stop = int(os.getenv("M3_HF_SUFFIX_REPEAT_STOP", "3"))
+        except Exception:
+            suffix_repeat_stop = 3
+        rep_temp_scale = 1.0
+        rep_top_p_scale = 1.0
         try:
             forbidden_penalty = float(decode_control.get("forbidden_penalty", 0.0)) if decode_control else 0.0
         except Exception:
@@ -1424,6 +1595,17 @@ class HFBackend:
             # M3ControlBridge logit bias
             logits = self._apply_bridge_logit_bias(logits, bridge_controls)
 
+            # NeuroModulator logit bias
+            if neuro_controls is not None and neuro_controls.logit_bias is not None:
+                try:
+                    _nlb = neuro_controls.logit_bias
+                    if _nlb.shape[-1] == logits.shape[-1]:
+                        logits = logits + _nlb.to(
+                            device=logits.device, dtype=logits.dtype
+                        )
+                except Exception:
+                    pass
+
             # === M3 CONTROL 1: Token-Critic Q-value injection ===
             logits = self._apply_token_value_injection(
                 logits=logits,
@@ -1437,6 +1619,13 @@ class HFBackend:
                     logits[:, forbidden_token_ids] = logits[:, forbidden_token_ids] - float(forbidden_penalty)
                 except Exception:
                     pass
+            if no_repeat_ngram >= 2:
+                blocked_ids = self._repeat_ngram_blocklist(generated_ids, ngram_size=no_repeat_ngram)
+                if blocked_ids:
+                    try:
+                        logits[:, blocked_ids] = logits[:, blocked_ids] - float(no_repeat_penalty)
+                    except Exception:
+                        pass
 
             # === M3 CONTROL 2: Adaptive sampling from core state ===
             temperature, top_k, top_p = self._compute_sample_params(
@@ -1452,6 +1641,11 @@ class HFBackend:
                 top_p=top_p,
                 decode_control=decode_control,
             )
+            # Repetition-risk dampening: lower entropy when loop risk rises.
+            temperature = float(max(0.08, float(temperature) * float(rep_temp_scale)))
+            top_p = float(np.clip(float(top_p) * float(rep_top_p_scale), 0.05, 1.0))
+            if int(top_k) > 0:
+                top_k = int(max(1, int(float(top_k) * float(rep_top_p_scale))))
             next_token, sample_meta = self._sample_next_token(
                 logits=logits,
                 temperature=temperature,
@@ -1463,6 +1657,15 @@ class HFBackend:
             if token_id == self._tokenizer.eos_token_id:
                 break
             generated_ids.append(token_id)
+            rep_risk = self._token_repetition_risk(generated_ids, window=24)
+            if rep_risk > 0.25:
+                rep_temp_scale = max(0.55, float(rep_temp_scale) * 0.93)
+                rep_top_p_scale = max(0.60, float(rep_top_p_scale) * 0.95)
+            else:
+                rep_temp_scale = min(1.0, float(rep_temp_scale) * 1.01)
+                rep_top_p_scale = min(1.0, float(rep_top_p_scale) * 1.01)
+            if self._has_suffix_loop(generated_ids, min_span=2, repeat_count=max(2, int(suffix_repeat_stop))):
+                break
 
             # KV-cache: feed only the new token
             input_ids = next_token
@@ -1475,6 +1678,11 @@ class HFBackend:
         if bridge_runtime is not None:
             try:
                 bridge_runtime.close()
+            except Exception:
+                pass
+        if neuro_runtime is not None:
+            try:
+                neuro_runtime.close()
             except Exception:
                 pass
 
@@ -1511,6 +1719,15 @@ DEFAULT_SYSTEM_PROMPT = (
     "Do not report phi/qualia/state values unless the user explicitly asks for them. "
     "Be concise and factual. Reply in the user's language."
 )
+
+# Feature defaults (all are overrideable by explicit environment values)
+os.environ.setdefault("M3_AUTONOMY_RL_ENABLE", "1")
+os.environ.setdefault("M3_EPISODIC_ANN_BACKEND", "auto")
+os.environ.setdefault("M3_DPO_AUTO_COLLECT", "1")
+os.environ.setdefault("M3_TRAIN_EARLY_STOP", "1")
+os.environ.setdefault("M3_BRIDGE_ONLINE_ADAPT", "1")
+os.environ.setdefault("M3_TOKENIZER_AUTO_VOCAB", "1")
+
 if not logger.handlers:
     level = logging.DEBUG if os.environ.get('LLM_ADAPTER_DEBUG', '0') in ('1', 'true', 'TRUE') else logging.WARNING
     handler = None
@@ -1587,6 +1804,14 @@ class TorchConversationalPolicy:
         
         # Load configuration
         self.config = config or get_global_config().torch_policy
+        full_cfg = get_global_config()
+        self.autonomy_rl_cfg: AutonomyRLConfig = full_cfg.autonomy_rl
+        self.ann_cfg: EpisodicANNConfig = full_cfg.episodic_ann
+        self.dpo_auto_cfg: DPOAutoCollectConfig = full_cfg.dpo_auto_collect
+        self.early_stop_cfg: EarlyStopConfig = full_cfg.early_stop
+        self.bridge_adapt_cfg: BridgeAdaptConfig = full_cfg.bridge_adapt
+        self.tokenizer_auto_cfg: TokenizerAutoVocabConfig = full_cfg.tokenizer_auto_vocab
+        self.stability_cfg: StabilityConfig = full_cfg.stability
         embed_dim = self.config.embed_dim
         hidden = self.config.hidden_dim
         lr = self.config.learning_rate
@@ -1795,9 +2020,43 @@ class TorchConversationalPolicy:
         self.core = None
         
         self.criterion = self.torch.nn.CrossEntropyLoss(ignore_index=self.tok.PAD)
-        self.opt = self.torch.optim.Adam(self.model.parameters(), lr=lr)
+        wd = float(os.getenv("M3_STABILITY_WEIGHT_DECAY", str(self.stability_cfg.weight_decay)))
+        os.environ.setdefault("M3_STABILITY_WEIGHT_DECAY", str(wd))
+        os.environ.setdefault(
+            "M3_STABILITY_SPECTRAL_NORM",
+            "1" if bool(self.stability_cfg.spectral_norm) else "0",
+        )
+        self.opt = self.torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=wd)
         self.value_opt = None  # lazy init for value-head training
         self.token_value_opt = None  # lazy init for token-value-head training
+        self._autonomy_opt = self.torch.optim.AdamW(
+            list(self.model.q_head.parameters()) + list(self.model.intensity_head.parameters()),
+            lr=float(self.autonomy_rl_cfg.learning_rate),
+            weight_decay=wd,
+        )
+        self._bridge_adapt_opt = None
+        self._bridge_adapt_fail_streak = 0
+        self._bridge_adapt_step = 0
+        self._bridge_adapt_enabled = str(os.getenv("M3_BRIDGE_ONLINE_ADAPT", "1")).lower() in ("1", "true", "yes", "on")
+        self._autonomy_replay: deque = deque(maxlen=max(64, int(self.autonomy_rl_cfg.replay_size)))
+        self._autonomy_recent_embeddings: deque = deque(maxlen=max(4, int(self.autonomy_rl_cfg.novelty_window)))
+        self._autonomy_recent_actions: deque = deque(maxlen=256)
+        self._autonomy_recent_lambda: deque = deque(maxlen=256)
+        self._autonomy_credit_ema: float = 0.0
+        self._autonomy_reward_ema: float = 0.0
+        self._autonomy_running: bool = str(os.getenv("M3_AUTONOMY_RL_ENABLE", "1")).lower() in ("1", "true", "yes", "on")
+        self._autonomy_last_diag: Dict[str, float] = {}
+        self._autonomy_head_mode: str = "plastic"
+        self._autonomy_last_lambda: float = 0.0
+        self._autonomy_state_raw_dim: int = 18
+        self._autonomy_state_proj = self.torch.nn.Linear(self._autonomy_state_raw_dim, int(self.model.hidden)).to(self.device)
+        self._tokenizer_rebuilds: int = int(getattr(self.tok, "_rebuild_count", 0))
+        self._stability_nonfinite_streak: Dict[str, int] = {}
+        self._stability_step_count: int = 0
+        self._stability_token_head_frozen_until: int = 0
+        self._stability_skip_steps: int = 0
+        self.set_autonomy_heads("linear" if bool(getattr(self.autonomy_rl_cfg, "use_linear_heads", True)) else "plastic")
+        self._apply_stability_policies()
         # Lock to serialize learn_pair calls to avoid concurrent in-place modifications
         self._learn_lock = threading.Lock()
         # Training data recording
@@ -1873,6 +2132,324 @@ class TorchConversationalPolicy:
         control_window = max(8, int(os.getenv("M3_CONTROL_HEALTH_WINDOW", "24")))
         self._control_health_window = deque(maxlen=control_window)
         self._auto_mode_fail_streak = 0
+
+    def _env_flag(self, name: str, default: bool = False) -> bool:
+        raw = os.getenv(name, "1" if default else "0")
+        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+    def _apply_stability_policies(self) -> None:
+        enabled = self._env_flag("M3_STABILITY_SPECTRAL_NORM", bool(self.stability_cfg.spectral_norm))
+        if not enabled:
+            return
+        try:
+            from torch.nn.utils import spectral_norm
+        except Exception:
+            return
+        for module in self.model.modules():
+            try:
+                if not isinstance(module, self.torch.nn.Linear):
+                    continue
+                if hasattr(module, "weight_u"):
+                    continue
+                spectral_norm(module)
+            except Exception:
+                continue
+
+    def _autonomy_params(self):
+        params = []
+        try:
+            params.extend(list(self.model.q_head.parameters()))
+        except Exception:
+            pass
+        try:
+            params.extend(list(self.model.intensity_head.parameters()))
+        except Exception:
+            pass
+        try:
+            params.extend(list(self._autonomy_state_proj.parameters()))
+        except Exception:
+            pass
+        return [p for p in params if p is not None]
+
+    def _rebuild_autonomy_optimizer(self) -> None:
+        wd = float(os.getenv("M3_STABILITY_WEIGHT_DECAY", str(self.stability_cfg.weight_decay)))
+        self._autonomy_opt = self.torch.optim.AdamW(
+            self._autonomy_params(),
+            lr=float(self.autonomy_rl_cfg.learning_rate),
+            weight_decay=wd,
+        )
+
+    def set_autonomy_heads(self, mode: str = "linear") -> Dict[str, Any]:
+        mode_norm = str(mode or "linear").strip().lower()
+        from llm_adapter.layers import PlasticBitLinear
+        hidden = int(self.model.hidden)
+        if mode_norm == "plastic":
+            new_q = PlasticBitLinear(hidden, 2).to(self.device)
+            new_i = PlasticBitLinear(hidden, 1).to(self.device)
+        else:
+            mode_norm = "linear"
+            new_q = self.torch.nn.Linear(hidden, 2).to(self.device)
+            new_i = self.torch.nn.Linear(hidden, 1).to(self.device)
+
+        old_q = getattr(self.model, "q_head", None)
+        old_i = getattr(self.model, "intensity_head", None)
+        try:
+            with self.torch.no_grad():
+                if old_q is not None and hasattr(old_q, "weight") and hasattr(new_q, "weight"):
+                    r = min(int(old_q.weight.shape[0]), int(new_q.weight.shape[0]))
+                    c = min(int(old_q.weight.shape[1]), int(new_q.weight.shape[1]))
+                    if r > 0 and c > 0:
+                        new_q.weight[:r, :c].copy_(old_q.weight[:r, :c])
+                if old_i is not None and hasattr(old_i, "weight") and hasattr(new_i, "weight"):
+                    r = min(int(old_i.weight.shape[0]), int(new_i.weight.shape[0]))
+                    c = min(int(old_i.weight.shape[1]), int(new_i.weight.shape[1]))
+                    if r > 0 and c > 0:
+                        new_i.weight[:r, :c].copy_(old_i.weight[:r, :c])
+                if hasattr(new_q, "bias") and new_q.bias is not None:
+                    new_q.bias.zero_()
+                    if int(new_q.bias.shape[0]) >= 2:
+                        new_q.bias[1].fill_(0.5)
+                if hasattr(new_i, "bias") and new_i.bias is not None:
+                    new_i.bias.fill_(0.8)
+        except Exception:
+            pass
+
+        self.model.q_head = new_q
+        self.model.intensity_head = new_i
+        self._autonomy_head_mode = mode_norm
+        self._rebuild_autonomy_optimizer()
+        return {"ok": True, "mode": mode_norm}
+
+    def get_autonomy_diagnostics(self) -> Dict[str, Any]:
+        try:
+            speak_rate = float(np.mean(self._autonomy_recent_actions)) if self._autonomy_recent_actions else 0.0
+        except Exception:
+            speak_rate = 0.0
+        try:
+            lam_mean = float(np.mean(self._autonomy_recent_lambda)) if self._autonomy_recent_lambda else 0.0
+        except Exception:
+            lam_mean = 0.0
+        out = {
+            "head_mode": str(getattr(self, "_autonomy_head_mode", "unknown")),
+            "speak_rate": float(speak_rate),
+            "lambda_mean": float(lam_mean),
+            "credit_ema": float(getattr(self, "_autonomy_credit_ema", 0.0)),
+            "reward_ema": float(getattr(self, "_autonomy_reward_ema", 0.0)),
+            "last_diag": dict(getattr(self, "_autonomy_last_diag", {}) or {}),
+        }
+        return out
+
+    def set_tokenizer_rebuild_guard(
+        self,
+        min_keep_vocab_ratio: Optional[float] = None,
+        rebuild_min_interval_sec: Optional[int] = None,
+        min_corpus_chars: Optional[int] = None,
+        min_unique_terms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        cfg = self.tokenizer_auto_cfg
+        if min_keep_vocab_ratio is not None:
+            cfg.min_keep_vocab_ratio = float(max(1e-6, min(1.0, min_keep_vocab_ratio)))
+        if rebuild_min_interval_sec is not None:
+            cfg.rebuild_min_interval_sec = int(max(0, rebuild_min_interval_sec))
+        if min_corpus_chars is not None:
+            cfg.min_corpus_chars = int(max(1, min_corpus_chars))
+        if min_unique_terms is not None:
+            cfg.min_unique_terms = int(max(1, min_unique_terms))
+        return {
+            "ok": True,
+            "min_keep_vocab_ratio": float(cfg.min_keep_vocab_ratio),
+            "rebuild_min_interval_sec": int(cfg.rebuild_min_interval_sec),
+            "min_corpus_chars": int(cfg.min_corpus_chars),
+            "min_unique_terms": int(cfg.min_unique_terms),
+        }
+
+    def _log_stability_event(self, kind: str, reason: str, extra: Optional[Dict[str, Any]] = None) -> None:
+        payload = {
+            "kind": "stability_guard",
+            "guard_kind": str(kind),
+            "reason": str(reason),
+            "t": int(time.time() * 1000),
+        }
+        if extra:
+            payload.update(extra)
+        try:
+            self._log_jsonl(os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"), payload)
+        except Exception:
+            try:
+                logger.warning(f"stability_guard {kind}: {reason}")
+            except Exception:
+                pass
+
+    def _collect_non_finite_issues(self, params) -> List[str]:
+        issues: List[str] = []
+        for p in params:
+            if p is None:
+                continue
+            try:
+                if not self.torch.isfinite(p.data).all():
+                    issues.append("param_non_finite")
+                    break
+            except Exception:
+                continue
+        for p in params:
+            if p is None:
+                continue
+            try:
+                if p.grad is not None and not self.torch.isfinite(p.grad).all():
+                    issues.append("grad_non_finite")
+                    break
+            except Exception:
+                continue
+        return issues
+
+    def _renorm_parameters(self, params, max_norm: Optional[float] = None) -> None:
+        lim = float(max_norm if max_norm is not None else self.stability_cfg.max_weight_norm)
+        lim = max(1e-6, lim)
+        with self.torch.no_grad():
+            for p in params:
+                if p is None or p.ndim <= 1:
+                    continue
+                try:
+                    n = self.torch.norm(p.data)
+                    if self.torch.isfinite(n) and float(n.item()) > lim:
+                        p.data.mul_(lim / (n + 1e-8))
+                except Exception:
+                    continue
+
+    def _zero_invalid_gradients(self, params) -> int:
+        zeroed = 0
+        for p in params:
+            if p is None or p.grad is None:
+                continue
+            try:
+                g = p.grad
+                bad = ~self.torch.isfinite(g)
+                n_bad = int(bad.sum().item()) if hasattr(bad, "sum") else 0
+                if n_bad > 0:
+                    g = g.clone()
+                    g[bad] = 0.0
+                    p.grad = g
+                    zeroed += n_bad
+            except Exception:
+                continue
+        return int(zeroed)
+
+    def _set_token_head_frozen(self, frozen: bool) -> None:
+        try:
+            for name in ("head", "token_value"):
+                mod = getattr(self.model, name, None)
+                if mod is None:
+                    continue
+                for p in mod.parameters():
+                    p.requires_grad_(not frozen)
+        except Exception:
+            pass
+
+    def _guarded_optimizer_step(
+        self,
+        optimizer,
+        params,
+        tag: str,
+        clip_override: Optional[float] = None,
+    ) -> bool:
+        self._stability_step_count = int(getattr(self, "_stability_step_count", 0)) + 1
+        if (
+            int(getattr(self, "_stability_token_head_frozen_until", 0)) > 0
+            and int(self._stability_step_count) >= int(self._stability_token_head_frozen_until)
+        ):
+            self._set_token_head_frozen(False)
+            self._stability_token_head_frozen_until = 0
+
+        plist = [p for p in params if p is not None]
+        if not plist:
+            return False
+        skip_non_finite = bool(self.stability_cfg.skip_non_finite)
+        issues = self._collect_non_finite_issues(plist) if skip_non_finite else []
+        tag_key = str(tag or "unknown")
+        context = "unit_test" if ("unit" in tag_key or "test" in tag_key) else "runtime"
+        if issues:
+            zeroed = self._zero_invalid_gradients(plist)
+            self._stability_nonfinite_streak[tag_key] = int(self._stability_nonfinite_streak.get(tag_key, 0)) + 1
+            streak = int(self._stability_nonfinite_streak[tag_key])
+            backoff_applied = False
+            if bool(getattr(self.stability_cfg, "lr_backoff_on_nonfinite", True)):
+                max_steps = int(max(0, getattr(self.stability_cfg, "max_backoff_steps", 5)))
+                if streak <= max_steps:
+                    factor = float(max(1e-4, min(1.0, getattr(self.stability_cfg, "backoff_factor", 0.5))))
+                    try:
+                        for pg in optimizer.param_groups:
+                            pg["lr"] = float(pg.get("lr", 0.0)) * factor
+                        backoff_applied = True
+                    except Exception:
+                        backoff_applied = False
+            if streak >= 3 and str(tag_key) in {"learn_pair", "train_batch", "dpo_batch"}:
+                self._set_token_head_frozen(True)
+                self._stability_token_head_frozen_until = int(self._stability_step_count) + 50
+            try:
+                optimizer.zero_grad(set_to_none=True)
+            except Exception:
+                pass
+            self._stability_skip_steps += 1
+            self._log_stability_event(
+                "skip_step",
+                "|".join(issues),
+                {
+                    "tag": str(tag),
+                    "skip_steps": int(self._stability_skip_steps),
+                    "context": str(context),
+                    "zeroed_invalid_grads": int(zeroed),
+                    "nonfinite_streak": int(streak),
+                    "lr_backoff": bool(backoff_applied),
+                },
+            )
+            return False
+        else:
+            self._stability_nonfinite_streak[tag_key] = 0
+            # --- LR recovery: gradually restore LR after consecutive successful steps ---
+            if bool(getattr(self.stability_cfg, "lr_recovery_enabled", True)):
+                recovery_key = f"_lr_ok_streak_{tag_key}"
+                streak_ok = int(getattr(self, recovery_key, 0)) + 1
+                setattr(self, recovery_key, streak_ok)
+                recovery_streak_needed = int(max(1, getattr(self.stability_cfg, "lr_recovery_streak", 10)))
+                if streak_ok >= recovery_streak_needed:
+                    recovery_factor = float(max(1.0, getattr(self.stability_cfg, "lr_recovery_factor", 1.2)))
+                    initial_lr = float(getattr(self.stability_cfg, "lr_initial", 0.0))
+                    try:
+                        for pg in optimizer.param_groups:
+                            old_lr = float(pg.get("lr", 0.0))
+                            # Auto-detect initial LR from stored value or first seen
+                            pg_initial = float(pg.get("initial_lr", initial_lr))
+                            if pg_initial <= 0:
+                                pg_initial = float(pg.get("lr", 1e-3))
+                                pg["initial_lr"] = pg_initial
+                            new_lr = min(pg_initial, old_lr * recovery_factor)
+                            if new_lr > old_lr:
+                                pg["lr"] = new_lr
+                    except Exception:
+                        pass
+                    setattr(self, recovery_key, 0)
+        clip_norm = float(clip_override if clip_override is not None else self.stability_cfg.grad_clip_norm)
+        if clip_norm > 0:
+            try:
+                clip_mode = str(getattr(self.stability_cfg, "clip_mode", "norm")).strip().lower()
+                if clip_mode == "value":
+                    self.torch.nn.utils.clip_grad_value_(plist, clip_value=clip_norm)
+                else:
+                    self.torch.nn.utils.clip_grad_norm_(plist, max_norm=clip_norm)
+            except Exception:
+                pass
+        try:
+            optimizer.step()
+        except Exception as e:
+            self._stability_skip_steps += 1
+            self._log_stability_event(
+                "optimizer_error",
+                str(e),
+                {"tag": str(tag), "skip_steps": int(self._stability_skip_steps), "context": str(context)},
+            )
+            return False
+        self._renorm_parameters(plist)
+        return True
 
     def _is_numeric_dump_response(self, text: str) -> bool:
         """Detect low-quality CSV-like numeric dumps."""
@@ -2009,6 +2586,8 @@ class TorchConversationalPolicy:
             return True
         if self._is_numeric_dump_response(s):
             return True
+        if self._has_infinite_loop_pattern(s):
+            return True
         return False
 
     def _system_prompt_mode(self) -> str:
@@ -2033,12 +2612,90 @@ class TorchConversationalPolicy:
         toks = re.findall(r"[a-z0-9]+|[\uac00-\ud7a3]+", s)
         return [t for t in toks if len(t) > 1]
 
+    def _phrase_repetition_score(self, text: str) -> float:
+        s = str(text or "").strip().lower()
+        toks = [t for t in re.findall(r"[a-z0-9]+|[\uac00-\ud7a3]+", s) if t]
+        if len(toks) < 6:
+            return 0.0
+        best = 0.0
+        for n in range(2, min(8, max(2, len(toks) // 2)) + 1):
+            grams = [tuple(toks[i:i + n]) for i in range(0, len(toks) - n + 1)]
+            if not grams:
+                continue
+            counts: Dict[Tuple[str, ...], int] = {}
+            for g in grams:
+                counts[g] = counts.get(g, 0) + 1
+            repeated_mass = 0
+            for g, c in counts.items():
+                if c > 1:
+                    repeated_mass += int(c - 1) * int(len(g))
+            score = float(repeated_mass) / float(max(1, len(toks)))
+            best = max(best, score)
+        return float(max(0.0, min(1.0, best)))
+
+    def _semantic_dup_score(self, text: str, window: int = 6) -> float:
+        s = str(text or "").strip().lower()
+        if not s:
+            return 0.0
+        clauses = [c.strip() for c in re.split(r"[.!?;\n]+", s) if c and c.strip()]
+        if len(clauses) < 2:
+            return 0.0
+        clauses = clauses[-max(2, int(window)):]
+
+        def _char3(c: str) -> set:
+            c = re.sub(r"\s+", " ", c)
+            if len(c) < 3:
+                return {c} if c else set()
+            return {c[i:i + 3] for i in range(0, len(c) - 2)}
+
+        best = 0.0
+        for i in range(len(clauses)):
+            a = _char3(clauses[i])
+            if not a:
+                continue
+            for j in range(i + 1, len(clauses)):
+                b = _char3(clauses[j])
+                if not b:
+                    continue
+                inter = len(a & b)
+                union = len(a | b)
+                sim = float(inter) / float(max(1, union))
+                best = max(best, sim)
+        return float(max(0.0, min(1.0, best)))
+
+    def _has_infinite_loop_pattern(self, text: str) -> bool:
+        s = re.sub(r"\s+", " ", str(text or "").strip().lower())
+        if not s:
+            return False
+        toks = [t for t in re.findall(r"[a-z0-9]+|[\uac00-\ud7a3]+", s) if t]
+        if len(toks) < 12:
+            return False
+        # Consecutive repeated spans near tail.
+        max_span = min(12, max(2, len(toks) // 3))
+        for span in range(2, max_span + 1):
+            if len(toks) < span * 3:
+                continue
+            a = toks[-span:]
+            b = toks[-2 * span:-span]
+            c = toks[-3 * span:-2 * span]
+            if a == b == c:
+                return True
+        # Repeated long prefix phrase.
+        prefix = " ".join(toks[: min(12, len(toks))])
+        if len(prefix) > 16 and s.count(prefix) >= 3:
+            return True
+        return False
+
     def _evaluate_generation_quality(self, prompt: str, response: str, source: str = "generate") -> Tuple[bool, Dict[str, float]]:
         info: Dict[str, float] = {
             "score": 0.0,
             "overlap": 0.0,
             "len_ratio": 0.0,
             "disallowed": 1.0,
+            "repetition_score": 0.0,
+            "phrase_repetition": 0.0,
+            "semantic_dup": 0.0,
+            "loop_pattern": 0.0,
         }
         if self._is_disallowed_generation_output(response):
             return False, info
@@ -2099,7 +2756,24 @@ class TorchConversationalPolicy:
         info["len_ratio"] = float(min(1.0, max(0.0, len_ratio)))
 
         score = max(0.0, min(1.0, 0.20 + 0.65 * overlap + 0.15 * info["len_ratio"]))
+        phrase_rep = self._phrase_repetition_score(response_text)
+        sem_dup = self._semantic_dup_score(response_text, window=6)
+        loop_hit = 1.0 if self._has_infinite_loop_pattern(response_text) else 0.0
+        rep_score = float(max(self._repetition_penalty(response_text), phrase_rep, sem_dup))
+        rep_penalty = float(min(0.85, 0.60 * rep_score + 0.30 * phrase_rep + 0.25 * sem_dup + 0.50 * loop_hit))
+        info["phrase_repetition"] = float(phrase_rep)
+        info["semantic_dup"] = float(sem_dup)
+        info["loop_pattern"] = float(loop_hit)
+        info["repetition_score"] = float(rep_score)
+        score = max(0.0, min(1.0, score - rep_penalty))
         info["score"] = score
+
+        try:
+            rep_max = float(os.getenv("M3_CONTROL_MAX_REPETITION", "0.45"))
+        except Exception:
+            rep_max = 0.45
+        if loop_hit > 0.0 or rep_score > rep_max:
+            return False, info
 
         min_score = float(os.getenv("M3_CONTROL_MIN_RESPONSE_SCORE", "0.16"))
         if source == "autonomy":
@@ -2670,6 +3344,397 @@ class TorchConversationalPolicy:
             except Exception:
                 pass
 
+    def _default_tokenizer_corpus_files(self) -> List[str]:
+        base = os.path.dirname(TRAINING_PATH)
+        candidates = [
+            TRAINING_PATH,
+            os.path.join(base, "llm_training_data.rejected.jsonl"),
+            os.path.join(base, "chat_history.jsonl"),
+            os.path.join(base, "llm_adapter.log"),
+        ]
+        cfg = self.tokenizer_auto_cfg
+        max_files = int(max(1, cfg.corpus_max_files))
+        out: List[str] = []
+        for p in candidates:
+            if os.path.exists(p):
+                out.append(p)
+            if len(out) >= max_files:
+                break
+        return out
+
+    def _copy_vocab_rows(self, dst_weight, src_weight, row_map: List[Tuple[int, int]]) -> None:
+        with self.torch.no_grad():
+            for old_i, new_i in row_map:
+                if old_i < 0 or new_i < 0:
+                    continue
+                if old_i >= src_weight.shape[0] or new_i >= dst_weight.shape[0]:
+                    continue
+                dst_weight[new_i].copy_(src_weight[old_i])
+
+    def _token_maps_for_copy(self, old_tok, new_tok) -> List[Tuple[int, int]]:
+        try:
+            if getattr(old_tok, "_type", "") == "hf" and getattr(new_tok, "_type", "") == "hf":
+                old_vocab = old_tok._backend.get_vocab()
+                new_vocab = new_tok._backend.get_vocab()
+                pairs = []
+                for token, old_id in old_vocab.items():
+                    if token in new_vocab:
+                        pairs.append((int(old_id), int(new_vocab[token])))
+                return pairs
+        except Exception:
+            pass
+        n = min(int(getattr(old_tok, "vocab_size", 0)), int(getattr(new_tok, "vocab_size", 0)))
+        return [(i, i) for i in range(max(0, n))]
+
+    def reload_tokenizer_and_resize(self, vocab_path: Optional[str] = None) -> Dict[str, Any]:
+        """Reload tokenizer file and resize model vocab-dependent layers with overlap copy."""
+        old_tok = self.tok
+        old_vocab = int(self.vocab_size)
+        target_path = vocab_path or getattr(old_tok, "_last_rebuild_path", "")
+        new_tok = M3Tokenizer(vocab_file=target_path if target_path else None, config=get_global_config().tokenizer)
+        new_vocab = int(new_tok.vocab_size)
+        if new_vocab <= 0:
+            return {"ok": False, "reason": "invalid_vocab"}
+        allow_shrink = str(os.getenv("M3_TOKENIZER_ALLOW_SHRINK", "0")).lower() in ("1", "true", "yes", "on")
+        min_keep_ratio = float(max(1e-6, min(1.0, getattr(self.tokenizer_auto_cfg, "min_keep_vocab_ratio", 0.60))))
+        min_allowed = int(max(32, int(old_vocab * min_keep_ratio)))
+        # Enforce shrink guard for auto-rebuild paths or when no explicit path given.
+        # When user explicitly provides a specific vocab_path, they intend the replacement.
+        auto_like_path = str(target_path or "").strip().lower()
+        is_auto_rebuild = (".tokenizer.auto" in auto_like_path) or (vocab_path is None)
+        enforce_shrink_guard = is_auto_rebuild
+        # Absolute floor: never allow byte-fallback (~265 vocab) to replace a real tokenizer
+        # in auto-rebuild paths. Manual explicit paths bypass this.
+        abs_vocab_floor = max(256, int(os.getenv("M3_TOKENIZER_ABS_VOCAB_FLOOR", "500")))
+        if is_auto_rebuild and (not allow_shrink) and old_vocab > abs_vocab_floor and new_vocab < abs_vocab_floor:
+            self._log_jsonl(
+                os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                {
+                    "kind": "tokenizer_rebuild_guard",
+                    "status": "reject",
+                    "reason": "abs_vocab_floor",
+                    "old_vocab": int(old_vocab),
+                    "new_vocab": int(new_vocab),
+                    "abs_floor": int(abs_vocab_floor),
+                },
+            )
+            return {
+                "ok": False,
+                "reason": "abs_vocab_floor",
+                "old_vocab": int(old_vocab),
+                "new_vocab": int(new_vocab),
+            }
+        if enforce_shrink_guard and (not allow_shrink) and old_vocab > 0 and new_vocab < min_allowed:
+            self._log_jsonl(
+                os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                {
+                    "kind": "tokenizer_rebuild_guard",
+                    "status": "reject",
+                    "reason": "vocab_shrink_guard",
+                    "old_vocab": int(old_vocab),
+                    "new_vocab": int(new_vocab),
+                    "min_allowed": int(min_allowed),
+                },
+            )
+            return {
+                "ok": False,
+                "reason": "vocab_shrink_guard",
+                "old_vocab": int(old_vocab),
+                "new_vocab": int(new_vocab),
+                "min_allowed": int(min_allowed),
+            }
+        if new_vocab == old_vocab:
+            self.tok = new_tok
+            self.vocab_size = new_vocab
+            return {"ok": True, "old_vocab": old_vocab, "new_vocab": new_vocab, "resized": False}
+
+        nn = self.torch.nn
+        from llm_adapter.layers import PlasticBitLinear
+
+        row_map = self._token_maps_for_copy(old_tok, new_tok)
+        hidden = int(self.model.hidden)
+        trace_decay = float(getattr(self.model.head, "trace_decay", 0.95))
+
+        new_emb = nn.Embedding(new_vocab, hidden, padding_idx=int(new_tok.PAD)).to(self.device)
+        self._copy_vocab_rows(new_emb.weight, self.model.emb.weight.data, row_map)
+
+        new_head = PlasticBitLinear(hidden, new_vocab, trace_decay=trace_decay).to(self.device)
+        self._copy_vocab_rows(new_head.weight.data, self.model.head.weight.data, row_map)
+        if getattr(self.model.head, "bias", None) is not None and getattr(new_head, "bias", None) is not None:
+            self._copy_vocab_rows(new_head.bias.data.unsqueeze(-1), self.model.head.bias.data.unsqueeze(-1), [(a, b) for a, b in row_map])
+            new_head.bias.data = new_head.bias.data.squeeze(-1)
+
+        new_token_value = PlasticBitLinear(hidden, new_vocab, trace_decay=trace_decay).to(self.device)
+        self._copy_vocab_rows(new_token_value.weight.data, self.model.token_value.weight.data, row_map)
+        if getattr(self.model.token_value, "bias", None) is not None and getattr(new_token_value, "bias", None) is not None:
+            self._copy_vocab_rows(new_token_value.bias.data.unsqueeze(-1), self.model.token_value.bias.data.unsqueeze(-1), [(a, b) for a, b in row_map])
+            new_token_value.bias.data = new_token_value.bias.data.squeeze(-1)
+
+        self.model.emb = new_emb
+        self.model.head = new_head
+        self.model.token_value = new_token_value
+        self.tok = new_tok
+        self.vocab_size = int(new_vocab)
+        self.criterion = self.torch.nn.CrossEntropyLoss(ignore_index=self.tok.PAD)
+
+        wd = float(os.getenv("M3_STABILITY_WEIGHT_DECAY", str(self.stability_cfg.weight_decay)))
+        self.opt = self.torch.optim.AdamW(self.model.parameters(), lr=float(self.config.learning_rate), weight_decay=wd)
+        self.token_value_opt = None
+        self._tokenizer_rebuilds += 1
+        self._log_jsonl(
+            os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+            {
+                "kind": "tokenizer_rebuild",
+                "old_vocab": int(old_vocab),
+                "new_vocab": int(new_vocab),
+                "copied_rows": int(len(row_map)),
+                "rebuild_count": int(self._tokenizer_rebuilds),
+            },
+        )
+        return {"ok": True, "old_vocab": old_vocab, "new_vocab": new_vocab, "resized": True, "copied_rows": len(row_map)}
+
+    def _maybe_auto_rebuild_tokenizer(self) -> None:
+        if not hasattr(self.tok, "should_rebuild_vocab"):
+            return
+        now = float(time.time())
+        try:
+            min_interval = int(max(0, getattr(self.tokenizer_auto_cfg, "rebuild_min_interval_sec", 0)))
+        except Exception:
+            min_interval = 0
+        try:
+            last_rebuild = float(getattr(self.tok, "_last_rebuild_unix", 0.0))
+        except Exception:
+            last_rebuild = 0.0
+        if min_interval > 0 and (now - last_rebuild) < float(min_interval):
+            self._log_jsonl(
+                os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                {
+                    "kind": "tokenizer_rebuild_guard",
+                    "status": "skip",
+                    "reason": "cooldown",
+                    "remaining_sec": float(max(0.0, float(min_interval) - (now - last_rebuild))),
+                },
+            )
+            return
+        try:
+            if not self.tok.should_rebuild_vocab():
+                return
+        except Exception:
+            return
+        files = self._default_tokenizer_corpus_files()
+        if not files:
+            return
+        # Deterministic corpus fingerprint to avoid rebuilding the same corpus every cycle.
+        try:
+            max_chars = int(max(1_000, getattr(self.tokenizer_auto_cfg, "corpus_max_chars", 1_500_000)))
+        except Exception:
+            max_chars = 1_500_000
+        corpus_fp = ""
+        try:
+            if hasattr(self.tok, "_collect_corpus_stats"):
+                stats = self.tok._collect_corpus_stats(files, max_chars=max_chars)
+            else:
+                stats = {}
+            fp_payload = {
+                "files": [str(p) for p in files],
+                "stats": stats,
+                "vocab_size": int(self.tokenizer_auto_cfg.rebuild_vocab_size),
+            }
+            corpus_fp = hashlib.sha1(
+                json.dumps(fp_payload, sort_keys=True, ensure_ascii=False).encode("utf-8", errors="ignore")
+            ).hexdigest()[:16]
+            prev_fp = str(getattr(self.tok, "_last_rebuild_corpus_fingerprint", "") or "")
+            if corpus_fp and prev_fp and corpus_fp == prev_fp:
+                self._log_jsonl(
+                    os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                    {
+                        "kind": "tokenizer_rebuild_guard",
+                        "status": "skip",
+                        "reason": "same_corpus_fingerprint",
+                        "fingerprint": str(corpus_fp),
+                    },
+                )
+                return
+        except Exception:
+            corpus_fp = ""
+        target_path = os.path.join(os.path.dirname(TRAINING_PATH), "llm_training_data.tokenizer.auto.json")
+        try:
+            ok = self.tok.rebuild_vocab_from_corpus(
+                files=files,
+                out_path=target_path,
+                vocab_size=int(self.tokenizer_auto_cfg.rebuild_vocab_size),
+            )
+            if ok:
+                res = self.reload_tokenizer_and_resize(target_path)
+                if not bool(res.get("ok", False)):
+                    self._log_jsonl(
+                        os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                        {
+                            "kind": "tokenizer_rebuild_guard",
+                            "status": "reject",
+                            "reason": str(res.get("reason", "reload_failed")),
+                            "old_vocab": int(res.get("old_vocab", self.vocab_size)),
+                            "new_vocab": int(res.get("new_vocab", 0)),
+                            "fingerprint": str(corpus_fp or ""),
+                        },
+                    )
+                else:
+                    self._log_jsonl(
+                        os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                        {
+                            "kind": "tokenizer_rebuild_guard",
+                            "status": "applied",
+                            "fingerprint": str(corpus_fp or ""),
+                            "old_vocab": int(res.get("old_vocab", 0)),
+                            "new_vocab": int(res.get("new_vocab", 0)),
+                        },
+                    )
+        except Exception as e:
+            logger.warning(f"Tokenizer auto rebuild failed: {e}")
+
+    def _ensure_bridge_adapt_optimizer(self, hf: HFBackend):
+        bridge = getattr(hf, "_control_bridge", None)
+        if bridge is None:
+            return None
+        if self._bridge_adapt_opt is not None:
+            return self._bridge_adapt_opt
+        try:
+            for p in hf._model.parameters():
+                p.requires_grad_(False)
+        except Exception:
+            pass
+        wd = float(os.getenv("M3_STABILITY_WEIGHT_DECAY", str(self.stability_cfg.weight_decay)))
+        self._bridge_adapt_opt = self.torch.optim.AdamW(
+            bridge.parameters(),
+            lr=float(self.bridge_adapt_cfg.learning_rate),
+            weight_decay=wd,
+        )
+        return self._bridge_adapt_opt
+
+    def _adapt_bridge_online(
+        self,
+        hf: HFBackend,
+        prompt: str,
+        response: str,
+        z_m3: Optional[np.ndarray],
+    ) -> None:
+        if not self._bridge_adapt_enabled:
+            return
+        if not self.bridge_adapt_cfg.enabled:
+            return
+        if str(os.getenv("M3_BRIDGE_ONLINE_ADAPT", "1")).lower() not in ("1", "true", "yes", "on"):
+            return
+        if z_m3 is None:
+            return
+        bridge = getattr(hf, "_control_bridge", None)
+        if bridge is None or getattr(hf, "_model", None) is None or getattr(hf, "_tokenizer", None) is None:
+            return
+        ok, qinfo = self._evaluate_generation_quality(prompt, response, source="generate")
+        reward = float((qinfo or {}).get("score", 0.0)) * float(self.bridge_adapt_cfg.reward_scale)
+        if (not ok) or reward < float(self.bridge_adapt_cfg.min_quality_score):
+            self._bridge_adapt_fail_streak += 1
+            if self._bridge_adapt_fail_streak >= int(max(1, self.bridge_adapt_cfg.cooldown_steps)):
+                self._bridge_adapt_enabled = False
+            self._log_jsonl(
+                os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                {
+                    "kind": "bridge_adapt",
+                    "status": "skip_low_reward",
+                    "reward": float(reward),
+                    "fail_streak": int(self._bridge_adapt_fail_streak),
+                },
+            )
+            return
+        self._bridge_adapt_fail_streak = 0
+        opt = self._ensure_bridge_adapt_optimizer(hf)
+        if opt is None:
+            return
+        tok = hf._tokenizer
+        model = hf._model
+        try:
+            bridge.train()
+            input_ids = tok(prompt, return_tensors="pt").get("input_ids")
+            resp_ids = tok(response, return_tensors="pt", add_special_tokens=False).get("input_ids")
+            if input_ids is None or resp_ids is None:
+                return
+            input_ids = input_ids.to(hf.device)
+            resp_ids = resp_ids.to(hf.device)
+            if int(resp_ids.shape[1]) <= 0:
+                return
+            full_ids = self.torch.cat([input_ids, resp_ids], dim=1)
+            attn = self.torch.ones_like(full_ids, device=full_ids.device)
+            state_dim = int(os.getenv("M3_BRIDGE_STATE_DIM", "256"))
+            z_t = hf._prepare_bridge_state(z_m3, state_dim=state_dim, device=hf.device)
+            if z_t is None:
+                return
+            controls = bridge(z_t, strength=float(os.getenv("M3_BRIDGE_STRENGTH", "1.0")))
+            out = model(
+                input_ids=full_ids[:, :-1],
+                attention_mask=attn[:, :-1],
+                use_cache=False,
+                output_hidden_states=False,
+            )
+            logits = out.logits
+            if controls.logit_bias is not None and controls.logit_bias.shape[-1] == logits.shape[-1]:
+                logits = logits + controls.logit_bias.unsqueeze(1).to(device=logits.device, dtype=logits.dtype)
+            p_len = int(input_ids.shape[1])
+            r_len = int(resp_ids.shape[1])
+            start = max(0, p_len - 1)
+            end = min(logits.shape[1], start + r_len)
+            if end <= start:
+                return
+            step_logits = logits[:, start:end, :]
+            targets = full_ids[:, p_len:p_len + (end - start)]
+            logp = self.torch.log_softmax(step_logits.float(), dim=-1)
+            token_logp = self.torch.gather(logp, dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
+            policy_loss = -float(reward) * token_logp.mean()
+            reg = bridge.regularization_loss(
+                controls=controls,
+                gate_reg=float(self.bridge_adapt_cfg.gate_reg),
+                bias_reg=float(self.bridge_adapt_cfg.bias_reg),
+            )
+            loss = policy_loss + reg
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            self._guarded_optimizer_step(
+                optimizer=opt,
+                params=list(bridge.parameters()),
+                tag="bridge_adapt",
+            )
+            try:
+                bridge.renorm_parameters(float(self.stability_cfg.max_weight_norm))
+            except Exception:
+                pass
+            self._bridge_adapt_step += 1
+            self._log_jsonl(
+                os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                {
+                    "kind": "bridge_adapt",
+                    "status": "ok",
+                    "reward": float(reward),
+                    "loss": float(loss.detach().item()),
+                    "step": int(self._bridge_adapt_step),
+                },
+            )
+        except Exception as e:
+            self._bridge_adapt_fail_streak += 1
+            if self._bridge_adapt_fail_streak >= int(max(1, self.bridge_adapt_cfg.cooldown_steps)):
+                self._bridge_adapt_enabled = False
+            self._log_jsonl(
+                os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                {
+                    "kind": "bridge_adapt",
+                    "status": "error",
+                    "error": str(e),
+                    "fail_streak": int(self._bridge_adapt_fail_streak),
+                },
+            )
+        finally:
+            try:
+                bridge.eval()
+            except Exception:
+                pass
+
     def enable_m3_integration(self) -> bool:
         if hasattr(self, 'model') and hasattr(self.model, 'enable_m3_integration'):
             try:
@@ -3008,16 +4073,122 @@ class TorchConversationalPolicy:
             self._credit_thread.join(timeout=1.0)
 
     # === Autonomy loop (learned decision/timing; no hand-tuned thresholds) ===
+    def _autonomy_core_features(self, core=None) -> Optional[np.ndarray]:
+        if core is None:
+            return None
+        feats: List[float] = []
+        try:
+            ph = list(getattr(core.phi_calculator, "phi_history", []) or [])
+            last_phi = float(ph[-1]) if ph else 0.0
+            mean_phi = float(np.mean(ph[-8:])) if ph else 0.0
+            d_phi = float(ph[-1] - ph[-2]) if len(ph) >= 2 else 0.0
+            feats.extend([last_phi, mean_phi, d_phi])
+        except Exception:
+            feats.extend([0.0, 0.0, 0.0])
+        try:
+            q = getattr(core, "qualia", None)
+            feats.extend(
+                [
+                    float(getattr(q, "arousal", 0.0)),
+                    float(getattr(q, "valence", 0.0)),
+                    float(getattr(q, "entropy", 0.0)),
+                    float(getattr(q, "engagement", 0.0)),
+                    float(getattr(q, "frustration", 0.0)),
+                ]
+            )
+        except Exception:
+            feats.extend([0.0, 0.0, 0.0, 0.0, 0.0])
+        try:
+            ec = getattr(core, "energy_ctrl", None)
+            if ec is not None:
+                ev = float(getattr(ec, "cognitive_energy", 0.0))
+                cap = float(max(getattr(ec, "energy_capacity", 1.0), 1e-6))
+                feats.append(float(ev / cap))
+            else:
+                feats.append(0.5)
+        except Exception:
+            feats.append(0.5)
+        try:
+            ws = getattr(core, "world_state", {}) or {}
+            feats.append(float(ws.get("stability", 0.5)))
+            feats.append(float(ws.get("delta_hat", 0.0)))
+        except Exception:
+            feats.extend([0.5, 0.0])
+        try:
+            mem_n = 0.0
+            if hasattr(core, "episodic_memory") and hasattr(core.episodic_memory, "get_statistics"):
+                mem_n = float((core.episodic_memory.get_statistics() or {}).get("total_memories", 0))
+            feats.append(float(np.tanh(mem_n / 1000.0)))
+        except Exception:
+            feats.append(0.0)
+
+        try:
+            speak_rate = float(np.mean(self._autonomy_recent_actions)) if self._autonomy_recent_actions else 0.0
+            lam_mean = float(np.mean(self._autonomy_recent_lambda)) if self._autonomy_recent_lambda else 0.0
+        except Exception:
+            speak_rate, lam_mean = 0.0, 0.0
+        feats.extend(
+            [
+                float(self._autonomy_credit_ema),
+                float(self._autonomy_reward_ema),
+                float(speak_rate),
+                float(lam_mean),
+                float(self._autonomy_last_lambda),
+            ]
+        )
+        arr = np.asarray(feats, dtype=np.float32).reshape(-1)
+        if arr.size < self._autonomy_state_raw_dim:
+            arr = np.pad(arr, (0, self._autonomy_state_raw_dim - arr.size), mode="constant")
+        elif arr.size > self._autonomy_state_raw_dim:
+            arr = arr[: self._autonomy_state_raw_dim]
+        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        return arr
+
     def _state_vector(self, core=None):
-        """Build state vector s from encoder hidden; uses BOS-only source when prompt absent."""
+        """Build autonomy state using core dynamics + BOS latent fallback."""
         torch = self.torch
         t = self.tok
-        with torch.no_grad():
-            src_ids = torch.tensor([[t.BOS]], dtype=torch.long, device=self.device)
-            e_src = self.model.emb(src_ids)
-            _, h = self.model.encoder(e_src)
-            s = h[-1, :, :]  # (1, H)
-            return s
+        source = str(getattr(self.autonomy_rl_cfg, "state_source", "core")).strip().lower()
+        base_state = None
+
+        use_bos = source in {"bos", "hybrid", "core", "auto"}
+        if use_bos:
+            try:
+                with torch.no_grad():
+                    src_ids = torch.tensor([[t.BOS]], dtype=torch.long, device=self.device)
+                    e_src = self.model.emb(src_ids)
+                    _, h = self.model.encoder(e_src)
+                    base_state = h[-1, :, :].float()
+            except Exception:
+                base_state = None
+
+        core_state = None
+        if source in {"core", "hybrid", "auto"}:
+            try:
+                core_vec = self._autonomy_core_features(core)
+                if core_vec is not None:
+                    with torch.no_grad():
+                        cv = torch.tensor(core_vec, dtype=torch.float32, device=self.device).unsqueeze(0)
+                        core_state = torch.tanh(self._autonomy_state_proj(cv)).float()
+            except Exception:
+                core_state = None
+
+        if source == "bos":
+            return base_state if base_state is not None else torch.zeros((1, int(self.model.hidden)), dtype=torch.float32, device=self.device)
+        if source == "core":
+            if core_state is not None:
+                return core_state
+            if base_state is not None:
+                return base_state
+            return torch.zeros((1, int(self.model.hidden)), dtype=torch.float32, device=self.device)
+        # hybrid/auto
+        if base_state is not None and core_state is not None:
+            return 0.5 * (base_state + core_state)
+        if core_state is not None:
+            return core_state
+        if base_state is not None:
+            return base_state
+        return torch.zeros((1, int(self.model.hidden)), dtype=torch.float32, device=self.device)
 
     def _build_autonomy_prefix(self, s):
         """From state vector s, build continuous prefix embeddings with learned gating."""
@@ -3028,10 +4199,13 @@ class TorchConversationalPolicy:
         except Exception:
             pass
         with torch.no_grad():
-            H = s.shape[-1]
             P = int(getattr(self.model, 'prefix_len', 1))
-            E = int(self.model.emb.embedding_dim)
-            raw = self.model.state2prefix(s)  # (1, P*E)
+            raw = self.model.state2prefix(s).view(1, -1)
+            flat = int(raw.size(-1))
+            E = max(1, flat // max(1, P))
+            usable = int(P * E)
+            if usable < flat:
+                raw = raw[:, :usable]
             pref = raw.view(1, P, E)
             gate = torch.sigmoid(self.model.prefix_gate(s)).view(1, P, 1)
             # numpy는 bfloat16을 지원하지 않음 → float32로 변환
@@ -3110,6 +4284,223 @@ class TorchConversationalPolicy:
             except Exception:
                 break
 
+    def _autonomy_text_embedding(self, text: str, core=None) -> Optional[np.ndarray]:
+        s = str(text or "").strip()
+        if not s:
+            return None
+        try:
+            if core is not None and hasattr(core, "feature_bank") and hasattr(core.feature_bank, "_hash_embed"):
+                dim = int(getattr(core.feature_bank, "embed_dim", 64))
+                emb = core.feature_bank._hash_embed(s, dim)
+                return np.asarray(emb, dtype=np.float32).reshape(-1)
+        except Exception:
+            pass
+        try:
+            return np.asarray(self.embed_text(s), dtype=np.float32).reshape(-1)
+        except Exception:
+            return None
+
+    def _autonomy_novelty(self, emb: Optional[np.ndarray]) -> float:
+        if emb is None:
+            return 0.0
+        try:
+            if not self._autonomy_recent_embeddings:
+                self._autonomy_recent_embeddings.append(np.asarray(emb, dtype=np.float32).reshape(-1))
+                return 1.0
+            cur = np.asarray(emb, dtype=np.float32).reshape(-1)
+            dists = []
+            for prev in list(self._autonomy_recent_embeddings):
+                if prev is None:
+                    continue
+                p = np.asarray(prev, dtype=np.float32).reshape(-1)
+                if p.size != cur.size:
+                    continue
+                dists.append(float(np.linalg.norm(cur - p)))
+            self._autonomy_recent_embeddings.append(cur)
+            if not dists:
+                return 0.0
+            md = float(np.mean(dists))
+            return float(np.tanh(md))
+        except Exception:
+            return 0.0
+
+    def _repetition_penalty(self, text: str) -> float:
+        try:
+            toks = [t for t in re.split(r"\s+", str(text or "").strip()) if t]
+            if len(toks) < 4:
+                return 0.0
+            uniq = len(set(toks))
+            token_rep = 1.0 - float(uniq / max(1, len(toks)))
+            phrase_rep = self._phrase_repetition_score(text)
+            sem_dup = self._semantic_dup_score(text, window=6)
+            loop_hit = 1.0 if self._has_infinite_loop_pattern(text) else 0.0
+            rep = max(float(token_rep), float(phrase_rep), float(sem_dup))
+            rep = float(rep + 0.50 * loop_hit)
+            return float(max(0.0, min(1.0, rep)))
+        except Exception:
+            return 0.0
+
+    def _compute_autonomy_reward(self, prompt: str, response: str, core=None) -> Tuple[float, Dict[str, float]]:
+        w1 = float(self.autonomy_rl_cfg.reward_w_dialog)
+        w2 = float(self.autonomy_rl_cfg.reward_w_quality)
+        w3 = float(self.autonomy_rl_cfg.reward_w_bus_credit)
+        w4 = float(self.autonomy_rl_cfg.reward_w_novelty)
+        dialog_score = 0.0
+        quality_score = 0.0
+        safety_penalty = 0.0
+        repetition_penalty = 0.0
+        response_text = str(response or "").strip()
+        try:
+            if core is not None and hasattr(core, "_evaluate_dialog_accuracy"):
+                m = core._evaluate_dialog_accuracy(str(prompt or ""), response_text)
+                if isinstance(m, dict):
+                    dialog_score = float(m.get("score", 0.0))
+        except Exception:
+            dialog_score = 0.0
+        try:
+            ok, qinfo = self._evaluate_generation_quality(prompt, response_text, source="autonomy")
+            quality_score = float((qinfo or {}).get("score", 0.0))
+            if not ok:
+                safety_penalty += float(self.autonomy_rl_cfg.safety_penalty)
+        except Exception:
+            quality_score = 0.0
+        if self._is_disallowed_generation_output(response_text):
+            safety_penalty += float(self.autonomy_rl_cfg.safety_penalty)
+        repetition_ratio = self._repetition_penalty(response_text)
+        repetition_penalty += float(self.autonomy_rl_cfg.repetition_penalty) * repetition_ratio
+        novelty = self._autonomy_novelty(self._autonomy_text_embedding(response_text, core=core))
+        bus_credit = float(self._autonomy_credit_ema)
+        reward = (
+            w1 * dialog_score
+            + w2 * quality_score
+            + w3 * bus_credit
+            + w4 * novelty
+            - safety_penalty
+            - repetition_penalty
+        )
+        self._autonomy_reward_ema = 0.9 * float(self._autonomy_reward_ema) + 0.1 * float(reward)
+        info = {
+            "dialog_score": float(dialog_score),
+            "quality_score": float(quality_score),
+            "bus_credit": float(bus_credit),
+            "novelty": float(novelty),
+            "safety_penalty": float(safety_penalty),
+            "repetition_penalty": float(repetition_penalty),
+            "reward": float(reward),
+        }
+        return float(reward), info
+
+    def _update_autonomy_q(
+        self,
+        state_t,
+        action: int,
+        reward: float,
+        next_state_t,
+        done: bool = False,
+    ) -> float:
+        torch = self.torch
+        s = state_t.detach().to(device=self.device, dtype=torch.float32)
+        s2 = next_state_t.detach().to(device=self.device, dtype=torch.float32)
+        a = int(action)
+        r = float(reward)
+        self._autonomy_replay.append((s.detach().cpu(), a, r, s2.detach().cpu(), bool(done)))
+        samples = []
+        batch_size = int(max(1, self.autonomy_rl_cfg.batch_size))
+        if len(self._autonomy_replay) >= batch_size:
+            idx = np.random.choice(len(self._autonomy_replay), size=batch_size, replace=False)
+            samples = [self._autonomy_replay[int(i)] for i in idx]
+        else:
+            samples = [self._autonomy_replay[-1]]
+        if not samples:
+            return 0.0
+        states = torch.stack([x[0] for x in samples], dim=0).to(self.device).float()
+        if states.ndim > 2:
+            states = states.view(states.size(0), -1)
+        actions = torch.tensor([int(x[1]) for x in samples], dtype=torch.long, device=self.device)
+        rewards = torch.tensor([float(x[2]) for x in samples], dtype=torch.float32, device=self.device)
+        next_states = torch.stack([x[3] for x in samples], dim=0).to(self.device).float()
+        if next_states.ndim > 2:
+            next_states = next_states.view(next_states.size(0), -1)
+        dones = torch.tensor([1.0 if bool(x[4]) else 0.0 for x in samples], dtype=torch.float32, device=self.device)
+        # Reward normalization (advantage-like) to avoid frozen Q under skewed rewards.
+        norm_alpha = float(max(0.0, min(0.999, getattr(self.autonomy_rl_cfg, "reward_norm_ema", 0.95))))
+        if norm_alpha > 0.0:
+            rewards_norm = rewards - float(self._autonomy_reward_ema)
+            rewards = (1.0 - norm_alpha) * rewards + norm_alpha * rewards_norm
+
+        q = self.model.q_head(states)
+        if q.ndim > 2:
+            q = q.view(q.size(0), -1)
+        q_sa = q.gather(dim=1, index=actions.unsqueeze(-1)).squeeze(-1)
+        with torch.no_grad():
+            q_next = self.model.q_head(next_states).max(dim=1)[0]
+            gamma = float(self.autonomy_rl_cfg.gamma)
+            target = rewards + (1.0 - dones) * gamma * q_next
+        td = q_sa - target
+        td_clip = float(max(1e-6, self.autonomy_rl_cfg.td_clip))
+        td = torch.clamp(td, -td_clip, td_clip)
+        td_loss = torch.mean(td ** 2)
+
+        intensity = torch.nn.functional.softplus(self.model.intensity_head(states)).squeeze(-1)
+        target_intensity = torch.clamp(torch.abs(rewards), 0.0, 2.0)
+        inten_loss = torch.mean((intensity - target_intensity) ** 2)
+        # Encourage lambda/intensity to match desired speak ratio.
+        speak_target = float(max(0.01, min(0.99, getattr(self.autonomy_rl_cfg, "target_speak_rate", 0.35))))
+        speak_prob = torch.sigmoid((q[:, 1] - q[:, 0]) * torch.clamp(intensity.detach(), 0.1, 5.0))
+        rate_loss = torch.mean((speak_prob - speak_target) ** 2)
+        loss = td_loss + 0.05 * inten_loss + 0.15 * rate_loss
+
+        params = self._autonomy_params()
+        self._autonomy_opt.zero_grad(set_to_none=True)
+        loss.backward()
+        grad_sq = 0.0
+        for p in params:
+            if p.grad is None:
+                continue
+            try:
+                gnorm = torch.norm(p.grad.detach()).item()
+                grad_sq += float(gnorm) * float(gnorm)
+            except Exception:
+                continue
+        pre_vec = []
+        try:
+            with torch.no_grad():
+                for p in params:
+                    pre_vec.append(p.detach().view(-1).float().cpu())
+        except Exception:
+            pre_vec = []
+
+        self._guarded_optimizer_step(
+            optimizer=self._autonomy_opt,
+            params=params,
+            tag="autonomy_q",
+            clip_override=float(self.stability_cfg.grad_clip_norm),
+        )
+        param_delta = 0.0
+        try:
+            if pre_vec:
+                with torch.no_grad():
+                    i0 = 0
+                    delta_sq = 0.0
+                    for p in params:
+                        n = int(p.numel())
+                        if n <= 0:
+                            continue
+                        old = pre_vec[i0]
+                        i0 += 1
+                        cur = p.detach().view(-1).float().cpu()
+                        d = torch.norm(cur - old).item()
+                        delta_sq += float(d) * float(d)
+                    param_delta = float(np.sqrt(max(0.0, delta_sq)))
+        except Exception:
+            param_delta = 0.0
+        self._autonomy_last_diag = {
+            "q_grad_norm": float(np.sqrt(max(0.0, grad_sq))),
+            "q_param_delta": float(param_delta),
+            "rate_loss": float(rate_loss.detach().item()),
+        }
+        return float(td_loss.detach().item())
+
     def _run_autonomy_turn(self, cycle_count: int, autonomy_check_every: int):
         if autonomy_check_every <= 0 or cycle_count % autonomy_check_every != 0:
             return
@@ -3132,16 +4523,76 @@ class TorchConversationalPolicy:
                 except Exception:
                     min_prob = 0.2
                 diff = float(q[0, 1].item() - q[0, 0].item())
-                prob = 1.0 / (1.0 + np.exp(-diff))
+                lam_raw = torch.nn.functional.softplus(self.model.intensity_head(s.float())).item() + 1e-8
+                lam_min = float(max(1e-4, getattr(self.autonomy_rl_cfg, "lambda_min", 0.2)))
+                lam_max = float(max(lam_min + 1e-6, getattr(self.autonomy_rl_cfg, "lambda_max", 3.0)))
+                lam = float(np.clip(lam_raw, lam_min, lam_max))
+                prob = 1.0 / (1.0 + np.exp(-(diff * lam)))
                 prob = max(min_prob, prob)
                 speak = bool(np.random.rand() < prob)
-                lam = torch.nn.functional.softplus(self.model.intensity_head(s.float())).item() + 1e-8
 
+            action_idx = 1 if speak else 0
+            prev_lam = float(getattr(self, "_autonomy_last_lambda", 0.0))
+            lam_delta = float(lam - prev_lam) if prev_lam != 0.0 else 0.0
+            self._autonomy_last_lambda = float(lam)
+            self._autonomy_recent_lambda.append(float(lam))
+            self._autonomy_recent_actions.append(float(1 if speak else 0))
+            reward = 0.0
+            reward_info: Dict[str, float] = {}
+            td_loss = 0.0
             if not speak:
                 try:
                     dt = float(np.random.exponential(1.0 / max(lam, 1e-12)))
                     dt = min(dt, 5.0)
                     self._wait_for_user_interrupt(dt)
+                except Exception:
+                    pass
+                # --- Wait reward with speak-rate homeostasis ---
+                speak_rate = float(np.mean(self._autonomy_recent_actions)) if self._autonomy_recent_actions else 0.5
+                target_rate = float(max(0.01, min(0.99, getattr(self.autonomy_rl_cfg, "target_speak_rate", 0.35))))
+                # Positive bonus for waiting when already speaking too much
+                rate_bonus = max(0.0, (speak_rate - target_rate)) * 0.5
+                # Energy conservation bonus: reward waiting when energy is low
+                energy_bonus = 0.0
+                try:
+                    if core is not None and hasattr(core, 'energy_ctrl'):
+                        e_ratio = float(core.energy_ctrl.cognitive_energy / max(1.0, core.energy_ctrl.energy_capacity))
+                        if e_ratio < 0.3:
+                            energy_bonus = 0.15 * (0.3 - e_ratio) / 0.3
+                except Exception:
+                    pass
+                reward = -0.01 + 0.10 * float(self._autonomy_credit_ema) + rate_bonus + energy_bonus
+                reward_info = {
+                    "dialog_score": 0.0,
+                    "quality_score": 0.0,
+                    "bus_credit": float(self._autonomy_credit_ema),
+                    "novelty": 0.0,
+                    "safety_penalty": 0.0,
+                    "repetition_penalty": 0.0,
+                    "rate_bonus": float(rate_bonus),
+                    "energy_bonus": float(energy_bonus),
+                    "speak_rate": float(speak_rate),
+                    "reward": float(reward),
+                }
+                if self._autonomy_running:
+                    next_s = self._state_vector(core)
+                    td_loss = self._update_autonomy_q(s.float(), action_idx, reward, next_s.float(), done=False)
+                try:
+                    self._log_jsonl(
+                        os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                        {
+                            "kind": "autonomy_rl",
+                            "action": "wait",
+                            "q_wait": float(q[0, 0].item()),
+                            "q_speak": float(q[0, 1].item()),
+                            "lambda": float(lam),
+                            "lambda_delta": float(lam_delta),
+                            "reward": float(reward),
+                            "td_loss": float(td_loss),
+                            **dict(getattr(self, "_autonomy_last_diag", {}) or {}),
+                            **reward_info,
+                        },
+                    )
                 except Exception:
                     pass
                 return
@@ -3153,11 +4604,102 @@ class TorchConversationalPolicy:
             except Exception:
                 auto_max_len = 160
             text = self.generate(seed, max_len=max(32, auto_max_len), prefix_embed=prefix, source="autonomy")
+
+            # --- Semantic dedup gate: suppress utterances too similar to recent ones ---
+            if text and text.strip() and bool(getattr(self.autonomy_rl_cfg, "semantic_dedup_enabled", True)):
+                dedup_threshold = float(getattr(self.autonomy_rl_cfg, "semantic_dedup_threshold", 0.25))
+                dedup_max_retries = int(max(0, getattr(self.autonomy_rl_cfg, "semantic_dedup_max_retries", 2)))
+                for _dedup_attempt in range(dedup_max_retries + 1):
+                    emb = self._autonomy_text_embedding(text.strip(), core=core)
+                    novelty = self._autonomy_novelty(emb) if emb is not None else 1.0
+                    if novelty >= dedup_threshold:
+                        break  # novel enough
+                    if _dedup_attempt < dedup_max_retries:
+                        # Re-generate with higher temperature to get diverse output
+                        text = self.generate(seed, max_len=max(32, auto_max_len), prefix_embed=prefix, source="autonomy")
+                        if not text or not text.strip():
+                            break
+                    else:
+                        # All retries exhausted — suppress and penalize
+                        suppress_penalty = -float(getattr(self.autonomy_rl_cfg, "repetition_penalty", 0.35))
+                        if self._autonomy_running:
+                            next_s = self._state_vector(core)
+                            self._update_autonomy_q(s.float(), action_idx, suppress_penalty, next_s.float(), done=False)
+                        try:
+                            self._log_jsonl(
+                                os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                                {
+                                    "kind": "autonomy_semantic_dedup",
+                                    "novelty": float(novelty),
+                                    "threshold": float(dedup_threshold),
+                                    "retries": int(dedup_max_retries),
+                                    "suppressed_text": str(text or "")[:120],
+                                    "reward": float(suppress_penalty),
+                                },
+                            )
+                        except Exception:
+                            pass
+                        return  # suppress this utterance entirely
+
             if not text or not text.strip():
+                reward = -float(self.autonomy_rl_cfg.safety_penalty)
+                if self._autonomy_running:
+                    next_s = self._state_vector(core)
+                    td_loss = self._update_autonomy_q(s.float(), action_idx, reward, next_s.float(), done=False)
+                try:
+                    self._log_jsonl(
+                        os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                        {
+                            "kind": "autonomy_rl",
+                            "action": "speak",
+                            "q_wait": float(q[0, 0].item()),
+                            "q_speak": float(q[0, 1].item()),
+                            "lambda": float(lam),
+                            "lambda_delta": float(lam_delta),
+                            "reward": float(reward),
+                            "td_loss": float(td_loss),
+                            **dict(getattr(self, "_autonomy_last_diag", {}) or {}),
+                            "dialog_score": 0.0,
+                            "quality_score": 0.0,
+                            "bus_credit": float(self._autonomy_credit_ema),
+                            "novelty": 0.0,
+                            "safety_penalty": float(self.autonomy_rl_cfg.safety_penalty),
+                            "repetition_penalty": 0.0,
+                        },
+                    )
+                except Exception:
+                    pass
                 return
             text = text.strip()
             if self._is_disallowed_generation_output(text):
                 logger.warning('Autonomy generation filtered by safety policy')
+                reward = -float(self.autonomy_rl_cfg.safety_penalty)
+                if self._autonomy_running:
+                    next_s = self._state_vector(core)
+                    td_loss = self._update_autonomy_q(s.float(), action_idx, reward, next_s.float(), done=False)
+                try:
+                    self._log_jsonl(
+                        os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                        {
+                            "kind": "autonomy_rl",
+                            "action": "speak",
+                            "q_wait": float(q[0, 0].item()),
+                            "q_speak": float(q[0, 1].item()),
+                            "lambda": float(lam),
+                            "lambda_delta": float(lam_delta),
+                            "reward": float(reward),
+                            "td_loss": float(td_loss),
+                            **dict(getattr(self, "_autonomy_last_diag", {}) or {}),
+                            "dialog_score": 0.0,
+                            "quality_score": 0.0,
+                            "bus_credit": float(self._autonomy_credit_ema),
+                            "novelty": 0.0,
+                            "safety_penalty": float(self.autonomy_rl_cfg.safety_penalty),
+                            "repetition_penalty": 0.0,
+                        },
+                    )
+                except Exception:
+                    pass
                 return
             numeric_dump = self._is_numeric_dump_response(text)
             if (
@@ -3187,15 +4729,77 @@ class TorchConversationalPolicy:
                 except Exception:
                     pass
 
+            reward, reward_info = self._compute_autonomy_reward(seed, text, core=core)
+            if self._autonomy_running:
+                next_s = self._state_vector(core)
+                td_loss = self._update_autonomy_q(s.float(), action_idx, reward, next_s.float(), done=False)
+
+            # ---- NeuroModulator online learning ----
+            try:
+                if (
+                    self.use_hf
+                    and HFBackend.is_available()
+                    and os.getenv('M3_ENABLE_NEURO_MODULATOR', '0').lower()
+                    in ('1', 'true', 'yes', 'on')
+                ):
+                    _hf = HFBackend.get_instance()
+                    _nm = getattr(_hf, '_neuro_modulator', None)
+                    _nm_opt = getattr(_hf, '_neuro_mod_opt', None)
+                    if _nm is not None and _nm_opt is not None:
+                        _z_nm = self._build_full_state_vector(core=core)
+                        if _z_nm is not None:
+                            _z_t = _hf._prepare_bridge_state(
+                                _z_nm, _hf._neuro_mod_state_dim, _hf.device
+                            )
+                            if _z_t is not None:
+                                try:
+                                    _neuro_str = float(
+                                        os.getenv('M3_NEURO_STRENGTH', '1.0')
+                                    )
+                                except Exception:
+                                    _neuro_str = 1.0
+                                _nm.train()
+                                _nm_opt.zero_grad(set_to_none=True)
+                                _nloss = _nm.online_loss(
+                                    _z_t,
+                                    reward=float(reward),
+                                    strength=_neuro_str,
+                                )
+                                _nloss.backward()
+                                torch.nn.utils.clip_grad_norm_(
+                                    _nm.parameters(), 1.0
+                                )
+                                _nm_opt.step()
+                                _nm.eval()
+            except Exception:
+                pass
+
             try:
                 self._log_jsonl(
                     os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
                     {
                         "kind": "autonomy_event",
                         "lambda": lam,
+                        "lambda_delta": float(lam_delta),
                         "q_wait": float(q[0, 0].item()),
                         "q_speak": float(q[0, 1].item()),
+                        **dict(getattr(self, "_autonomy_last_diag", {}) or {}),
                         "text": text,
+                    },
+                )
+                self._log_jsonl(
+                    os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                    {
+                        "kind": "autonomy_rl",
+                        "action": "speak",
+                        "q_wait": float(q[0, 0].item()),
+                        "q_speak": float(q[0, 1].item()),
+                        "lambda": float(lam),
+                        "lambda_delta": float(lam_delta),
+                        "reward": float(reward),
+                        "td_loss": float(td_loss),
+                        **dict(getattr(self, "_autonomy_last_diag", {}) or {}),
+                        **reward_info,
                     },
                 )
             except Exception:
@@ -3205,7 +4809,12 @@ class TorchConversationalPolicy:
                 logger.error(f'Autonomy decision error: {e}')
             except Exception:
                 pass
-            self._note_control_health(False, f"autonomy_error:{e}")
+            try:
+                note = getattr(self, "_note_control_health", None)
+                if callable(note):
+                    note(False, f"autonomy_error:{e}")
+            except Exception:
+                pass
 
     def start_autonomy_loop(self):
         if getattr(self, '_auto_running', False):
@@ -3236,13 +4845,27 @@ class TorchConversationalPolicy:
 
         Empty prompts often cause instruct models to drift into low-quality text.
         This seed stays short and uses current M3 state when available.
+
+        When NeuroModulator is active, the seed omits numeric state values
+        because consciousness is already injected at the weight level.
         """
         try:
             lang = os.getenv('M3_AUTONOMY_LANGUAGE', 'ko').lower()
         except Exception:
             lang = 'ko'
 
-        # Light state summary (best-effort)
+        # When neuro modulation is active, use a clean seed without state dumps.
+        # The consciousness state flows through the decoder hooks, not the prompt.
+        neuro_active = os.getenv(
+            'M3_ENABLE_NEURO_MODULATOR', '0'
+        ).lower() in ('1', 'true', 'yes', 'on')
+
+        if neuro_active:
+            if lang.startswith('ko'):
+                return "[자율 모드] 지금 떠오르는 생각을 자유롭게 짧게 말해줘."
+            return "[Autonomy] Speak your mind freely in one short sentence."
+
+        # Light state summary (best-effort) — legacy prompt-based path
         bits = []
         try:
             if core is not None and hasattr(core, 'energy_ctrl'):
@@ -3407,6 +5030,10 @@ class TorchConversationalPolicy:
             self._last_value_estimates["tool_success"] = (
                 (1.0 - ema_alpha) * self._last_value_estimates.get("tool_success", 0.0) +
                 ema_alpha * tool_success
+            )
+            self._autonomy_credit_ema = (
+                (1.0 - ema_alpha) * float(getattr(self, "_autonomy_credit_ema", 0.0))
+                + ema_alpha * float(credit)
             )
             
             # Optional: micro-update token value head with credit signal
@@ -3903,6 +5530,11 @@ class TorchConversationalPolicy:
         t = self.tok
         core = getattr(self, 'core', None)
         raw_prompt = prompt
+        try:
+            if hasattr(self.tok, "observe_unknown_rate"):
+                self.tok.observe_unknown_rate(str(raw_prompt or ""))
+        except Exception:
+            pass
         if getattr(self, "_hf_circuit_open", False):
             self._note_control_health(False, "hf_circuit_open")
             return self._generate_safe_fallback(str(raw_prompt), chat_messages=None, max_len=max_len)
@@ -4138,6 +5770,19 @@ class TorchConversationalPolicy:
                                     self._record_example(prompt, response, source='generate_hf')
                                 except Exception:
                                     pass
+                                try:
+                                    self._adapt_bridge_online(
+                                        hf=hf,
+                                        prompt=prompt,
+                                        response=response,
+                                        z_m3=bridge_state,
+                                    )
+                                except Exception:
+                                    pass
+                                try:
+                                    self._maybe_auto_rebuild_tokenizer()
+                                except Exception:
+                                    pass
                                 self._note_control_health(True, "hf_generate_ok")
                                 return response
                             logger.warning('[HFBackend] filtered disallowed output; switching to fallback')
@@ -4277,7 +5922,11 @@ class TorchConversationalPolicy:
                 
                 self.opt.zero_grad(set_to_none=True)
                 loss.backward()
-                self.opt.step()
+                self._guarded_optimizer_step(
+                    optimizer=self.opt,
+                    params=list(self.model.parameters()),
+                    tag="learn_pair",
+                )
             
             # === kNN: collect from teacher forcing ===
             try:
@@ -4287,6 +5936,10 @@ class TorchConversationalPolicy:
                 pass
             try:
                 self._record_example(prompt, response, source="learn_pair")
+            except Exception:
+                pass
+            try:
+                self._maybe_auto_rebuild_tokenizer()
             except Exception:
                 pass
         except Exception as e:
@@ -4361,7 +6014,11 @@ class TorchConversationalPolicy:
                     # Optional: Clip grad norm
                     # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                     
-                    self.opt.step()
+                    self._guarded_optimizer_step(
+                        optimizer=self.opt,
+                        params=list(self.model.parameters()),
+                        tag="train_batch",
+                    )
                     num_trained += valid_samples
                     
                     # [Memory Safety] Clear CUDA cache to prevent fragmentation (Slows down but prevents OOM)
@@ -4385,16 +6042,447 @@ class TorchConversationalPolicy:
             print(f"[LLM-ADAPTER] train_batch: processed {num_trained}/{len(examples)} examples, avg_loss={avg_loss:.4f}")
         except Exception:
             pass
+        try:
+            self._maybe_auto_rebuild_tokenizer()
+        except Exception:
+            pass
         return num_trained, avg_loss
 
     def train_on_example(self, prompt: str, response: str, max_len: int = 120) -> None:
         """Alias for learn_pair to maintain API compatibility with GUI/data loaders."""
         return self.learn_pair(prompt, response, max_len)
 
+    def _iter_dpo_records_from_dir(self, data_dir: str):
+        import json
+        import glob
+
+        patterns = [
+            os.path.join(data_dir, '**', '*preference*.json'),
+            os.path.join(data_dir, '**', '*preference*.jsonl'),
+            os.path.join(data_dir, '**', '*dpo*.json'),
+            os.path.join(data_dir, '**', '*chosen*.json'),
+            os.path.join(data_dir, '**', '*.preference.auto.jsonl'),
+        ]
+        paths = []
+        for pat in patterns:
+            paths.extend(glob.glob(pat, recursive=True))
+        seen = set()
+        for path in paths:
+            if path in seen:
+                continue
+            seen.add(path)
+            try:
+                if path.lower().endswith(".jsonl"):
+                    with open(path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                obj = json.loads(line)
+                            except Exception:
+                                continue
+                            if not isinstance(obj, dict):
+                                continue
+                            prompt = obj.get('prompt') or obj.get('question') or obj.get('input')
+                            chosen = obj.get('chosen') or obj.get('preferred') or obj.get('good')
+                            rejected = obj.get('rejected') or obj.get('dispreferred') or obj.get('bad')
+                            if prompt and chosen and rejected:
+                                yield str(prompt), str(chosen), str(rejected)
+                else:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    if isinstance(data, list):
+                        items = data
+                    elif isinstance(data, dict):
+                        items = data.get('samples') or data.get('examples') or data.get('items') or [data]
+                    else:
+                        items = []
+                    for obj in items:
+                        if not isinstance(obj, dict):
+                            continue
+                        prompt = obj.get('prompt') or obj.get('question') or obj.get('input')
+                        chosen = obj.get('chosen') or obj.get('preferred') or obj.get('good')
+                        rejected = obj.get('rejected') or obj.get('dispreferred') or obj.get('bad')
+                        if prompt and chosen and rejected:
+                            yield str(prompt), str(chosen), str(rejected)
+            except Exception:
+                continue
+
+    def _stable_hash(self, text: str) -> int:
+        s = str(text or "").encode("utf-8", errors="ignore")
+        return int(hashlib.sha1(s).hexdigest(), 16)
+
+    def _split_train_val(self, items: List[Any], key_fn, val_fraction: float) -> Tuple[List[Any], List[Any]]:
+        vf = max(0.0, min(0.99, float(val_fraction)))
+        train = []
+        val = []
+        for x in items:
+            key = str(key_fn(x))
+            h = self._stable_hash(key) % 1000000
+            if (h / 1000000.0) < vf:
+                val.append(x)
+            else:
+                train.append(x)
+        if not train and val:
+            train, val = list(val), []
+        return train, val
+
+    def collect_dpo_preferences_from_logs(
+        self,
+        logs_dir: Optional[str] = None,
+        out_path: Optional[str] = None,
+        max_pairs: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Auto-build DPO preference triples from accepted/rejected/chat logs."""
+        if not self.dpo_auto_cfg.enabled or str(os.getenv("M3_DPO_AUTO_COLLECT", "1")).lower() not in ("1", "true", "yes", "on"):
+            return {"enabled": False, "num_pairs": 0}
+        base = logs_dir or os.path.dirname(TRAINING_PATH)
+        chosen_path = os.path.join(base, "llm_training_data.jsonl")
+        if not os.path.exists(chosen_path):
+            chosen_path = TRAINING_PATH
+        rejected_path = os.path.join(base, "llm_training_data.rejected.jsonl")
+        chat_path = os.path.join(base, "chat_history.jsonl")
+        if out_path is None:
+            name = str(self.dpo_auto_cfg.output_file or "llm_training_data.preference.auto.jsonl")
+            if not name.endswith(".jsonl"):
+                name += ".jsonl"
+            if "preference.auto" not in name:
+                name = "llm_training_data.preference.auto.jsonl"
+            out_path = os.path.join(base, name)
+
+        def load_jsonl(path: str) -> List[Dict[str, Any]]:
+            out = []
+            if not os.path.exists(path):
+                return out
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                            if isinstance(obj, dict):
+                                out.append(obj)
+                        except Exception:
+                            continue
+            except Exception:
+                return out
+            return out
+
+        chosen_rows = load_jsonl(chosen_path)
+        rejected_rows = load_jsonl(rejected_path)
+        chat_rows = load_jsonl(chat_path)
+
+        time_window = int(max(1, self.dpo_auto_cfg.time_window_sec))
+        min_chars = int(max(1, self.dpo_auto_cfg.min_response_chars))
+        hard_repeat = float(self.dpo_auto_cfg.hard_negative_repeat_threshold)
+        rejected_by_hash: Dict[str, List[Dict[str, Any]]] = {}
+        chosen_pool: List[Dict[str, Any]] = []
+
+        def row_prompt(row: Dict[str, Any]) -> str:
+            return str(row.get("prompt") or row.get("prompt_raw") or row.get("input") or row.get("question") or "").strip()
+
+        def row_resp(row: Dict[str, Any]) -> str:
+            return str(row.get("response") or row.get("text") or row.get("output") or "").strip()
+
+        def ts_of(row: Dict[str, Any]) -> float:
+            t = row.get("ts") or row.get("time") or row.get("t") or 0.0
+            try:
+                tv = float(t)
+            except Exception:
+                tv = 0.0
+            if tv > 1e12:
+                tv /= 1000.0
+            return float(tv)
+
+        def prompt_hash(prompt: str) -> str:
+            return hashlib.sha1(str(prompt).encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+        for row in chosen_rows:
+            p = row_prompt(row)
+            r = row_resp(row)
+            if not p or len(r) < min_chars:
+                continue
+            chosen_pool.append({
+                "prompt": p,
+                "response": r,
+                "ts": ts_of(row),
+                "hash": prompt_hash(p),
+            })
+
+        for row in rejected_rows:
+            p = row_prompt(row)
+            r = row_resp(row)
+            if not p or len(r) < min_chars:
+                continue
+            is_hard = False
+            rep_pen = self._repetition_penalty(r)
+            if rep_pen >= hard_repeat:
+                is_hard = True
+            if self._is_identity_drift_output(r) or self._is_refusal_disclaimer(r):
+                is_hard = True
+            if self._is_numeric_dump_response(r) or self._is_backend_status_text(r):
+                is_hard = True
+            if not is_hard:
+                continue
+            ph = prompt_hash(p)
+            rejected_by_hash.setdefault(ph, []).append({
+                "prompt": p,
+                "response": r,
+                "ts": ts_of(row),
+                "hash": ph,
+            })
+
+        # chat_history fallback mining
+        last_user = ""
+        for row in chat_rows:
+            role = str(row.get("role") or row.get("speaker") or "").strip().lower()
+            text = str(row.get("content") or row.get("text") or row.get("message") or "").strip()
+            if not text:
+                continue
+            if role in ("user", "human"):
+                last_user = text
+                continue
+            if role not in ("assistant", "m3", "bot"):
+                continue
+            if not last_user:
+                continue
+            ph = prompt_hash(last_user)
+            entry = {"prompt": last_user, "response": text, "ts": ts_of(row), "hash": ph}
+            if self._is_backend_status_text(text) or self._is_refusal_disclaimer(text) or self._is_identity_drift_output(text) or self._is_numeric_dump_response(text):
+                rejected_by_hash.setdefault(ph, []).append(entry)
+            else:
+                chosen_pool.append(entry)
+
+        max_pairs_eff = int(max_pairs if max_pairs is not None else self.dpo_auto_cfg.max_pairs)
+        out_rows = []
+        dedupe = set()
+        for ch in chosen_pool:
+            ph = ch["hash"]
+            cands = rejected_by_hash.get(ph, [])
+            if not cands:
+                continue
+            cands.sort(key=lambda x: abs(float(x.get("ts", 0.0)) - float(ch.get("ts", 0.0))))
+            picked = None
+            for rj in cands:
+                dt = abs(float(rj.get("ts", 0.0)) - float(ch.get("ts", 0.0)))
+                if dt <= time_window:
+                    picked = rj
+                    break
+            if picked is None:
+                picked = cands[0]
+            key = (
+                hashlib.sha1((ch["prompt"] + "\n" + ch["response"]).encode("utf-8", errors="ignore")).hexdigest(),
+                hashlib.sha1((picked["prompt"] + "\n" + picked["response"]).encode("utf-8", errors="ignore")).hexdigest(),
+            )
+            if key in dedupe:
+                continue
+            dedupe.add(key)
+            out_rows.append({
+                "prompt": ch["prompt"],
+                "chosen": ch["response"],
+                "rejected": picked["response"],
+                "source": "auto_log_hard_negative",
+                "prompt_hash": ph,
+            })
+            if len(out_rows) >= max_pairs_eff:
+                break
+
+        if out_rows:
+            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+            with open(out_path, "w", encoding="utf-8") as f:
+                for row in out_rows:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        self._log_jsonl(
+            os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+            {
+                "kind": "dpo_auto_collect",
+                "chosen_candidates": int(len(chosen_pool)),
+                "rejected_candidates": int(sum(len(v) for v in rejected_by_hash.values())),
+                "num_pairs": int(len(out_rows)),
+                "output_path": out_path,
+            },
+        )
+        return {"enabled": True, "num_pairs": len(out_rows), "output_path": out_path}
+
+    def train_supervised_with_early_stopping(
+        self,
+        epochs: int = 1,
+        data_dir: str = 'data_set',
+        max_len: int = 120,
+        limit: int | None = None,
+    ) -> dict:
+        pairs = list(self._iter_supervised_records_from_dir(data_dir))
+        if limit is not None:
+            pairs = pairs[:max(0, int(limit))]
+        if not pairs:
+            return {"num_pairs": 0, "epochs_run": 0, "stopped_early": False}
+
+        cfg = self.early_stop_cfg
+        train_pairs, val_pairs = self._split_train_val(
+            pairs,
+            key_fn=lambda x: f"{x[0]}|||{x[1]}",
+            val_fraction=float(cfg.val_fraction),
+        )
+        max_epochs = int(max(1, min(int(cfg.max_epochs), int(max(1, epochs)))))
+        best_metric = float("inf")
+        best_state = None
+        best_epoch = 0
+        patience = int(max(0, cfg.patience))
+        min_delta = float(cfg.min_delta)
+        bad = 0
+        epochs_run = 0
+        for ep in range(1, max_epochs + 1):
+            epochs_run = ep
+            for p, r in train_pairs:
+                try:
+                    self.learn_pair(p, r, max_len=max_len)
+                except Exception:
+                    continue
+            if not val_pairs:
+                continue
+            total_lp = 0.0
+            total_tok = 0
+            for p, r in val_pairs:
+                try:
+                    lp = self._sequence_logprob(p, r, max_len=max_len)
+                    total_lp += float(lp)
+                    total_tok += max(1, len(self.tok.encode(r, add_special=True)) - 1)
+                except Exception:
+                    continue
+            val_nll = float(-total_lp / max(1, total_tok))
+            improved = val_nll < (best_metric - min_delta)
+            if improved:
+                best_metric = val_nll
+                best_epoch = ep
+                bad = 0
+                if bool(cfg.restore_best_weights):
+                    try:
+                        best_state = copy.deepcopy(self.model.state_dict())
+                    except Exception:
+                        best_state = None
+            else:
+                bad += 1
+                if bad > patience:
+                    break
+        stopped_early = bool(epochs_run < max_epochs)
+        if stopped_early and best_state is not None and bool(cfg.restore_best_weights):
+            try:
+                self.model.load_state_dict(best_state, strict=False)
+            except Exception:
+                pass
+        result = {
+            "num_pairs": len(pairs),
+            "train_pairs": len(train_pairs),
+            "val_pairs": len(val_pairs),
+            "best_epoch": int(best_epoch),
+            "epochs_run": int(epochs_run),
+            "stopped_early": bool(stopped_early),
+            "val_nll": float(best_metric if np.isfinite(best_metric) else 0.0),
+        }
+        self._log_jsonl(os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"), {"kind": "early_stop", "phase": "supervised", **result})
+        return result
+
+    def train_dpo_with_early_stopping(
+        self,
+        epochs: int = 2,
+        beta: float = 0.1,
+        data_dir: str = 'data_set',
+    ) -> dict:
+        rows = list(self._iter_dpo_records_from_dir(data_dir))
+        if not rows:
+            return {"num_pairs": 0, "epochs_run": 0, "stopped_early": False}
+        cfg = self.early_stop_cfg
+        train_rows, val_rows = self._split_train_val(
+            rows,
+            key_fn=lambda x: f"{x[0]}|||{x[1]}|||{x[2]}",
+            val_fraction=float(cfg.val_fraction),
+        )
+        max_epochs = int(max(1, min(int(cfg.max_epochs), int(max(1, epochs)))))
+        best_score = -1e9
+        best_epoch = 0
+        best_state = None
+        patience = int(max(0, cfg.patience))
+        min_delta = float(cfg.min_delta)
+        bad = 0
+        epochs_run = 0
+        best_rate = 0.0
+        best_margin = -1e9
+        for ep in range(1, max_epochs + 1):
+            epochs_run = ep
+            for p, ch, rj in train_rows:
+                try:
+                    self.dpo_step(p, ch, rj, beta=beta)
+                except Exception:
+                    continue
+            if not val_rows:
+                continue
+            better = 0
+            margins = []
+            for p, ch, rj in val_rows:
+                try:
+                    ch_lp = float(self._sequence_logprob(p, ch))
+                    rj_lp = float(self._sequence_logprob(p, rj))
+                    if ch_lp > rj_lp:
+                        better += 1
+                    margins.append(ch_lp - rj_lp)
+                except Exception:
+                    continue
+            rate = float(better / max(1, len(val_rows)))
+            margin = float(np.mean(margins)) if margins else 0.0
+            score = rate + 0.05 * margin
+            if score > (best_score + min_delta):
+                best_score = score
+                best_rate = rate
+                best_margin = margin
+                best_epoch = ep
+                bad = 0
+                if bool(cfg.restore_best_weights):
+                    try:
+                        best_state = copy.deepcopy(self.model.state_dict())
+                    except Exception:
+                        best_state = None
+            else:
+                bad += 1
+                if bad > patience:
+                    break
+        stopped_early = bool(epochs_run < max_epochs)
+        if stopped_early and best_state is not None and bool(cfg.restore_best_weights):
+            try:
+                self.model.load_state_dict(best_state, strict=False)
+            except Exception:
+                pass
+        result = {
+            "num_pairs": len(rows),
+            "train_pairs": len(train_rows),
+            "val_pairs": len(val_rows),
+            "best_epoch": int(best_epoch),
+            "epochs_run": int(epochs_run),
+            "stopped_early": bool(stopped_early),
+            "chosen_better_rate": float(best_rate),
+            "margin": float(best_margin if np.isfinite(best_margin) else 0.0),
+        }
+        self._log_jsonl(os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"), {"kind": "early_stop", "phase": "dpo", **result})
+        return result
+
     def train_dpo_from_dir(self, epochs: int = 2, beta: float = 0.1, data_dir: str = 'data_set') -> dict:
         """Train using DPO from preference data in data_set directory."""
         import json
         import glob
+        try:
+            if self.dpo_auto_cfg.enabled and str(os.getenv("M3_DPO_AUTO_COLLECT", "1")).lower() in ("1", "true", "yes", "on"):
+                auto_out = os.path.join(data_dir, "llm_training_data.preference.auto.jsonl")
+                self.collect_dpo_preferences_from_logs(
+                    logs_dir=os.path.dirname(TRAINING_PATH),
+                    out_path=auto_out,
+                    max_pairs=int(self.dpo_auto_cfg.max_pairs),
+                )
+        except Exception:
+            pass
+        if self.early_stop_cfg.enabled and str(os.getenv("M3_TRAIN_EARLY_STOP", "1")).lower() in ("1", "true", "yes", "on"):
+            return self.train_dpo_with_early_stopping(epochs=epochs, beta=beta, data_dir=data_dir)
         
         total_loss = 0.0
         num_samples = 0
@@ -4403,6 +6491,7 @@ class TorchConversationalPolicy:
             # Search for DPO-style preference data files
             patterns = [
                 os.path.join(data_dir, '**', '*preference*.json'),
+                os.path.join(data_dir, '**', '*preference*.jsonl'),
                 os.path.join(data_dir, '**', '*dpo*.json'),
                 os.path.join(data_dir, '**', '*chosen*.json'),
             ]
@@ -4420,8 +6509,22 @@ class TorchConversationalPolicy:
                 
                 for filepath in files:
                     try:
-                        with open(filepath, 'r', encoding='utf-8') as f:
-                            data = json.load(f)
+                        if filepath.lower().endswith('.jsonl'):
+                            data = []
+                            with open(filepath, 'r', encoding='utf-8') as f:
+                                for line in f:
+                                    line = line.strip()
+                                    if not line:
+                                        continue
+                                    try:
+                                        row = json.loads(line)
+                                        if isinstance(row, dict):
+                                            data.append(row)
+                                    except Exception:
+                                        continue
+                        else:
+                            with open(filepath, 'r', encoding='utf-8') as f:
+                                data = json.load(f)
                         
                         # Handle different DPO data formats
                         if isinstance(data, list):
@@ -4529,6 +6632,13 @@ class TorchConversationalPolicy:
 
     def train_supervised_from_dir(self, epochs: int = 1, data_dir: str = 'data_set', max_len: int = 120, limit: int | None = None) -> dict:
         """Train with (prompt, response) pairs found under data_dir (recursive)."""
+        if self.early_stop_cfg.enabled and str(os.getenv("M3_TRAIN_EARLY_STOP", "1")).lower() in ("1", "true", "yes", "on"):
+            return self.train_supervised_with_early_stopping(
+                epochs=epochs,
+                data_dir=data_dir,
+                max_len=max_len,
+                limit=limit,
+            )
         import random
         pairs = list(self._iter_supervised_records_from_dir(data_dir))
         if not pairs:
@@ -4587,6 +6697,7 @@ class TorchConversationalPolicy:
         try:
             patterns = [
                 os.path.join(data_dir, '**', '*preference*.json'),
+                os.path.join(data_dir, '**', '*preference*.jsonl'),
                 os.path.join(data_dir, '**', '*dpo*.json'),
                 os.path.join(data_dir, '**', '*chosen*.json'),
             ]
@@ -4595,8 +6706,22 @@ class TorchConversationalPolicy:
                 paths.extend(glob.glob(pat, recursive=True))
             for filepath in paths:
                 try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
+                    if filepath.lower().endswith('.jsonl'):
+                        data = []
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                try:
+                                    row = json.loads(line)
+                                    if isinstance(row, dict):
+                                        data.append(row)
+                                except Exception:
+                                    continue
+                    else:
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
                     if isinstance(data, dict):
                         items = data.get('data') or data.get('examples') or data.get('samples') or data.get('items') or []
                         if isinstance(items, list):
@@ -4736,6 +6861,33 @@ class TorchConversationalPolicy:
         - Returns summary metrics for supervised and DPO evaluations.
         """
         import json, os, csv, math, random, glob
+        try:
+            if enable_dpo and self.dpo_auto_cfg.enabled and str(os.getenv("M3_DPO_AUTO_COLLECT", "1")).lower() in ("1", "true", "yes", "on"):
+                self.collect_dpo_preferences_from_logs(
+                    logs_dir=os.path.dirname(TRAINING_PATH),
+                    out_path=os.path.join(data_dir, "llm_training_data.preference.auto.jsonl"),
+                    max_pairs=int(self.dpo_auto_cfg.max_pairs),
+                )
+        except Exception:
+            pass
+        if self.early_stop_cfg.enabled and str(os.getenv("M3_TRAIN_EARLY_STOP", "1")).lower() in ("1", "true", "yes", "on"):
+            sup = self.train_supervised_with_early_stopping(
+                epochs=epochs,
+                data_dir=data_dir,
+                max_len=max_len,
+                limit=limit,
+            )
+            dpo = {}
+            if enable_dpo:
+                dpo = self.train_dpo_with_early_stopping(
+                    epochs=max(1, int(epochs)),
+                    beta=0.1,
+                    data_dir=data_dir,
+                )
+            return {
+                **({"supervised_metrics": sup} if sup else {}),
+                **({"dpo_metrics": dpo} if dpo else {}),
+            }
 
         # Reservoir buffers for evaluation (fractional sampling)
         sup_eval = []  # list[(prompt, response)]
@@ -5061,7 +7213,11 @@ class TorchConversationalPolicy:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             except Exception:
                 pass
-            self.opt.step()
+            self._guarded_optimizer_step(
+                optimizer=self.opt,
+                params=list(self.model.parameters()),
+                tag="dpo_step",
+            )
     
     def dpo_batch_step(
         self, 
@@ -5238,7 +7394,11 @@ class TorchConversationalPolicy:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     except Exception:
                         pass
-                    self.opt.step()
+                    self._guarded_optimizer_step(
+                        optimizer=self.opt,
+                        params=list(self.model.parameters()),
+                        tag="dpo_batch_step",
+                    )
     
     def _is_empty_prompt_or_response(self, prompt: str, response: str) -> bool:
         """Utility function to check if prompt or response is empty."""
@@ -5257,7 +7417,11 @@ class TorchConversationalPolicy:
             return
 
         if self.value_opt is None:
-            self.value_opt = self.torch.optim.Adam(params, lr=1e-3)
+            self.value_opt = self.torch.optim.AdamW(
+                params,
+                lr=1e-3,
+                weight_decay=float(os.getenv("M3_STABILITY_WEIGHT_DECAY", str(self.stability_cfg.weight_decay))),
+            )
         
         self.model.train()
         mse = nn.MSELoss()
@@ -5379,7 +7543,11 @@ class TorchConversationalPolicy:
             params = [p for n, p in self.model.named_parameters() if 'token_value' in n]
             if not params:
                 return
-            self.token_value_opt = self.torch.optim.Adam(params, lr=1e-3)
+            self.token_value_opt = self.torch.optim.AdamW(
+                params,
+                lr=1e-3,
+                weight_decay=float(os.getenv("M3_STABILITY_WEIGHT_DECAY", str(self.stability_cfg.weight_decay))),
+            )
         self.model.train()
         mse = nn.MSELoss()
         for _ in range(max(1, epochs)):
@@ -5447,7 +7615,11 @@ class TorchConversationalPolicy:
                         self.token_value_opt.zero_grad(set_to_none=True)
                         loss.backward()
                         nn.utils.clip_grad_norm_(self.model.token_value.parameters(), max_norm=1.0)
-                        self.token_value_opt.step()
+                        self._guarded_optimizer_step(
+                            optimizer=self.token_value_opt,
+                            params=list(self.model.token_value.parameters()),
+                            tag="token_value_head",
+                        )
                     total += float(loss.item())
                     n += 1
                 except Exception:

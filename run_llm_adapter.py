@@ -55,6 +55,17 @@ os.environ.setdefault("M3_CONTROL_AUTO_FULL", "1")
 os.environ.setdefault("M3_CONTROL_HEALTH_WINDOW", "24")
 os.environ.setdefault("M3_CONTROL_HEALTH_WINDOW_SEC", "180")
 os.environ.setdefault("M3_CONTROL_QUALITY_TARGET", "0.42")
+
+# NeuroModulator: weight-level M3 consciousness control
+os.environ.setdefault("M3_ENABLE_CONTROL_BRIDGE", "1")
+os.environ.setdefault("M3_ENABLE_NEURO_MODULATOR", "1")
+os.environ.setdefault("M3_NEURO_STRENGTH", "1.0")
+os.environ.setdefault("M3_NEUROMOD_LR", "1e-4")
+os.environ.setdefault("M3_NEURO_STATE_DIM", "256")
+os.environ.setdefault("M3_NEURO_HIDDEN_RANK", "16")
+os.environ.setdefault("M3_NEURO_LOGIT_RANK", "32")
+os.environ.setdefault("M3_NEURO_TRUNK_DIM", "256")
+
 os.environ.setdefault("HF_HUB_OFFLINE", "0")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "0")
 
@@ -411,11 +422,11 @@ def _print_status():
         _safe_print(f"  {line}")
 
     mode_desc_map = {
-        "off": "?? ??: ?? LLM? ??",
-        "state": "?? ??? ??",
-        "memory": "??+?? ?? ??",
-        "full": "??+??+???+???+?????+?????",
-        "auto": "??/??/?? ??? ???? ??? ??",
+        "off": "off: M3 제어 비활성화, 기본 LLM 응답만 사용",
+        "state": "state: M3 상태 컨텍스트만 포함하여 제어",
+        "memory": "memory: 상태 + 대화/연구/지식 메모리 회상 주입",
+        "full": "full: 상태/메모리 + bridge/sampler/token-critic/quality gate 모두 활성",
+        "auto": "auto: 상황에 따라 제어 강도를 자동으로 조절(adaptive self-adjust)",
     }
     mode = _normalize_control_mode(os.environ.get("M3_CONTROL_SELECTION_MODE", "state"))
     resolved_mode = mode
