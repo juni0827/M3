@@ -1,7 +1,7 @@
-# M3 Repository Deep Architecture README
+# M3 Repository Architecture README
 
 이 문서는 이 저장소의 **모든 Python 코드 파일**(모듈/클래스/함수/메서드)과 상호 연결 로직을 정리한 상세 아키텍처 문서입니다.
-This README provides a deep architecture map of all Python modules/classes/functions and their integration flows.
+This README provides a architecture map of all Python modules/classes/functions and their integration flows.
 
 ## 1) 전체 구조 요약
 
