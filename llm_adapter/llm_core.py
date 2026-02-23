@@ -1060,7 +1060,7 @@ class HFBackend:
         try:
             state_dim = int(max(8, state_dim))
         except Exception:
-            state_dim = nm_cfg.state_dim
+            state_dim = int(max(8, nm_cfg.state_dim))
         if (
             self._neuro_modulator is not None
             and self._neuro_mod_state_dim == state_dim
