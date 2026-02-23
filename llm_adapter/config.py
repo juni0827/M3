@@ -308,7 +308,7 @@ class NeuroModulatorConfig:
         grad_clip_norm: Maximum gradient norm for online learning updates.
         checkpoint_file: Path for persisting learned NeuroModulator weights.
     """
-    enabled: bool = True
+    enabled: bool = False
     state_dim: int = 256
     trunk_dim: int = 256
     hidden_rank: int = 16

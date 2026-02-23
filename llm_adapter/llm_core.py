@@ -1139,7 +1139,20 @@ class HFBackend:
         if not os.path.exists(path):
             return False
         try:
-            ckpt = torch.load(path, map_location=self.device, weights_only=False)
+            try:
+                # Prefer safe loading when supported (PyTorch >= 2.1 with weights_only)
+                ckpt = torch.load(path, map_location=self.device, weights_only=True)
+            except TypeError:
+                # Older PyTorch versions do not support the weights_only kwarg.
+                # Retry without the kwarg to maintain compatibility.
+                ckpt = torch.load(path, map_location=self.device)
+            except (RuntimeError, ValueError):
+                # Optional unsafe pickle fallback; disabled by default.
+                # Enable by setting LLM_ADAPTER_UNSAFE_PICKLE_FALLBACK=1.
+                if os.getenv("LLM_ADAPTER_UNSAFE_PICKLE_FALLBACK", "0") == "1":
+                    ckpt = torch.load(path, map_location=self.device)
+                else:
+                    raise
             self._neuro_modulator.load_state_dict(ckpt['model_state_dict'])
             if self._neuro_mod_opt and ckpt.get('optimizer_state_dict'):
                 self._neuro_mod_opt.load_state_dict(ckpt['optimizer_state_dict'])
@@ -4848,7 +4861,18 @@ class TorchConversationalPolicy:
                                     _nm.parameters(), _nm_cfg.grad_clip_norm
                                 )
                                 _nm_opt.step()
+                                # Track online-learning steps separately from _nm._step (which is tied to forward())
+                                _online_step = getattr(_hf, "_neuro_mod_online_step", 0) + 1
+                                _hf._neuro_mod_online_step = _online_step
                                 _nm.eval()
+                                # Persist checkpoint every 100 online-learning steps
+                                if _online_step % 100 == 0:
+                                    try:
+                                        _hf._save_neuro_checkpoint()
+                                    except Exception as _ckpt_err:
+                                        logging.getLogger('llm_adapter').debug(
+                                            f'[NeuroMod] periodic checkpoint failed: {_ckpt_err}'
+                                        )
             except Exception:
                 pass
 
