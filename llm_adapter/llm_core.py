@@ -1140,9 +1140,19 @@ class HFBackend:
             return False
         try:
             try:
+                # Prefer safe loading when supported (PyTorch >= 2.1 with weights_only)
                 ckpt = torch.load(path, map_location=self.device, weights_only=True)
-            except (RuntimeError, ValueError, TypeError):
-                ckpt = torch.load(path, map_location=self.device, weights_only=False)
+            except TypeError:
+                # Older PyTorch versions do not support the weights_only kwarg.
+                # Retry without the kwarg to maintain compatibility.
+                ckpt = torch.load(path, map_location=self.device)
+            except (RuntimeError, ValueError):
+                # Optional unsafe pickle fallback; disabled by default.
+                # Enable by setting LLM_ADAPTER_UNSAFE_PICKLE_FALLBACK=1.
+                if os.getenv("LLM_ADAPTER_UNSAFE_PICKLE_FALLBACK", "0") == "1":
+                    ckpt = torch.load(path, map_location=self.device)
+                else:
+                    raise
             self._neuro_modulator.load_state_dict(ckpt['model_state_dict'])
             if self._neuro_mod_opt and ckpt.get('optimizer_state_dict'):
                 self._neuro_mod_opt.load_state_dict(ckpt['optimizer_state_dict'])
