@@ -291,7 +291,23 @@ class ConsciousnessBusConfig:
 
 @dataclass
 class NeuroModulatorConfig:
-    """Configuration for NeuroModulator weight-level consciousness control."""
+    """Configuration for NeuroModulator weight-level consciousness control.
+
+    Attributes:
+        enabled: Whether the NeuroModulator is active.
+        state_dim: Dimension of the M3 consciousness state vector input.
+        trunk_dim: Hidden dimension of the shared trunk network.
+        hidden_rank: Low-rank dimension for per-layer hidden bias generation.
+        logit_rank: Low-rank dimension for output logit bias generation.
+        strength: External modulation strength multiplier [0, inf).
+        learning_rate: Optimizer learning rate for online adaptation.
+        weight_decay: Optimizer L2 regularization coefficient.
+        warmup_steps: Steps for exponential warmup from identity to full modulation.
+        max_gain_delta: Maximum per-layer gain deviation from 1.0.
+        max_logit_bias: Maximum absolute logit bias magnitude.
+        grad_clip_norm: Maximum gradient norm for online learning updates.
+        checkpoint_file: Path for persisting learned NeuroModulator weights.
+    """
     enabled: bool = True
     state_dim: int = 256
     trunk_dim: int = 256

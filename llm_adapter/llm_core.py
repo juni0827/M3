@@ -1095,9 +1095,9 @@ class HFBackend:
             lr = float(os.getenv('M3_NEUROMOD_LR', str(nm_cfg.learning_rate)))
         except Exception:
             lr = nm_cfg.learning_rate
-        wd = nm_cfg.weight_decay
+        weight_decay = nm_cfg.weight_decay
         self._neuro_mod_opt = torch.optim.Adam(
-            self._neuro_modulator.parameters(), lr=lr, weight_decay=wd
+            self._neuro_modulator.parameters(), lr=lr, weight_decay=weight_decay
         )
         logging.getLogger('llm_adapter').info(
             f'[HFBackend] NeuroModulator created: layers={num_layers}, '
@@ -1114,8 +1114,7 @@ class HFBackend:
         path = nm_cfg.checkpoint_file
         try:
             os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
-            _torch = torch
-            _torch.save({
+            torch.save({
                 'model_state_dict': self._neuro_modulator.state_dict(),
                 'optimizer_state_dict': self._neuro_mod_opt.state_dict() if self._neuro_mod_opt else None,
                 'step': self._neuro_modulator._step,
@@ -1140,8 +1139,7 @@ class HFBackend:
         if not os.path.exists(path):
             return False
         try:
-            _torch = torch
-            ckpt = _torch.load(path, map_location=self.device, weights_only=False)
+            ckpt = torch.load(path, map_location=self.device, weights_only=False)
             self._neuro_modulator.load_state_dict(ckpt['model_state_dict'])
             if self._neuro_mod_opt and ckpt.get('optimizer_state_dict'):
                 self._neuro_mod_opt.load_state_dict(ckpt['optimizer_state_dict'])
