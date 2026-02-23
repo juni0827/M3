@@ -378,7 +378,7 @@ sequenceDiagram
 
 ### `run_llm_adapter.py`
 - 모듈명: `run_llm_adapter`
-- 코드 라인 수: **722**
+- 코드 라인 수: **723**
 - Top-level 클래스 수: **0** / Top-level 함수 수: **18**
 
 **클래스 목록**: 없음
