@@ -411,6 +411,88 @@ class M3PlanFeatureTests(unittest.TestCase):
         lvl = ces.get_consciousness_level(0.2)
         self.assertIn(lvl, {"(low)", "(moderate)", "(high)", "(very high)"})
 
+    def test_14_neuro_modulator_config_defaults_and_json_roundtrip(self):
+        from llm_adapter.config import M3LLMConfig, NeuroModulatorConfig, validate_config
+
+        cfg = M3LLMConfig()
+        nm = cfg.neuro_modulator
+        self.assertIsInstance(nm, NeuroModulatorConfig)
+        self.assertTrue(nm.enabled)
+        self.assertEqual(nm.state_dim, 256)
+        self.assertEqual(nm.hidden_rank, 16)
+        self.assertEqual(nm.logit_rank, 32)
+        self.assertGreater(nm.learning_rate, 0.0)
+        self.assertGreater(nm.grad_clip_norm, 0.0)
+        self.assertTrue(validate_config(cfg))
+
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "test_cfg.json")
+            cfg.to_json(path)
+            loaded = M3LLMConfig.from_json(path)
+            self.assertEqual(loaded.neuro_modulator.state_dim, nm.state_dim)
+            self.assertEqual(loaded.neuro_modulator.hidden_rank, nm.hidden_rank)
+            self.assertEqual(loaded.neuro_modulator.strength, nm.strength)
+            self.assertEqual(loaded.neuro_modulator.checkpoint_file, nm.checkpoint_file)
+
+    def test_15_neuro_modulator_config_validation_rejects_invalid(self):
+        from llm_adapter.config import M3LLMConfig, NeuroModulatorConfig, validate_config
+        import logging
+
+        cfg = M3LLMConfig()
+        cfg.neuro_modulator.state_dim = 0
+        logging.disable(logging.CRITICAL)
+        try:
+            ok = validate_config(cfg)
+        finally:
+            logging.disable(logging.NOTSET)
+        self.assertFalse(ok)
+
+    def test_16_neuro_modulator_save_and_load_checkpoint(self):
+        from llm_adapter.config import M3LLMConfig, NeuroModulatorConfig, set_global_config, get_global_config
+        from llm_adapter.m3_control_bridge import NeuroModulator
+
+        nm = NeuroModulator(state_dim=32, num_layers=2, model_hidden_dim=64, vocab_size=100)
+        z = torch.randn(1, 32)
+        # Advance a few steps so _step > 0
+        for _ in range(5):
+            nm(z, strength=1.0)
+        opt = torch.optim.Adam(nm.parameters(), lr=1e-3)
+
+        with tempfile.TemporaryDirectory() as td:
+            ckpt_path = os.path.join(td, "nm_test.pt")
+            cfg = get_global_config()
+            old_path = cfg.neuro_modulator.checkpoint_file
+            cfg.neuro_modulator.checkpoint_file = ckpt_path
+            set_global_config(cfg)
+
+            try:
+                torch.save({
+                    'model_state_dict': nm.state_dict(),
+                    'optimizer_state_dict': opt.state_dict(),
+                    'step': nm._step,
+                    'state_dim': 32,
+                }, ckpt_path)
+                self.assertTrue(os.path.exists(ckpt_path))
+
+                nm2 = NeuroModulator(state_dim=32, num_layers=2, model_hidden_dim=64, vocab_size=100)
+                ckpt = torch.load(ckpt_path, weights_only=False)
+                nm2.load_state_dict(ckpt['model_state_dict'])
+                nm2._step = ckpt['step']
+
+                self.assertEqual(nm2._step, nm._step)
+                for (n1, p1), (n2, p2) in zip(nm.named_parameters(), nm2.named_parameters()):
+                    self.assertTrue(torch.allclose(p1, p2), f"mismatch in {n1}")
+            finally:
+                cfg.neuro_modulator.checkpoint_file = old_path
+                set_global_config(cfg)
+
+    def test_17_neuro_modulator_config_in_hfbackend_ensure(self):
+        from llm_adapter.config import get_global_config
+        nm_cfg = get_global_config().neuro_modulator
+        self.assertEqual(nm_cfg.trunk_dim, 256)
+        self.assertEqual(nm_cfg.warmup_steps, 100)
+        self.assertEqual(nm_cfg.max_gain_delta, 0.3)
+
 
 if __name__ == "__main__":
     unittest.main()

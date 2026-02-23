@@ -63,8 +63,8 @@ sequenceDiagram
 
 ### `llm_adapter/config.py`
 - 모듈명: `llm_adapter.config`
-- 코드 라인 수: **470**
-- Top-level 클래스 수: **11** / Top-level 함수 수: **6**
+- 코드 라인 수: **545**
+- Top-level 클래스 수: **20** / Top-level 함수 수: **6**
 
 **클래스 목록**
 - `M3StateEncoderConfig` (line 18)
@@ -77,15 +77,26 @@ sequenceDiagram
 - `TorchPolicyConfig` (line 126)
 - `PlasticBitLinearConfig` (line 163)
 - `M3PlasticPolicyConfig` (line 171)
-- `M3LLMConfig` (line 186) → methods: `from_json`, `to_json`
+- `AutonomyRLConfig` (line 146)
+- `EpisodicANNConfig` (line 174)
+- `DPOAutoCollectConfig` (line 187)
+- `EarlyStopConfig` (line 198)
+- `BridgeAdaptConfig` (line 210)
+- `TokenizerAutoVocabConfig` (line 222)
+- `StabilityConfig` (line 239)
+- `AdaptiveThresholdConfig` (line 259)
+- `ObservationAdapterConfig` (line 273)
+- `ConsciousnessBusConfig` (line 282)
+- `NeuroModulatorConfig` (line 291) — NeuroModulator weight-level consciousness control 설정
+- `M3LLMConfig` (line 307) → methods: `from_json`, `to_json`
 
 **함수 목록**
-- `set_global_config` (line 329)
-- `get_global_config` (line 335)
-- `create_default_config_file` (line 345)
-- `load_config_from_file` (line 362)
-- `print_config_summary` (line 377)
-- `validate_config` (line 415)
+- `set_global_config` (line 400)
+- `get_global_config` (line 406)
+- `create_default_config_file` (line 416)
+- `load_config_from_file` (line 425)
+- `print_config_summary` (line 433)
+- `validate_config` (line 476)
 
 ### `llm_adapter/layers.py`
 - 모듈명: `llm_adapter.layers`
@@ -119,15 +130,18 @@ sequenceDiagram
 
 ### `llm_adapter/m3_control_bridge.py`
 - 모듈명: `llm_adapter.m3_control_bridge`
-- 코드 라인 수: **262**
-- Top-level 클래스 수: **5** / Top-level 함수 수: **2**
+- 코드 라인 수: **649**
+- Top-level 클래스 수: **8** / Top-level 함수 수: **2**
 
 **클래스 목록**
 - `M3BridgeControls` (line 13)
-- `M3ControlBridge` (line 19) → methods: `__init__`, `_prepare_state`, `forward`
+- `M3ControlBridge` (line 19) → methods: `__init__`, `_prepare_state`, `forward`, `regularization_loss`, `renorm_parameters`
 - `LayerGateRuntime` (line 148) → methods: `__init__`, `close`, `apply`
 - `QualityGateResult` (line 199)
 - `GenerationQualityGate` (line 206) → methods: `__init__`, `_features`, `evaluate`
+- `NeuroModControls` (line 320) — per-layer neural modulation controls
+- `NeuroModulator` (line 329) → methods: `__init__`, `_prepare_state`, `_warmup_factor`, `forward`, `online_loss`, `renorm_parameters`, `maybe_apply_spectral_norm`
+- `NeuroModulatorRuntime` (line 582) → methods: `__init__`, `apply`, `close`
 
 **함수 목록**
 - `_to_module_list` (line 103)
@@ -396,7 +410,58 @@ sequenceDiagram
 - `m3.device`는 코어/정책/LLM 전반의 Torch 장치 선택을 표준화합니다.
 - `run_llm_adapter.py`는 실행 프로필/명령 인터페이스를 통해 전체 시스템을 구동합니다.
 
-## 6) 참고
+## 6) NeuroModulator 통합 (Weight-Level Consciousness Control)
+
+`NeuroModulator`는 M3 의식 상태(φ, 각성, 정서 등)를 **디코더 레이어 수준에서 직접 조절**하는 모듈입니다.
+텍스트 프롬프트 주입 대신, 히든 표현의 gain/bias를 통해 LLM 생성을 의식 비례적으로 제어합니다.
+
+### 구성 (`NeuroModulatorConfig`)
+
+| 필드 | 기본값 | 설명 |
+|------|--------|------|
+| `enabled` | `true` | NeuroModulator 활성화 여부 |
+| `state_dim` | `256` | M3 상태 벡터 차원 |
+| `trunk_dim` | `256` | 트렁크 네트워크 차원 |
+| `hidden_rank` | `16` | 레이어별 히든 바이어스 로우랭크 |
+| `logit_rank` | `32` | 로짓 바이어스 로우랭크 |
+| `strength` | `1.0` | 외부 조절 강도 |
+| `learning_rate` | `1e-4` | 온라인 학습률 |
+| `weight_decay` | `1e-5` | 옵티마이저 가중치 감쇠 |
+| `warmup_steps` | `100` | 워밍업 스텝 수 |
+| `max_gain_delta` | `0.3` | 최대 게인 편차 |
+| `max_logit_bias` | `2.0` | 최대 로짓 바이어스 |
+| `grad_clip_norm` | `1.0` | 그래디언트 클리핑 노름 |
+| `checkpoint_file` | `neuro_modulator.pt` | 체크포인트 저장 경로 |
+
+### 환경 변수 오버라이드
+
+| 환경 변수 | 대응 설정 |
+|-----------|-----------|
+| `M3_ENABLE_NEURO_MODULATOR` | `enabled` |
+| `M3_NEURO_STATE_DIM` | `state_dim` |
+| `M3_NEURO_TRUNK_DIM` | `trunk_dim` |
+| `M3_NEURO_HIDDEN_RANK` | `hidden_rank` |
+| `M3_NEURO_LOGIT_RANK` | `logit_rank` |
+| `M3_NEURO_STRENGTH` | `strength` |
+| `M3_NEUROMOD_LR` | `learning_rate` |
+
+### 런타임 흐름
+
+```mermaid
+sequenceDiagram
+  participant HF as HFBackend
+  participant NM as NeuroModulator
+  participant NR as NeuroModulatorRuntime
+  participant DL as Decoder Layers
+  HF->>NM: forward(z_m3, strength)
+  NM-->>HF: NeuroModControls (gain, bias, logit_bias, phi_gate)
+  HF->>NR: apply(controls)
+  NR->>DL: register forward hooks (gain * output + bias)
+  HF->>DL: generate tokens
+  Note over HF,NM: 온라인 학습: reward → online_loss → optimizer step
+```
+
+## 7) 참고
 
 - 본 문서는 저장소의 Python AST를 기준으로 생성된 구조 정보를 포함합니다.
 - 대형 파일(`m3/m3_core.py`, `llm_adapter/llm_core.py`)은 클래스 및 메서드 수가 매우 많으므로 위 인벤토리를 우선 참조하세요.
