@@ -4861,9 +4861,12 @@ class TorchConversationalPolicy:
                                     _nm.parameters(), _nm_cfg.grad_clip_norm
                                 )
                                 _nm_opt.step()
+                                # Track online-learning steps separately from _nm._step (which is tied to forward())
+                                _online_step = getattr(_hf, "_neuro_mod_online_step", 0) + 1
+                                _hf._neuro_mod_online_step = _online_step
                                 _nm.eval()
                                 # Persist checkpoint every 100 online-learning steps
-                                if _nm._step % 100 == 0:
+                                if _online_step % 100 == 0:
                                     try:
                                         _hf._save_neuro_checkpoint()
                                     except Exception as _ckpt_err:
