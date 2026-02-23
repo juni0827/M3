@@ -550,6 +550,10 @@ def validate_config(config: Optional[M3LLMConfig] = None) -> bool:
         errors.append("neuro_modulator.max_gain_delta must be >= 0")
     if cfg.neuro_modulator.grad_clip_norm <= 0:
         errors.append("neuro_modulator.grad_clip_norm must be > 0")
+    if cfg.neuro_modulator.max_logit_bias < 0:
+        errors.append("neuro_modulator.max_logit_bias must be >= 0")
+    if cfg.neuro_modulator.weight_decay < 0:
+        errors.append("neuro_modulator.weight_decay must be >= 0")
 
     if errors:
         logger.error("Config validation failed:")
