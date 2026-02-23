@@ -1169,11 +1169,27 @@ class HFBackend:
 
     def _neuro_status(self) -> dict:
         """Return a summary dict of NeuroModulator status for diagnostics."""
+        # Resolve whether the NeuroModulator is enabled according to config/env.
+        # Fall back gracefully if older code lacks `_neuro_enabled`.
+        try:
+            enabled = bool(self._neuro_enabled())
+        except AttributeError:
+            # Backward-compat: approximate "enabled" by whether a modulator exists.
+            enabled = self._neuro_modulator is not None
+
         if self._neuro_modulator is None:
-            return {'active': False}
+            # No instantiated modulator; never "active", but still report whether
+            # config/env currently consider it enabled.
+            return {
+                'active': False,
+                'enabled': enabled,
+            }
+
         nm = self._neuro_modulator
         return {
-            'active': True,
+            # "active" reflects runtime enablement, not just instance existence.
+            'active': bool(enabled),
+            'enabled': enabled,
             'step': nm._step,
             'state_dim': self._neuro_mod_state_dim,
             'num_layers': nm.num_layers,
