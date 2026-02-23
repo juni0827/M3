@@ -410,7 +410,8 @@ class M3LLMConfig:
             'consciousness_bus': dict(self.consciousness_bus.__dict__),
             'neuro_modulator': dict(self.neuro_modulator.__dict__),
         }
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        dir_path = os.path.dirname(path) or '.'
+        os.makedirs(dir_path, exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
