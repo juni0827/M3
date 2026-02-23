@@ -54,7 +54,7 @@ sequenceDiagram
 
 ### `llm_adapter/__init__.py`
 - 모듈명: `llm_adapter`
-- 코드 라인 수: **52**
+- 코드 라인 수: **66**
 - Top-level 클래스 수: **0** / Top-level 함수 수: **0**
 
 **클래스 목록**: 없음
@@ -63,29 +63,40 @@ sequenceDiagram
 
 ### `llm_adapter/config.py`
 - 모듈명: `llm_adapter.config`
-- 코드 라인 수: **470**
-- Top-level 클래스 수: **11** / Top-level 함수 수: **6**
+- 코드 라인 수: **564**
+- Top-level 클래스 수: **22** / Top-level 함수 수: **6**
 
 **클래스 목록**
 - `M3StateEncoderConfig` (line 18)
-- `M3StateCacheConfig` (line 37)
-- `M3AwareDecoderLayerConfig` (line 53)
-- `M3AdaptiveSamplerConfig` (line 70)
-- `M3EpisodicMemoryConfig` (line 90)
-- `KNNIndexConfig` (line 100)
-- `TokenizerConfig` (line 108)
-- `TorchPolicyConfig` (line 126)
-- `PlasticBitLinearConfig` (line 163)
-- `M3PlasticPolicyConfig` (line 171)
-- `M3LLMConfig` (line 186) → methods: `from_json`, `to_json`
+- `M3StateCacheConfig` (line 32)
+- `M3AwareDecoderLayerConfig` (line 45)
+- `M3AdaptiveSamplerConfig` (line 57)
+- `M3EpisodicMemoryConfig` (line 72)
+- `KNNIndexConfig` (line 81)
+- `TokenizerConfig` (line 89)
+- `TorchPolicyConfig` (line 102)
+- `PlasticBitLinearConfig` (line 128)
+- `M3PlasticPolicyConfig` (line 136)
+- `AutonomyRLConfig` (line 146)
+- `EpisodicANNConfig` (line 174)
+- `DPOAutoCollectConfig` (line 187)
+- `EarlyStopConfig` (line 198)
+- `BridgeAdaptConfig` (line 210)
+- `TokenizerAutoVocabConfig` (line 222)
+- `StabilityConfig` (line 239)
+- `AdaptiveThresholdConfig` (line 259)
+- `ObservationAdapterConfig` (line 273)
+- `ConsciousnessBusConfig` (line 282)
+- `NeuroModulatorConfig` (line 293) — NeuroModulator weight-level consciousness control 설정
+- `M3LLMConfig` (line 327) → methods: `from_json`, `to_json`
 
 **함수 목록**
-- `set_global_config` (line 329)
-- `get_global_config` (line 335)
-- `create_default_config_file` (line 345)
-- `load_config_from_file` (line 362)
-- `print_config_summary` (line 377)
-- `validate_config` (line 415)
+- `set_global_config` (line 423)
+- `get_global_config` (line 429)
+- `create_default_config_file` (line 439)
+- `load_config_from_file` (line 448)
+- `print_config_summary` (line 455)
+- `validate_config` (line 494)
 
 ### `llm_adapter/layers.py`
 - 모듈명: `llm_adapter.layers`
@@ -99,7 +110,7 @@ sequenceDiagram
 
 ### `llm_adapter/llm_core.py`
 - 모듈명: `llm_adapter.llm_core`
-- 코드 라인 수: **5725**
+- 코드 라인 수: **7984**
 - Top-level 클래스 수: **8** / Top-level 함수 수: **3**
 
 **클래스 목록**
@@ -107,7 +118,7 @@ sequenceDiagram
 - `M3StateCache` (line 373) → methods: `__init__`, `_infer_cache_size`, `_infer_phi_trend_window`, `update`, `get_current_panels`, `get_phi_trend`
 - `M3AwareDecoderLayer` (line 484) → methods: `__init__`, `_infer_nhead`, `_infer_dropout`, `forward`
 - `M3AdaptiveSampler` (line 590) → methods: `__init__`, `_compute_temperature`, `_compute_top_k`, `sample`
-- `HFBackend` (line 766) → methods: `get_instance`, `is_available`, `__init__`, `_ensure_loaded`, `_bridge_enabled`, `_bridge_enabled_safe`, `_note_control_health`, `_compute_recent_control_stats`, `_auto_control_selection`, `_control_selection_mode`, `_control_allows`, `_ensure_control_bridge`, `_prepare_bridge_state`, `_micro_update_step_state`, `_sample_next_token`, `_token_critic_enabled`, `_compute_sample_params`, `_apply_bridge_logit_bias`, `_apply_token_value_injection`, `_resolve_forbidden_token_ids`, `_apply_decode_control_params`, `generate_with_m3`
+- `HFBackend` (line 790) → methods: `get_instance`, `is_available`, `__init__`, `_ensure_loaded`, `_bridge_enabled`, `_bridge_enabled_safe`, `_note_control_health`, `_compute_recent_control_stats`, `_auto_control_selection`, `_control_selection_mode`, `_control_allows`, `_ensure_control_bridge`, `_neuro_enabled`, `_ensure_neuro_modulator`, `_save_neuro_checkpoint`, `_load_neuro_checkpoint`, `_neuro_status`, `_prepare_bridge_state`, `_micro_update_step_state`, `_sample_next_token`, `_token_critic_enabled`, `_compute_sample_params`, `_apply_bridge_logit_bias`, `_apply_token_value_injection`, `_resolve_forbidden_token_ids`, `_apply_decode_control_params`, `generate_with_m3`
 - `TorchConversationalPolicy` (line 1570) → methods: `__init__`, `_is_numeric_dump_response`, `_is_backend_status_text`, `_is_refusal_disclaimer`, `_is_identity_drift_output`, `_is_disallowed_generation_output`, `_system_prompt_mode`, `_system_prompt_enabled`, `_get_system_prompt`, `_verifier_tokens`, `_evaluate_generation_quality`, `_read_float`, `_read_int`, `_resolve_generation_sampling`, `_retry_generation_sampling`, `_strip_similar_context_block`, `_is_cuda_fatal_error`, `_trip_hf_circuit_breaker`, `_extract_last_user_text`, `_detect_language`, `_is_autonomy_prompt`, `_should_include_m3_state`, `_is_state_request`, `_build_decode_control`, `_sanitize_training_record`, `_generate_safe_fallback`, `save_model`, `_record_example`, `enable_m3_integration`, `_normalize_affect_state`, `_get_affect_state`, `_update_m3_cache`, `_build_m3_memory`, `build_m3_memory`, `_vectorize_panels`, `_snapshot_vector`, `_build_full_state_vector`, `_build_m3_context`, `start_credit_consumer`, `stop_credit_consumer`, `_state_vector`, `_build_autonomy_prefix`, `_run_core_steps`, `_run_checkpoint_if_enabled`, `_drain_user_message`, `_handle_user_turn`, `_wait_for_user_interrupt`, `_run_autonomy_turn`, `start_autonomy_loop`, `stop_autonomy_loop`, `submit_user_message`, `_autonomy_seed_prompt`, `_parse_user_m3_transcript`, `_unified_loop`, `_consume_credits`, `_process_credit_message`, `load_model`, `_beta_schedule`, `_update_task_weights_gradnorm`, `_normalize_targets`, `_alpha_scheduler_uncertainty`, `_log_jsonl`, `_adv_headroom`, `_looks_like_toolcall`, `_sample_toolcall_variants`, `_quick_eval_proxy`, `_predict_value_scalar`, `_build_cond_key`, `_sample`, `_build_hf_quality_gate_inputs`, `_generate_with_hf`, `_apply_quality_gate_if_enabled`, `_semantic_perspective_prefix`, `embed_text`, `generate`, `score_value`, `collect_knn_from_teacher`, `learn_pair`, `train_batch`, `train_on_example`, `train_dpo_from_dir`, `_extract_supervised_pair`, `_iter_supervised_records_from_dir`, `train_supervised_from_dir`, `evaluate_supervised_from_dir`, `evaluate_dpo_from_dir`, `auto_train_and_test_from_data_set`, `train_all_from_data_set`, `_sequence_logprob`, `dpo_step`, `dpo_batch_step`, `_is_empty_prompt_or_response`, `train_value_head`, `train_token_value_head`
 - `UnifiedM3Policy` (line 5460) → methods: `__init__`, `set_motor_policy`, `sample_action`, `update_motor`
 - `PlasticBrainPolicy` (line 5487) → methods: `__init__`, `sample`, `_state_vector`, `learn`, `generate`
@@ -119,15 +130,18 @@ sequenceDiagram
 
 ### `llm_adapter/m3_control_bridge.py`
 - 모듈명: `llm_adapter.m3_control_bridge`
-- 코드 라인 수: **262**
-- Top-level 클래스 수: **5** / Top-level 함수 수: **2**
+- 코드 라인 수: **649**
+- Top-level 클래스 수: **8** / Top-level 함수 수: **2**
 
 **클래스 목록**
 - `M3BridgeControls` (line 13)
-- `M3ControlBridge` (line 19) → methods: `__init__`, `_prepare_state`, `forward`
+- `M3ControlBridge` (line 19) → methods: `__init__`, `_prepare_state`, `forward`, `regularization_loss`, `renorm_parameters`
 - `LayerGateRuntime` (line 148) → methods: `__init__`, `close`, `apply`
 - `QualityGateResult` (line 199)
 - `GenerationQualityGate` (line 206) → methods: `__init__`, `_features`, `evaluate`
+- `NeuroModControls` (line 320) — per-layer neural modulation controls
+- `NeuroModulator` (line 329) → methods: `__init__`, `_prepare_state`, `_warmup_factor`, `forward`, `online_loss`, `renorm_parameters`, `maybe_apply_spectral_norm`
+- `NeuroModulatorRuntime` (line 582) → methods: `__init__`, `apply`, `close`
 
 **함수 목록**
 - `_to_module_list` (line 103)
@@ -364,30 +378,30 @@ sequenceDiagram
 
 ### `run_llm_adapter.py`
 - 모듈명: `run_llm_adapter`
-- 코드 라인 수: **695**
+- 코드 라인 수: **723**
 - Top-level 클래스 수: **0** / Top-level 함수 수: **18**
 
 **클래스 목록**: 없음
 
 **함수 목록**
-- `_safe_print` (line 160)
-- `_bool_env` (line 169)
-- `_coerce_env_value` (line 176)
-- `_set_env_vars` (line 193)
-- `_on_response` (line 202)
-- `_on_spontaneous` (line 211)
-- `_start_research` (line 226)
-- `_start_creation` (line 249)
-- `_start_learning` (line 267)
-- `_parse_profile_name` (line 344)
-- `_apply_profile` (line 348)
-- `_snapshot_state` (line 360)
-- `_normalize_control_mode` (line 380)
-- `_print_status` (line 395)
-- `_print_help` (line 451)
-- `_print_topology` (line 470)
-- `_print_shadow_writes` (line 492)
-- `_handle_command` (line 512)
+- `_safe_print` (line 171)
+- `_bool_env` (line 180)
+- `_coerce_env_value` (line 187)
+- `_set_env_vars` (line 204)
+- `_on_response` (line 213)
+- `_on_spontaneous` (line 222)
+- `_start_research` (line 237)
+- `_start_creation` (line 260)
+- `_start_learning` (line 278)
+- `_parse_profile_name` (line 355)
+- `_apply_profile` (line 359)
+- `_snapshot_state` (line 371)
+- `_normalize_control_mode` (line 391)
+- `_print_status` (line 406)
+- `_print_help` (line 478)
+- `_print_topology` (line 497)
+- `_print_shadow_writes` (line 519)
+- `_handle_command` (line 539)
 
 ## 5) 핵심 연결 포인트 (요약)
 
@@ -396,7 +410,58 @@ sequenceDiagram
 - `m3.device`는 코어/정책/LLM 전반의 Torch 장치 선택을 표준화합니다.
 - `run_llm_adapter.py`는 실행 프로필/명령 인터페이스를 통해 전체 시스템을 구동합니다.
 
-## 6) 참고
+## 6) NeuroModulator 통합 (Weight-Level Consciousness Control)
+
+`NeuroModulator`는 M3 의식 상태(φ, 각성, 정서 등)를 **디코더 레이어 수준에서 직접 조절**하는 모듈입니다.
+텍스트 프롬프트 주입 대신, 히든 표현의 gain/bias를 통해 LLM 생성을 의식 비례적으로 제어합니다.
+
+### 구성 (`NeuroModulatorConfig`)
+
+| 필드 | 기본값 | 설명 |
+|------|--------|------|
+| `enabled` | `false` | NeuroModulator 활성화 여부 (기본 비활성; `M3_ENABLE_NEURO_MODULATOR=1` 또는 설정으로 활성화) |
+| `state_dim` | `256` | M3 상태 벡터 차원 |
+| `trunk_dim` | `256` | 트렁크 네트워크 차원 |
+| `hidden_rank` | `16` | 레이어별 히든 바이어스 로우랭크 |
+| `logit_rank` | `32` | 로짓 바이어스 로우랭크 |
+| `strength` | `1.0` | 외부 조절 강도 |
+| `learning_rate` | `1e-4` | 온라인 학습률 |
+| `weight_decay` | `1e-5` | 옵티마이저 가중치 감쇠 |
+| `warmup_steps` | `100` | 워밍업 스텝 수 |
+| `max_gain_delta` | `0.3` | 최대 게인 편차 |
+| `max_logit_bias` | `2.0` | 최대 로짓 바이어스 |
+| `grad_clip_norm` | `1.0` | 그래디언트 클리핑 노름 |
+| `checkpoint_file` | `neuro_modulator.pt` | 체크포인트 저장 경로 |
+
+### 환경 변수 오버라이드
+
+| 환경 변수 | 대응 설정 |
+|-----------|-----------|
+| `M3_ENABLE_NEURO_MODULATOR` | `enabled` |
+| `M3_NEURO_STATE_DIM` | `state_dim` |
+| `M3_NEURO_TRUNK_DIM` | `trunk_dim` |
+| `M3_NEURO_HIDDEN_RANK` | `hidden_rank` |
+| `M3_NEURO_LOGIT_RANK` | `logit_rank` |
+| `M3_NEURO_STRENGTH` | `strength` |
+| `M3_NEUROMOD_LR` | `learning_rate` |
+
+### 런타임 흐름
+
+```mermaid
+sequenceDiagram
+  participant HF as HFBackend
+  participant NM as NeuroModulator
+  participant NR as NeuroModulatorRuntime
+  participant DL as Decoder Layers
+  HF->>NM: forward(z_m3, strength)
+  NM-->>HF: NeuroModControls (gain, bias, logit_bias, phi_gate)
+  HF->>NR: apply(controls)
+  NR->>DL: register forward hooks (gain * output + bias)
+  HF->>DL: generate tokens
+  Note over HF,NM: 온라인 학습: reward → online_loss → optimizer step
+```
+
+## 7) 참고
 
 - 본 문서는 저장소의 Python AST를 기준으로 생성된 구조 정보를 포함합니다.
 - 대형 파일(`m3/m3_core.py`, `llm_adapter/llm_core.py`)은 클래스 및 메서드 수가 매우 많으므로 위 인벤토리를 우선 참조하세요.

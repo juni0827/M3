@@ -290,6 +290,40 @@ class ConsciousnessBusConfig:
 
 
 @dataclass
+class NeuroModulatorConfig:
+    """Configuration for NeuroModulator weight-level consciousness control.
+
+    Attributes:
+        enabled: Whether the NeuroModulator is active.
+        state_dim: Dimension of the M3 consciousness state vector input.
+        trunk_dim: Hidden dimension of the shared trunk network.
+        hidden_rank: Low-rank dimension for per-layer hidden bias generation.
+        logit_rank: Low-rank dimension for output logit bias generation.
+        strength: External modulation strength multiplier [0, inf).
+        learning_rate: Optimizer learning rate for online adaptation.
+        weight_decay: Optimizer L2 regularization coefficient.
+        warmup_steps: Steps for exponential warmup from identity to full modulation.
+        max_gain_delta: Maximum per-layer gain deviation from 1.0.
+        max_logit_bias: Maximum absolute logit bias magnitude.
+        grad_clip_norm: Maximum gradient norm for online learning updates.
+        checkpoint_file: Path for persisting learned NeuroModulator weights.
+    """
+    enabled: bool = False
+    state_dim: int = 256
+    trunk_dim: int = 256
+    hidden_rank: int = 16
+    logit_rank: int = 32
+    strength: float = 1.0
+    learning_rate: float = 1e-4
+    weight_decay: float = 1e-5
+    warmup_steps: int = 100
+    max_gain_delta: float = 0.3
+    max_logit_bias: float = 2.0
+    grad_clip_norm: float = 1.0
+    checkpoint_file: str = "neuro_modulator.pt"
+
+
+@dataclass
 class M3LLMConfig:
     """Master configuration combining all sub-configs."""
     state_encoder: M3StateEncoderConfig = field(default_factory=M3StateEncoderConfig)
@@ -311,6 +345,7 @@ class M3LLMConfig:
     adaptive_threshold: AdaptiveThresholdConfig = field(default_factory=AdaptiveThresholdConfig)
     observation_adapter: ObservationAdapterConfig = field(default_factory=ObservationAdapterConfig)
     consciousness_bus: ConsciousnessBusConfig = field(default_factory=ConsciousnessBusConfig)
+    neuro_modulator: NeuroModulatorConfig = field(default_factory=NeuroModulatorConfig)
 
     @classmethod
     def from_json(cls, path: str) -> 'M3LLMConfig':
@@ -342,6 +377,7 @@ class M3LLMConfig:
             adaptive_threshold=AdaptiveThresholdConfig(**data.get('adaptive_threshold', {})),
             observation_adapter=ObservationAdapterConfig(**data.get('observation_adapter', {})),
             consciousness_bus=ConsciousnessBusConfig(**data.get('consciousness_bus', {})),
+            neuro_modulator=NeuroModulatorConfig(**data.get('neuro_modulator', {})),
         )
 
     def to_json(self, path: str):
@@ -372,8 +408,10 @@ class M3LLMConfig:
             'adaptive_threshold': dict(self.adaptive_threshold.__dict__),
             'observation_adapter': dict(self.observation_adapter.__dict__),
             'consciousness_bus': dict(self.consciousness_bus.__dict__),
+            'neuro_modulator': dict(self.neuro_modulator.__dict__),
         }
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        dir_path = os.path.dirname(path) or '.'
+        os.makedirs(dir_path, exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -439,6 +477,7 @@ def print_config_summary(config: Optional[M3LLMConfig] = None):
         ('Adaptive Threshold', cfg.adaptive_threshold),
         ('Observation Adapter', cfg.observation_adapter),
         ('Consciousness Bus', cfg.consciousness_bus),
+        ('Neuro Modulator', cfg.neuro_modulator),
     ]
     for section_name, section_config in sections:
         print(f"\n[{section_name}]")
@@ -493,6 +532,33 @@ def validate_config(config: Optional[M3LLMConfig] = None) -> bool:
         errors.append("adaptive_threshold.warmup_steps must be >= 0")
     if cfg.consciousness_bus.max_queue <= 0:
         errors.append("consciousness_bus.max_queue must be > 0")
+    if cfg.neuro_modulator.state_dim <= 0:
+        errors.append("neuro_modulator.state_dim must be > 0")
+    if cfg.neuro_modulator.trunk_dim <= 0:
+        errors.append("neuro_modulator.trunk_dim must be > 0")
+    if cfg.neuro_modulator.hidden_rank <= 0:
+        errors.append("neuro_modulator.hidden_rank must be > 0")
+    if cfg.neuro_modulator.logit_rank <= 0:
+        errors.append("neuro_modulator.logit_rank must be > 0")
+    if cfg.neuro_modulator.learning_rate <= 0:
+        errors.append("neuro_modulator.learning_rate must be > 0")
+    if cfg.neuro_modulator.strength < 0:
+        errors.append("neuro_modulator.strength must be >= 0")
+    if cfg.neuro_modulator.warmup_steps < 0:
+        errors.append("neuro_modulator.warmup_steps must be >= 0")
+    if cfg.neuro_modulator.max_gain_delta < 0:
+        errors.append("neuro_modulator.max_gain_delta must be >= 0")
+    if cfg.neuro_modulator.grad_clip_norm <= 0:
+        errors.append("neuro_modulator.grad_clip_norm must be > 0")
+    if cfg.neuro_modulator.max_logit_bias < 0:
+        errors.append("neuro_modulator.max_logit_bias must be >= 0")
+    if cfg.neuro_modulator.weight_decay < 0:
+        errors.append("neuro_modulator.weight_decay must be >= 0")
+    if cfg.neuro_modulator.checkpoint_file is not None:
+        if not isinstance(cfg.neuro_modulator.checkpoint_file, str) or not cfg.neuro_modulator.checkpoint_file.strip():
+            errors.append("neuro_modulator.checkpoint_file must be a non-empty string when set")
+        elif os.path.isdir(cfg.neuro_modulator.checkpoint_file):
+            errors.append("neuro_modulator.checkpoint_file must refer to a file path, not a directory")
 
     if errors:
         logger.error("Config validation failed:")

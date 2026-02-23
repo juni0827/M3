@@ -11,6 +11,7 @@ from llm_adapter.config import (
     M3AwareDecoderLayerConfig,
     M3EpisodicMemoryConfig,
     M3LLMConfig,
+    NeuroModulatorConfig,
     StabilityConfig,
     TokenizerAutoVocabConfig,
     M3StateCacheConfig,
@@ -60,6 +61,6 @@ __all__ = [
     'M3LLMConfig', 'M3StateEncoderConfig', 'M3StateCacheConfig', 'M3AwareDecoderLayerConfig', 'M3AdaptiveSamplerConfig',
     'M3EpisodicMemoryConfig', 'KNNIndexConfig', 'TokenizerConfig', 'TorchPolicyConfig',
     'AutonomyRLConfig', 'EpisodicANNConfig', 'DPOAutoCollectConfig', 'EarlyStopConfig',
-    'BridgeAdaptConfig', 'TokenizerAutoVocabConfig', 'StabilityConfig',
+    'BridgeAdaptConfig', 'TokenizerAutoVocabConfig', 'StabilityConfig', 'NeuroModulatorConfig',
     'set_global_config', 'get_global_config', 'create_default_config_file', 'load_config_from_file', 'print_config_summary', 'validate_config',
 ]

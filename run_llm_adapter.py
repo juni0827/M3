@@ -458,6 +458,22 @@ def _print_status():
         except Exception:
             pass
 
+    # NeuroModulator status
+    try:
+        from llm_adapter.llm_core import HFBackend
+        if HFBackend.is_available():
+            hf = HFBackend.get_instance()
+            ns = hf._neuro_status()
+            if ns.get('active'):
+                _safe_print(
+                    f"  neuro_modulator: active step={ns['step']} "
+                    f"layers={ns['num_layers']} params={ns['params']}"
+                )
+            else:
+                _safe_print("  neuro_modulator: inactive")
+    except Exception:
+        pass
+
 
 def _print_help():
     _safe_print("Commands:")

@@ -43,5 +43,20 @@
     "learning_rate": 0.0003,
     "dropout": 0.1
   },
+  "neuro_modulator": {
+    "enabled": false,
+    "state_dim": 256,
+    "trunk_dim": 256,
+    "hidden_rank": 16,
+    "logit_rank": 32,
+    "strength": 1.0,
+    "learning_rate": 1e-4,
+    "weight_decay": 1e-5,
+    "warmup_steps": 100,
+    "max_gain_delta": 0.3,
+    "max_logit_bias": 2.0,
+    "grad_clip_norm": 1.0,
+    "checkpoint_file": "neuro_modulator.pt"
+  },
   "log_path": "bus.jsonl"
 }

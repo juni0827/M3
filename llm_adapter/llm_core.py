@@ -103,6 +103,7 @@ try:
         M3LLMConfig,
         M3StateCacheConfig,
         M3StateEncoderConfig,
+        NeuroModulatorConfig,
         StabilityConfig,
         TokenizerAutoVocabConfig,
         TokenizerConfig,
@@ -126,6 +127,7 @@ except Exception:
         M3LLMConfig,
         M3StateCacheConfig,
         M3StateEncoderConfig,
+        NeuroModulatorConfig,
         StabilityConfig,
         TokenizerAutoVocabConfig,
         TokenizerConfig,
@@ -1042,20 +1044,23 @@ class HFBackend:
 
     def _neuro_enabled(self) -> bool:
         """True when NeuroModulator weight-level control is active."""
-        return (
-            NeuroModulator is not None
-            and os.getenv('M3_ENABLE_NEURO_MODULATOR', '0').lower()
-            in ('1', 'true', 'yes', 'on')
-        )
+        nm_cfg = get_global_config().neuro_modulator
+        env_flag = os.getenv('M3_ENABLE_NEURO_MODULATOR', '').lower()
+        if env_flag:
+            enabled = env_flag in ('1', 'true', 'yes', 'on')
+        else:
+            enabled = nm_cfg.enabled
+        return NeuroModulator is not None and enabled
 
     def _ensure_neuro_modulator(self, state_dim: int):
         """Lazy-create and return the NeuroModulator instance."""
         if NeuroModulator is None:
             return None
+        nm_cfg = get_global_config().neuro_modulator
         try:
             state_dim = int(max(8, state_dim))
         except Exception:
-            state_dim = 256
+            state_dim = int(max(8, nm_cfg.state_dim))
         if (
             self._neuro_modulator is not None
             and self._neuro_mod_state_dim == state_dim
@@ -1065,11 +1070,11 @@ class HFBackend:
         layers = find_decoder_layers(self._model) if self._model is not None else []
         num_layers = max(1, len(layers))
         try:
-            hidden_rank = int(os.getenv('M3_NEURO_HIDDEN_RANK', '16'))
-            logit_rank = int(os.getenv('M3_NEURO_LOGIT_RANK', '32'))
-            trunk_dim = int(os.getenv('M3_NEURO_TRUNK_DIM', '256'))
+            hidden_rank = int(os.getenv('M3_NEURO_HIDDEN_RANK', str(nm_cfg.hidden_rank)))
+            logit_rank = int(os.getenv('M3_NEURO_LOGIT_RANK', str(nm_cfg.logit_rank)))
+            trunk_dim = int(os.getenv('M3_NEURO_TRUNK_DIM', str(nm_cfg.trunk_dim)))
         except Exception:
-            hidden_rank, logit_rank, trunk_dim = 16, 32, 256
+            hidden_rank, logit_rank, trunk_dim = nm_cfg.hidden_rank, nm_cfg.logit_rank, nm_cfg.trunk_dim
 
         self._neuro_modulator = NeuroModulator(
             state_dim=state_dim,
@@ -1080,21 +1085,120 @@ class HFBackend:
             hidden_rank=hidden_rank,
             logit_rank=logit_rank,
         ).to(self.device)
+        self._neuro_modulator.max_gain_delta = nm_cfg.max_gain_delta
+        self._neuro_modulator.max_logit_bias = nm_cfg.max_logit_bias
+        self._neuro_modulator.warmup_total = nm_cfg.warmup_steps
         self._neuro_modulator.eval()
         self._neuro_mod_state_dim = state_dim
 
         try:
-            lr = float(os.getenv('M3_NEUROMOD_LR', '1e-4'))
+            lr = float(os.getenv('M3_NEUROMOD_LR', str(nm_cfg.learning_rate)))
         except Exception:
-            lr = 1e-4
+            lr = nm_cfg.learning_rate
+        weight_decay = nm_cfg.weight_decay
         self._neuro_mod_opt = torch.optim.Adam(
-            self._neuro_modulator.parameters(), lr=lr, weight_decay=1e-5
+            self._neuro_modulator.parameters(), lr=lr, weight_decay=weight_decay
         )
         logging.getLogger('llm_adapter').info(
             f'[HFBackend] NeuroModulator created: layers={num_layers}, '
             f'state_dim={state_dim}, hidden_rank={hidden_rank}'
         )
+        self._load_neuro_checkpoint()
         return self._neuro_modulator
+
+    def _save_neuro_checkpoint(self) -> bool:
+        """Persist NeuroModulator weights to disk."""
+        if self._neuro_modulator is None:
+            return False
+        nm_cfg = get_global_config().neuro_modulator
+        path = nm_cfg.checkpoint_file
+        try:
+            os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+            torch.save({
+                'model_state_dict': self._neuro_modulator.state_dict(),
+                'optimizer_state_dict': self._neuro_mod_opt.state_dict() if self._neuro_mod_opt else None,
+                'step': self._neuro_modulator._step,
+                'state_dim': self._neuro_mod_state_dim,
+            }, path)
+            logging.getLogger('llm_adapter').info(
+                f'[HFBackend] NeuroModulator checkpoint saved: {path}'
+            )
+            return True
+        except Exception as e:
+            logging.getLogger('llm_adapter').debug(
+                f'[HFBackend] NeuroModulator checkpoint save failed: {e}'
+            )
+            return False
+
+    def _load_neuro_checkpoint(self) -> bool:
+        """Restore NeuroModulator weights from disk."""
+        if self._neuro_modulator is None:
+            return False
+        nm_cfg = get_global_config().neuro_modulator
+        path = nm_cfg.checkpoint_file
+        if not os.path.exists(path):
+            return False
+        try:
+            try:
+                # Prefer safe loading when supported (PyTorch >= 2.1 with weights_only)
+                ckpt = torch.load(path, map_location=self.device, weights_only=True)
+            except TypeError:
+                # Older PyTorch versions do not support the weights_only kwarg.
+                # Retry without the kwarg to maintain compatibility.
+                ckpt = torch.load(path, map_location=self.device)
+            except (RuntimeError, ValueError):
+                # Optional unsafe pickle fallback; disabled by default.
+                # Enable by setting LLM_ADAPTER_UNSAFE_PICKLE_FALLBACK=1.
+                if os.getenv("LLM_ADAPTER_UNSAFE_PICKLE_FALLBACK", "0") == "1":
+                    ckpt = torch.load(path, map_location=self.device)
+                else:
+                    raise
+            self._neuro_modulator.load_state_dict(ckpt['model_state_dict'])
+            if self._neuro_mod_opt and ckpt.get('optimizer_state_dict'):
+                self._neuro_mod_opt.load_state_dict(ckpt['optimizer_state_dict'])
+            self._neuro_modulator._step = int(ckpt.get('step', 0))
+            logging.getLogger('llm_adapter').info(
+                f'[HFBackend] NeuroModulator checkpoint loaded: {path} (step={self._neuro_modulator._step})'
+            )
+            return True
+        except Exception as e:
+            logging.getLogger('llm_adapter').debug(
+                f'[HFBackend] NeuroModulator checkpoint load failed: {e}'
+            )
+            return False
+
+    def _neuro_status(self) -> dict:
+        """Return a summary dict of NeuroModulator status for diagnostics."""
+        # Resolve whether the NeuroModulator is enabled according to config/env.
+        # Fall back gracefully if older code lacks `_neuro_enabled`.
+        try:
+            enabled = bool(self._neuro_enabled())
+        except AttributeError:
+            # Backward-compat: approximate "enabled" by whether a modulator exists.
+            enabled = self._neuro_modulator is not None
+
+        if self._neuro_modulator is None:
+            # No instantiated modulator; never "active", but still report whether
+            # config/env currently consider it enabled.
+            return {
+                'active': False,
+                'enabled': enabled,
+            }
+
+        nm = self._neuro_modulator
+        return {
+            # "active" reflects runtime enablement, not just instance existence.
+            'active': bool(enabled),
+            'enabled': enabled,
+            'step': nm._step,
+            'state_dim': self._neuro_mod_state_dim,
+            'num_layers': nm.num_layers,
+            'hidden_rank': nm.hidden_rank,
+            'logit_rank': nm.logit_rank,
+            'warmup_total': nm.warmup_total,
+            'max_gain_delta': nm.max_gain_delta,
+            'params': sum(p.numel() for p in nm.parameters()),
+        }
 
     def _prepare_bridge_state(self, z_m3, state_dim: int, device):
         if z_m3 is None:
@@ -1511,19 +1615,20 @@ class HFBackend:
         neuro_runtime = None
         if self._neuro_enabled() and z_m3 is not None:
             try:
+                _nm_cfg = get_global_config().neuro_modulator
                 try:
-                    neuro_state_dim = int(os.getenv('M3_NEURO_STATE_DIM', '256'))
+                    neuro_state_dim = int(os.getenv('M3_NEURO_STATE_DIM', str(_nm_cfg.state_dim)))
                 except Exception:
-                    neuro_state_dim = 256
+                    neuro_state_dim = _nm_cfg.state_dim
                 neuro_mod = self._ensure_neuro_modulator(state_dim=neuro_state_dim)
                 z_neuro = self._prepare_bridge_state(
                     z_m3, state_dim=neuro_state_dim, device=self.device
                 )
                 if neuro_mod is not None and z_neuro is not None:
                     try:
-                        neuro_strength = float(os.getenv('M3_NEURO_STRENGTH', '1.0'))
+                        neuro_strength = float(os.getenv('M3_NEURO_STRENGTH', str(_nm_cfg.strength)))
                     except Exception:
-                        neuro_strength = 1.0
+                        neuro_strength = _nm_cfg.strength
                     with _torch.no_grad():
                         neuro_controls = neuro_mod(z_neuro, strength=neuro_strength)
                     layers = find_decoder_layers(self._model)
@@ -4736,11 +4841,13 @@ class TorchConversationalPolicy:
 
             # ---- NeuroModulator online learning ----
             try:
+                _nm_cfg = get_global_config().neuro_modulator
+                _nm_env_flag = os.getenv('M3_ENABLE_NEURO_MODULATOR', '').lower()
+                _nm_active = (_nm_env_flag in ('1', 'true', 'yes', 'on')) if _nm_env_flag else _nm_cfg.enabled
                 if (
                     self.use_hf
                     and HFBackend.is_available()
-                    and os.getenv('M3_ENABLE_NEURO_MODULATOR', '0').lower()
-                    in ('1', 'true', 'yes', 'on')
+                    and _nm_active
                 ):
                     _hf = HFBackend.get_instance()
                     _nm = getattr(_hf, '_neuro_modulator', None)
@@ -4754,10 +4861,10 @@ class TorchConversationalPolicy:
                             if _z_t is not None:
                                 try:
                                     _neuro_str = float(
-                                        os.getenv('M3_NEURO_STRENGTH', '1.0')
+                                        os.getenv('M3_NEURO_STRENGTH', str(_nm_cfg.strength))
                                     )
                                 except Exception:
-                                    _neuro_str = 1.0
+                                    _neuro_str = _nm_cfg.strength
                                 _nm.train()
                                 _nm_opt.zero_grad(set_to_none=True)
                                 _nloss = _nm.online_loss(
@@ -4767,10 +4874,21 @@ class TorchConversationalPolicy:
                                 )
                                 _nloss.backward()
                                 torch.nn.utils.clip_grad_norm_(
-                                    _nm.parameters(), 1.0
+                                    _nm.parameters(), _nm_cfg.grad_clip_norm
                                 )
                                 _nm_opt.step()
+                                # Track online-learning steps separately from _nm._step (which is tied to forward())
+                                _online_step = getattr(_hf, "_neuro_mod_online_step", 0) + 1
+                                _hf._neuro_mod_online_step = _online_step
                                 _nm.eval()
+                                # Persist checkpoint every 100 online-learning steps
+                                if _online_step % 100 == 0:
+                                    try:
+                                        _hf._save_neuro_checkpoint()
+                                    except Exception as _ckpt_err:
+                                        logging.getLogger('llm_adapter').debug(
+                                            f'[NeuroMod] periodic checkpoint failed: {_ckpt_err}'
+                                        )
             except Exception:
                 pass
 
