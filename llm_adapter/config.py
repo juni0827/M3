@@ -554,6 +554,11 @@ def validate_config(config: Optional[M3LLMConfig] = None) -> bool:
         errors.append("neuro_modulator.max_logit_bias must be >= 0")
     if cfg.neuro_modulator.weight_decay < 0:
         errors.append("neuro_modulator.weight_decay must be >= 0")
+    if cfg.neuro_modulator.checkpoint_file is not None:
+        if not isinstance(cfg.neuro_modulator.checkpoint_file, str) or not cfg.neuro_modulator.checkpoint_file.strip():
+            errors.append("neuro_modulator.checkpoint_file must be a non-empty string when set")
+        elif os.path.isdir(cfg.neuro_modulator.checkpoint_file):
+            errors.append("neuro_modulator.checkpoint_file must refer to a file path, not a directory")
 
     if errors:
         logger.error("Config validation failed:")
