@@ -417,7 +417,7 @@ class M3PlanFeatureTests(unittest.TestCase):
         cfg = M3LLMConfig()
         nm = cfg.neuro_modulator
         self.assertIsInstance(nm, NeuroModulatorConfig)
-        self.assertTrue(nm.enabled)
+        self.assertFalse(nm.enabled)  # Default is opt-in (False) for backward compatibility
         self.assertEqual(nm.state_dim, 256)
         self.assertEqual(nm.hidden_rank, 16)
         self.assertEqual(nm.logit_rank, 32)
@@ -449,6 +449,7 @@ class M3PlanFeatureTests(unittest.TestCase):
 
     def test_16_neuro_modulator_save_and_load_checkpoint(self):
         from llm_adapter.config import M3LLMConfig, NeuroModulatorConfig, set_global_config, get_global_config
+        from llm_adapter.llm_core import HFBackend
         from llm_adapter.m3_control_bridge import NeuroModulator
 
         nm = NeuroModulator(state_dim=32, num_layers=2, model_hidden_dim=64, vocab_size=100)
@@ -466,20 +467,30 @@ class M3PlanFeatureTests(unittest.TestCase):
             set_global_config(cfg)
 
             try:
-                torch.save({
-                    'model_state_dict': nm.state_dict(),
-                    'optimizer_state_dict': opt.state_dict(),
-                    'step': nm._step,
-                    'state_dim': 32,
-                }, ckpt_path)
+                # Build a minimal HFBackend stub with the NeuroModulator wired in
+                hf = HFBackend()
+                hf.device = 'cpu'
+                hf._neuro_modulator = nm
+                hf._neuro_mod_opt = opt
+                hf._neuro_mod_state_dim = 32
+
+                # Exercise the actual save helper
+                saved = hf._save_neuro_checkpoint()
+                self.assertTrue(saved, "_save_neuro_checkpoint should return True")
                 self.assertTrue(os.path.exists(ckpt_path))
 
+                # Wire a fresh NeuroModulator into a new stub and load
                 nm2 = NeuroModulator(state_dim=32, num_layers=2, model_hidden_dim=64, vocab_size=100)
-                ckpt = torch.load(ckpt_path, weights_only=False)
-                nm2.load_state_dict(ckpt['model_state_dict'])
-                nm2._step = ckpt['step']
+                hf2 = HFBackend()
+                hf2.device = 'cpu'
+                hf2._neuro_modulator = nm2
+                hf2._neuro_mod_opt = None
+                hf2._neuro_mod_state_dim = 32
 
-                self.assertEqual(nm2._step, nm._step)
+                loaded = hf2._load_neuro_checkpoint()
+                self.assertTrue(loaded, "_load_neuro_checkpoint should return True")
+
+                self.assertEqual(hf2._neuro_modulator._step, nm._step)
                 for (n1, p1), (n2, p2) in zip(nm.named_parameters(), nm2.named_parameters()):
                     self.assertTrue(torch.allclose(p1, p2), f"mismatch in {n1}")
             finally:

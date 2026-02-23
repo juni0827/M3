@@ -1139,7 +1139,10 @@ class HFBackend:
         if not os.path.exists(path):
             return False
         try:
-            ckpt = torch.load(path, map_location=self.device, weights_only=False)
+            try:
+                ckpt = torch.load(path, map_location=self.device, weights_only=True)
+            except (RuntimeError, ValueError, TypeError):
+                ckpt = torch.load(path, map_location=self.device, weights_only=False)
             self._neuro_modulator.load_state_dict(ckpt['model_state_dict'])
             if self._neuro_mod_opt and ckpt.get('optimizer_state_dict'):
                 self._neuro_mod_opt.load_state_dict(ckpt['optimizer_state_dict'])
@@ -4849,6 +4852,14 @@ class TorchConversationalPolicy:
                                 )
                                 _nm_opt.step()
                                 _nm.eval()
+                                # Persist checkpoint every 100 online-learning steps
+                                if _nm._step % 100 == 0:
+                                    try:
+                                        _hf._save_neuro_checkpoint()
+                                    except Exception as _ckpt_err:
+                                        logging.getLogger('llm_adapter').debug(
+                                            f'[NeuroMod] periodic checkpoint failed: {_ckpt_err}'
+                                        )
             except Exception:
                 pass
 
