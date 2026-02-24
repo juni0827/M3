@@ -687,7 +687,7 @@ class M3AdaptiveSampler:
             # 1. Affect Kernel adjustment
             if hasattr(core, 'affect_kernel'):
                 affect_state = core.affect_kernel.get_state()
-                affect_vec = self._normalize_affect_state(affect_state, getattr(core, 'qualia', None))
+                affect_vec = self._normalize_affect_state_to_sampler_5d(affect_state, getattr(core, 'qualia', None))
                 qualia_vec = self.torch.tensor(affect_vec, dtype=self.torch.float32).to(self.device)
             elif hasattr(core, 'qualia'):
                 # Fallback to old qualia
