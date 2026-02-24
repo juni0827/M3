@@ -20,7 +20,7 @@ from llm_adapter.config import BridgeAdaptConfig, EarlyStopConfig, TorchPolicyCo
 from llm_adapter.llm_core import TorchConversationalPolicy
 from llm_adapter.m3_control_bridge import M3ControlBridge
 from llm_adapter.memory import M3EpisodicMemoryRetriever
-from m3.m3_core import CauseEffectStructure, ConsciousnessBus, EvolutionVisualizer, GrowingSOM
+from m3.m3_core import CauseEffectStructure, ConsciousnessBus, EvolutionVisualizer, GrowingSOM, IITPhiCalculator, MessageBus
 from m3.torch_policy import MoEFFN
 
 
@@ -131,26 +131,128 @@ class AdaptiveSamplerInputShapeTests(unittest.TestCase):
         k = sampler._compute_top_k(core, 50)
         self.assertIsInstance(k, int)
 
-    def test_adaptive_sampler_accepts_5d_legacy_affect_vector(self):
-        from llm_adapter.llm_core import M3AdaptiveSampler
 
-        # 5D affect vector in sampler/normalization order:
-        # [arousal, valence, entropy/novelty, engagement, frustration]
-        legacy_affect_vector = [0.1, 0.3, 0.5, 0.7, 0.9]
+    def test_micro_update_updates_decode_entropy_not_qualia_entropy(self):
+        from llm_adapter.llm_core import HFBackend
+
+        core = types.SimpleNamespace(
+            qualia=types.SimpleNamespace(entropy=0.25),
+            decode_entropy=0.10,
+        )
+        updated = HFBackend._micro_update_step_state(core, _step=2, generated_ids=[1, 2, 1, 3], interval=2)
+        self.assertTrue(updated)
+        self.assertNotEqual(float(core.decode_entropy), 0.10)
+        self.assertEqual(float(core.qualia.entropy), 0.25)
+
+    def test_sampler_prefers_decode_entropy_when_present(self):
+        from llm_adapter.llm_core import M3AdaptiveSampler
 
         sampler = M3AdaptiveSampler(torch, device="cpu")
         core = types.SimpleNamespace(
-            affect_kernel=types.SimpleNamespace(get_state=lambda: legacy_affect_vector),
-            qualia=types.SimpleNamespace(entropy=0.3, engagement=0.6, arousal=0.3, valence=0.1, frustration=0.0),
+            qualia=types.SimpleNamespace(entropy=0.05, engagement=1.0, arousal=0.2, valence=0.1, frustration=0.0),
+            decode_entropy=0.95,
         )
         k = sampler._compute_top_k(core, 50)
-        self.assertIsInstance(k, int)
-        self.assertGreaterEqual(k, 1)
+        self.assertEqual(k, sampler.config.top_k_high_exploration)
+
+
+    def test_resolve_decode_entropy_prefers_decode_field(self):
+        from llm_adapter.llm_core import M3AdaptiveSampler
+
+        sampler = M3AdaptiveSampler(torch, device="cpu")
+        core = types.SimpleNamespace(
+            decode_entropy=0.77,
+            token_entropy=0.22,
+            qualia=types.SimpleNamespace(entropy=0.11),
+        )
+        self.assertAlmostEqual(sampler._resolve_decode_entropy(core, 0.5), 0.77)
+
+    def test_micro_update_writes_decode_entropy_without_qualia(self):
+        from llm_adapter.llm_core import HFBackend
+
+        core = types.SimpleNamespace(token_entropy=0.20)
+        updated = HFBackend._micro_update_step_state(core, _step=3, generated_ids=[1, 2, 3], interval=3)
+        self.assertTrue(updated)
+        self.assertTrue(hasattr(core, "decode_entropy"))
 
     def test_dummy_core_affect_kernel_returns_5d_vector(self):
         core = _DummyCore()
         vec = core.affect_kernel.get_state()
         self.assertEqual(len(vec), 5)
+
+    def test_phi_influence_bounded_after_normalization(self):
+        from llm_adapter.llm_core import M3AdaptiveSampler
+
+        sampler = M3AdaptiveSampler(torch, device="cpu")
+        sampler.config.temp_min = 0.3
+        sampler.config.temp_max = 2.0
+        sampler.config.phi_influence = 0.8
+        sampler.config.phi_norm_mode = "dynamic"
+        sampler.config.phi_norm_quantile = 0.9
+
+        core = types.SimpleNamespace(
+            qualia=types.SimpleNamespace(entropy=0.2, engagement=0.7, arousal=0.4, valence=0.3, frustration=0.1),
+            phi_calculator=types.SimpleNamespace(phi_history=[0.2, 0.4, 0.6, 0.8, 10.0]),
+        )
+
+        t = sampler._compute_temperature(core, 0.9)
+        self.assertGreaterEqual(t, sampler.config.temp_min)
+        self.assertLessEqual(t, sampler.config.temp_max)
+
+
+class PhiPathConsistencyTests(unittest.TestCase):
+    def test_single_step_uses_compute_phi_api(self):
+        from m3.m3_core import M3ConsciousnessCore
+
+        core = M3ConsciousnessCore.__new__(M3ConsciousnessCore)
+        called = {}
+
+        core.energy_ctrl = types.SimpleNamespace(
+            internal_clock=0,
+            update_activation=lambda *a, **k: None,
+            should_continue=lambda: (True, 0.5),
+        )
+        core._get_current_world_state = lambda: {'delta_hat': 0.1, 'stability': 0.9, 'energy_level': 0.8}
+        core.goal_gen = types.SimpleNamespace(generate_goal=lambda *a, **k: {'goal': 'x'})
+        core.self_model = types.SimpleNamespace(state_history=[], update_meta_awareness=lambda *_: None)
+        core.qualia = types.SimpleNamespace()
+        core._decide_action = lambda *a, **k: {'act': 'noop'}
+        core._execute_action = lambda *_: (0.0, None)
+        core._experience_qualia = lambda *a, **k: None
+        core.conceptual_space = types.SimpleNamespace(ground_experience=lambda q: {'q': 1})
+        core._submit_to_workspace = lambda *a, **k: None
+        core.global_workspace = types.SimpleNamespace(compete_for_consciousness=lambda: [{'priority': 0.7}])
+        core.t = 0
+
+        def _fake_compute_phi(*args, **kwargs):
+            called["args"] = args
+            called["kwargs"] = kwargs
+            return 0.42
+
+        core.phi_calculator = types.SimpleNamespace()
+        core.phi_calculator = types.SimpleNamespace()
+        core.phi_calculator = types.SimpleNamespace()
+        core.phi_calculator.compute_phi = _fake_compute_phi
+        core._single_consciousness_step()
+
+        self.assertIn("kwargs", called)
+        self.assertEqual(called["kwargs"].get("method"), "simple")
+        self.assertIn("state", called["kwargs"])
+        self.assertIsInstance(called["kwargs"]["state"], np.ndarray)
+
+    def test_phi_feedback_reaches_qualia_message_bus(self):
+        from m3.m3_core import IITPhiCalculator, MessageBus
+
+        bus = MessageBus(capacity=32)
+        bus.register_module('qualia_monitor')
+        phi_calc = IITPhiCalculator(n_elements=8, message_bus=bus)
+        phi_calc.compute_phi(state=np.array([0.1, 0.8, 0.3, 0.9], dtype=np.float32), method='simple')
+        msg = bus.receive('qualia_monitor', timeout=0.05)
+        self.assertIsNotNone(msg)
+        self.assertEqual(msg.type, 'phi_update')
+
+
+
 class M3PlanFeatureTests(unittest.TestCase):
     def test_01_q_head_rl_updates_for_speak_and_wait(self):
         policy = _make_policy()
@@ -535,6 +637,47 @@ class M3PlanFeatureTests(unittest.TestCase):
         self.assertEqual(nm_cfg.trunk_dim, 256)
         self.assertEqual(nm_cfg.warmup_steps, 100)
         self.assertEqual(nm_cfg.max_gain_delta, 0.3)
+
+
+class PhiResponsibilitySeparationTests(unittest.TestCase):
+    def test_phi_calculator_delegates_storage_to_ces(self):
+        calc = IITPhiCalculator(n_elements=4)
+        calc.compute_phi(state=np.array([0.1, 0.9, 0.2, 0.8], dtype=np.float64), method='simple')
+        calc.compute_phi(state=np.array([0.9, 0.1, 0.8, 0.2], dtype=np.float64), method='simple')
+
+        self.assertIsNotNone(calc._last_state_idx)
+        self.assertGreater(sum(calc.ces._rowsum.values()), 0)
+
+    def test_compute_phi_method_argument_has_effect(self):
+        calc = IITPhiCalculator(n_elements=4)
+        cause = np.array([0.5, 0.5], dtype=np.float64)
+        effect = np.array([0.5, 0.5], dtype=np.float64)
+
+        with mock.patch.object(calc.ces, '_compute_phi_simple', return_value=0.11) as simple_mock, \
+             mock.patch.object(calc.ces, '_compute_phi_full', return_value=0.77) as full_mock:
+            phi_simple = calc.compute_phi(cause, effect, method='simple')
+            phi_integrated = calc.compute_phi(cause, effect, method='integrated')
+
+        self.assertAlmostEqual(phi_simple, 0.11)
+        self.assertAlmostEqual(phi_integrated, 0.77)
+        self.assertEqual(simple_mock.call_count, 1)
+        self.assertEqual(full_mock.call_count, 1)
+
+    def test_phi_broadcast_contains_trend_and_history_len(self):
+        bus = MessageBus()
+        bus.register_module('observer')
+        calc = IITPhiCalculator(n_elements=4, message_bus=bus)
+
+        for value in [0.10, 0.12, 0.14, 0.16, 0.18, 0.20, 0.22, 0.24, 0.26, 0.28]:
+            calc.phi_history.append(value)
+        calc._broadcast_phi_update(0.28)
+
+        self.assertGreater(len(bus.broadcast_buffer), 0)
+        msg = bus.broadcast_buffer[-1]
+        self.assertIn('trend', msg.payload)
+        self.assertIn('history_len', msg.payload)
+        self.assertEqual(msg.payload['history_len'], 10)
+        self.assertEqual(msg.payload['trend'], 'rising')
 
 
 if __name__ == "__main__":
