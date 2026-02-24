@@ -15045,8 +15045,6 @@ class M3ConsciousnessCore:
                 content_priority_mean = float(np.mean(priorities))
 
         state_features.extend([content_count, content_priority_mean])
-        if not state_features:
-            state_features = [0.0]
         return np.asarray(state_features, dtype=np.float32)
     
     def _extract_variable_value(self, var_name: str) -> float:
