@@ -231,6 +231,7 @@ class PhiPathConsistencyTests(unittest.TestCase):
 
         core.phi_calculator = types.SimpleNamespace()
         core.phi_calculator = types.SimpleNamespace()
+        core.phi_calculator = types.SimpleNamespace()
         core.phi_calculator.compute_phi = _fake_compute_phi
         core._single_consciousness_step()
 
