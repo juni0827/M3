@@ -77,7 +77,7 @@ class _DummyCore:
     def __init__(self):
         self.bus = _DummyBus()
         self.feature_bank = _DummyFeatureBank()
-        self.affect_kernel = types.SimpleNamespace(get_state=lambda: {})
+        self.affect_kernel = types.SimpleNamespace(get_state=lambda: [0.0, 0.1, 0.2, 0.7, 0.0])
         self.drives = types.SimpleNamespace(get_drive_state=lambda: {})
         self.qualia = types.SimpleNamespace(entropy=0.2, engagement=0.7, arousal=0.0, valence=0.1, frustration=0.0)
 
@@ -106,6 +106,80 @@ class _FakeModel(torch.nn.Module):
         h = self.emb(input_ids)
         logits = self.head(h)
         return types.SimpleNamespace(logits=logits)
+
+
+class AdaptiveSamplerInputShapeTests(unittest.TestCase):
+    def test_adaptive_sampler_accepts_affect_dict_without_crash(self):
+        from llm_adapter.llm_core import M3AdaptiveSampler
+
+        sampler = M3AdaptiveSampler(torch, device="cpu")
+        core = types.SimpleNamespace(
+            affect_kernel=types.SimpleNamespace(get_state=lambda: {"arousal": 0.3, "novelty": 0.8}),
+            qualia=types.SimpleNamespace(entropy=0.2, engagement=0.7, arousal=0.1, valence=0.1, frustration=0.0),
+        )
+        t = sampler._compute_temperature(core, 0.9)
+        self.assertTrue(np.isfinite(t))
+
+    def test_adaptive_sampler_topk_affect_vector_indexing_is_stable(self):
+        from llm_adapter.llm_core import M3AdaptiveSampler
+
+        sampler = M3AdaptiveSampler(torch, device="cpu")
+        core = types.SimpleNamespace(
+            affect_kernel=types.SimpleNamespace(get_state=lambda: [0.2]),
+            qualia=types.SimpleNamespace(entropy=0.4, engagement=0.6, arousal=0.2, valence=0.1, frustration=0.0),
+        )
+        k = sampler._compute_top_k(core, 50)
+        self.assertIsInstance(k, int)
+
+
+    def test_micro_update_updates_decode_entropy_not_qualia_entropy(self):
+        from llm_adapter.llm_core import HFBackend
+
+        core = types.SimpleNamespace(
+            qualia=types.SimpleNamespace(entropy=0.25),
+            decode_entropy=0.10,
+        )
+        updated = HFBackend._micro_update_step_state(core, _step=2, generated_ids=[1, 2, 1, 3], interval=2)
+        self.assertTrue(updated)
+        self.assertNotEqual(float(core.decode_entropy), 0.10)
+        self.assertEqual(float(core.qualia.entropy), 0.25)
+
+    def test_sampler_prefers_decode_entropy_when_present(self):
+        from llm_adapter.llm_core import M3AdaptiveSampler
+
+        sampler = M3AdaptiveSampler(torch, device="cpu")
+        core = types.SimpleNamespace(
+            qualia=types.SimpleNamespace(entropy=0.05, engagement=1.0, arousal=0.2, valence=0.1, frustration=0.0),
+            decode_entropy=0.95,
+        )
+        k = sampler._compute_top_k(core, 50)
+        self.assertEqual(k, sampler.config.top_k_high_exploration)
+
+
+    def test_resolve_decode_entropy_prefers_decode_field(self):
+        from llm_adapter.llm_core import M3AdaptiveSampler
+
+        sampler = M3AdaptiveSampler(torch, device="cpu")
+        core = types.SimpleNamespace(
+            decode_entropy=0.77,
+            token_entropy=0.22,
+            qualia=types.SimpleNamespace(entropy=0.11),
+        )
+        self.assertAlmostEqual(sampler._resolve_decode_entropy(core, 0.5), 0.77)
+
+    def test_micro_update_writes_decode_entropy_without_qualia(self):
+        from llm_adapter.llm_core import HFBackend
+
+        core = types.SimpleNamespace(token_entropy=0.20)
+        updated = HFBackend._micro_update_step_state(core, _step=3, generated_ids=[1, 2, 3], interval=3)
+        self.assertTrue(updated)
+        self.assertTrue(hasattr(core, "decode_entropy"))
+
+    def test_dummy_core_affect_kernel_returns_5d_vector(self):
+        core = _DummyCore()
+        vec = core.affect_kernel.get_state()
+        self.assertEqual(len(vec), 5)
+
 
 
 class M3PlanFeatureTests(unittest.TestCase):
