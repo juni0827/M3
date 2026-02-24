@@ -732,7 +732,10 @@ class M3AdaptiveSampler:
             except Exception:
                 denom = 1.0
         else:
-            denom = 1.0
+            try:
+                denom = max(float(getattr(self.config, 'phi_norm_min_denominator', 1e-6)), 1.0)
+            except Exception:
+                denom = 1.0
 
         try:
             denom = max(float(getattr(self.config, 'phi_norm_min_denominator', 1e-6)), denom)
