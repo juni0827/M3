@@ -134,7 +134,8 @@ class AdaptiveSamplerInputShapeTests(unittest.TestCase):
     def test_adaptive_sampler_accepts_5d_legacy_affect_vector(self):
         from llm_adapter.llm_core import M3AdaptiveSampler
 
-        # Legacy/primary affect vector order: [valence, arousal, dominance, novelty, clarity]
+        # 5D affect vector in sampler/normalization order:
+        # [arousal, valence, entropy/novelty, engagement, frustration]
         legacy_affect_vector = [0.1, 0.3, 0.5, 0.7, 0.9]
 
         sampler = M3AdaptiveSampler(torch, device="cpu")
