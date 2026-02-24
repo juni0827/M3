@@ -131,6 +131,20 @@ class AdaptiveSamplerInputShapeTests(unittest.TestCase):
         k = sampler._compute_top_k(core, 50)
         self.assertIsInstance(k, int)
 
+    def test_adaptive_sampler_accepts_5d_legacy_affect_vector(self):
+        from llm_adapter.llm_core import M3AdaptiveSampler
+
+        # Legacy/primary affect vector order: [valence, arousal, dominance, novelty, clarity]
+        legacy_affect_vector = [0.1, 0.3, 0.5, 0.7, 0.9]
+
+        sampler = M3AdaptiveSampler(torch, device="cpu")
+        core = types.SimpleNamespace(
+            affect_kernel=types.SimpleNamespace(get_state=lambda: legacy_affect_vector),
+            qualia=types.SimpleNamespace(entropy=0.3, engagement=0.6, arousal=0.3, valence=0.1, frustration=0.0),
+        )
+        k = sampler._compute_top_k(core, 50)
+        self.assertIsInstance(k, int)
+        self.assertGreaterEqual(k, 1)
     def test_dummy_core_affect_kernel_returns_5d_vector(self):
         core = _DummyCore()
         vec = core.affect_kernel.get_state()
