@@ -180,6 +180,74 @@ class AdaptiveSamplerInputShapeTests(unittest.TestCase):
         vec = core.affect_kernel.get_state()
         self.assertEqual(len(vec), 5)
 
+    def test_phi_influence_bounded_after_normalization(self):
+        from llm_adapter.llm_core import M3AdaptiveSampler
+
+        sampler = M3AdaptiveSampler(torch, device="cpu")
+        sampler.config.temp_min = 0.3
+        sampler.config.temp_max = 2.0
+        sampler.config.phi_influence = 0.8
+        sampler.config.phi_norm_mode = "dynamic"
+        sampler.config.phi_norm_quantile = 0.9
+
+        core = types.SimpleNamespace(
+            qualia=types.SimpleNamespace(entropy=0.2, engagement=0.7, arousal=0.4, valence=0.3, frustration=0.1),
+            phi_calculator=types.SimpleNamespace(phi_history=[0.2, 0.4, 0.6, 0.8, 10.0]),
+        )
+
+        t = sampler._compute_temperature(core, 0.9)
+        self.assertGreaterEqual(t, sampler.config.temp_min)
+        self.assertLessEqual(t, sampler.config.temp_max)
+
+
+class PhiPathConsistencyTests(unittest.TestCase):
+    def test_single_step_uses_compute_phi_api(self):
+        from m3.m3_core import M3ConsciousnessCore
+
+        core = M3ConsciousnessCore.__new__(M3ConsciousnessCore)
+        called = {}
+
+        core.energy_ctrl = types.SimpleNamespace(
+            internal_clock=0,
+            update_activation=lambda *a, **k: None,
+            should_continue=lambda: (True, 0.5),
+        )
+        core._get_current_world_state = lambda: {'delta_hat': 0.1, 'stability': 0.9, 'energy_level': 0.8}
+        core.goal_gen = types.SimpleNamespace(generate_goal=lambda *a, **k: {'goal': 'x'})
+        core.self_model = types.SimpleNamespace(state_history=[], update_meta_awareness=lambda *_: None)
+        core.qualia = types.SimpleNamespace()
+        core._decide_action = lambda *a, **k: {'act': 'noop'}
+        core._execute_action = lambda *_: (0.0, None)
+        core._experience_qualia = lambda *a, **k: None
+        core.conceptual_space = types.SimpleNamespace(ground_experience=lambda q: {'q': 1})
+        core._submit_to_workspace = lambda *a, **k: None
+        core.global_workspace = types.SimpleNamespace(compete_for_consciousness=lambda: [{'priority': 0.7}])
+        core.t = 0
+
+        def _fake_compute_phi(*args, **kwargs):
+            called["args"] = args
+            called["kwargs"] = kwargs
+            return 0.42
+
+        core.phi_calculator.compute_phi = _fake_compute_phi
+        core._single_consciousness_step()
+
+        self.assertIn("kwargs", called)
+        self.assertEqual(called["kwargs"].get("method"), "simple")
+        self.assertIn("state", called["kwargs"])
+        self.assertIsInstance(called["kwargs"]["state"], np.ndarray)
+
+    def test_phi_feedback_reaches_qualia_message_bus(self):
+        from m3.m3_core import IITPhiCalculator, MessageBus
+
+        bus = MessageBus(capacity=32)
+        bus.register_module('qualia_monitor')
+        phi_calc = IITPhiCalculator(n_elements=8, message_bus=bus)
+        phi_calc.compute_phi(state=np.array([0.1, 0.8, 0.3, 0.9], dtype=np.float32), method='simple')
+        msg = bus.receive('qualia_monitor', timeout=0.05)
+        self.assertIsNotNone(msg)
+        self.assertEqual(msg.type, 'phi_update')
+
 
 
 class M3PlanFeatureTests(unittest.TestCase):

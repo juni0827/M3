@@ -15006,11 +15006,48 @@ class M3ConsciousnessCore:
                 self.self_model.update_meta_awareness(contents)
                 
                 if hasattr(self, 'phi_calculator'):
-                    self.phi_calculator.compute_phi_simple(world_state, contents)
+                    phi_state = self._build_phi_state_vector(world_state, contents)
+                    self.phi_calculator.compute_phi(state=phi_state, method='simple')
             
             self.t += 1
         except:
             pass
+
+    def _build_phi_state_vector(self, world_state: Optional[Dict[str, Any]], contents: Any) -> np.ndarray:
+        """Build a stable numeric state vector for phi updates from world state + consciousness contents."""
+        state_features: List[float] = []
+
+        if isinstance(world_state, dict):
+            world_keys = [
+                'delta_hat', 'stability', 'energy_level', 'activation_level',
+                'meta_confidence', 'qualia_valence', 'spatial_attn_x',
+                'spatial_attn_y', 'spatial_attn_z', 'spatial_goal_dist'
+            ]
+            for key in world_keys:
+                value = world_state.get(key, 0.0)
+                try:
+                    state_features.append(float(value if value is not None else 0.0))
+                except Exception:
+                    state_features.append(0.0)
+
+        content_count = 0.0
+        content_priority_mean = 0.0
+        if isinstance(contents, (list, tuple)):
+            content_count = float(len(contents))
+            priorities = []
+            for item in contents:
+                if isinstance(item, dict):
+                    try:
+                        priorities.append(float(item.get('priority', 0.0)))
+                    except Exception:
+                        continue
+            if priorities:
+                content_priority_mean = float(np.mean(priorities))
+
+        state_features.extend([content_count, content_priority_mean])
+        if not state_features:
+            state_features = [0.0]
+        return np.asarray(state_features, dtype=np.float32)
     
     def _extract_variable_value(self, var_name: str) -> float:
         """Extract internal variable value by name"""
