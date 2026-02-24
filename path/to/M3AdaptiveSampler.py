@@ -1,33 +1,15 @@
-# M3AdaptiveSampler
+"""
+Planning/documentation module for a potential `M3AdaptiveSampler` implementation.
 
-class M3AdaptiveSampler:
-    def _compute_temperature(self):
-        # fix _compute_temperature to call the correct normalization function
-        pass
+This file previously contained only stub classes, functions, and tests with `pass`
+statements, and duplicated responsibilities that are implemented elsewhere in
+the codebase (for example, in `llm_adapter/llm_core.py`).
 
-    def _compute_top_k(self):
-        # fix _compute_top_k to call the correct normalization function
-        pass
+To avoid exposing incomplete or misleading APIs and to satisfy static analysis
+rules, all executable stub code has been removed from this module. If you need
+an actual adaptive sampler implementation, use the existing, fully implemented
+components in the main codebase rather than this planning file.
 
-    def _normalize_affect_state(self, state):
-        # Custom normalization logic here
-        pass
-
-    # Warning message logic
-    def check_and_log_warning(self, message):
-        # Ensure warning is logged only once per class instance
-        pass
-
-
-# Affect normalization utils
-
-def _normalize_affect_state_to_sampler_5d(state):
-    # Implement logic to handle dicts and non-dict iterables
-    pass
-
-
-# Tests
-
-def test_m3_plan_features():
-    # Add tests that verify affect inputs influence temperature and top_k
-    pass
+If you wish to keep design notes or planning sketches, please treat this file
+purely as documentation and do not reintroduce stub classes or functions here.
+"""
