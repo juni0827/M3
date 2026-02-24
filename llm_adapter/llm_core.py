@@ -777,7 +777,7 @@ class M3AdaptiveSampler:
             # 2. Phi adjustment (phi * temp)
             if hasattr(core, 'phi_calculator') and core.phi_calculator.phi_history:
                 phi = self._normalize_phi_for_influence(core, core.phi_calculator.phi_history[-1])
-                # phi [0, 1],  temp
+                # phi in [0, 1]; higher integration (phi) reduces temperature for more focused sampling
                 temp = temp * (1.0 - self.config.phi_influence * phi)
 
             # 3. Energy adjustment (energy * temp)
