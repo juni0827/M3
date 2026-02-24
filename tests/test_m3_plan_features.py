@@ -146,13 +146,11 @@ class AdaptiveSamplerInputShapeTests(unittest.TestCase):
         k = sampler._compute_top_k(core, 50)
         self.assertIsInstance(k, int)
         self.assertGreaterEqual(k, 1)
+
     def test_dummy_core_affect_kernel_returns_5d_vector(self):
         core = _DummyCore()
         vec = core.affect_kernel.get_state()
         self.assertEqual(len(vec), 5)
-
-
-
 class M3PlanFeatureTests(unittest.TestCase):
     def test_01_q_head_rl_updates_for_speak_and_wait(self):
         policy = _make_policy()
