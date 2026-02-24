@@ -69,6 +69,15 @@ class M3AdaptiveSamplerConfig:
 
 
 @dataclass
+class MicroUpdateConfig:
+    """Configuration for lightweight per-token decode micro-updates."""
+    mode: str = "coupled"  # coupled|legacy|off
+    interval: int = 8
+    warmup_steps: int = 0
+    entropy_momentum: float = 0.8
+
+
+@dataclass
 class M3EpisodicMemoryConfig:
     """Configuration for M3EpisodicMemoryRetriever."""
     memory_size_divisor: int = 100
@@ -330,6 +339,7 @@ class M3LLMConfig:
     state_cache: M3StateCacheConfig = field(default_factory=M3StateCacheConfig)
     decoder_layer: M3AwareDecoderLayerConfig = field(default_factory=M3AwareDecoderLayerConfig)
     adaptive_sampler: M3AdaptiveSamplerConfig = field(default_factory=M3AdaptiveSamplerConfig)
+    micro_update: MicroUpdateConfig = field(default_factory=MicroUpdateConfig)
     episodic_memory: M3EpisodicMemoryConfig = field(default_factory=M3EpisodicMemoryConfig)
     knn_index: KNNIndexConfig = field(default_factory=KNNIndexConfig)
     tokenizer: TokenizerConfig = field(default_factory=TokenizerConfig)
@@ -362,6 +372,7 @@ class M3LLMConfig:
             state_cache=M3StateCacheConfig(**data.get('state_cache', {})),
             decoder_layer=M3AwareDecoderLayerConfig(**data.get('decoder_layer', {})),
             adaptive_sampler=M3AdaptiveSamplerConfig(**data.get('adaptive_sampler', {})),
+            micro_update=MicroUpdateConfig(**data.get('micro_update', {})),
             episodic_memory=M3EpisodicMemoryConfig(**data.get('episodic_memory', {})),
             knn_index=KNNIndexConfig(**data.get('knn_index', {})),
             tokenizer=TokenizerConfig(**data.get('tokenizer', {})),
@@ -387,6 +398,7 @@ class M3LLMConfig:
             'state_cache': dict(self.state_cache.__dict__),
             'decoder_layer': dict(self.decoder_layer.__dict__),
             'adaptive_sampler': dict(self.adaptive_sampler.__dict__),
+            'micro_update': dict(self.micro_update.__dict__),
             'episodic_memory': dict(self.episodic_memory.__dict__),
             'knn_index': dict(self.knn_index.__dict__),
             'tokenizer': dict(self.tokenizer.__dict__),

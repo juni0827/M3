@@ -640,10 +640,13 @@ class M3AdaptiveSampler:
 
         Output order (sampler schema): [arousal, valence, entropy/novelty, engagement, frustration].
         """
+        qualia_entropy = 0.5
+        if qualia is not None:
+            qualia_entropy = float(getattr(qualia, 'token_entropy', getattr(qualia, 'entropy', 0.5)))
         defaults = [
             float(getattr(qualia, 'arousal', 0.5)) if qualia is not None else 0.5,
             float(getattr(qualia, 'valence', 0.5)) if qualia is not None else 0.5,
-            float(getattr(qualia, 'entropy', 0.5)) if qualia is not None else 0.5,
+            qualia_entropy,
             float(getattr(qualia, 'engagement', 0.5)) if qualia is not None else 0.5,
             float(getattr(qualia, 'frustration', 0.0)) if qualia is not None else 0.0,
         ]
@@ -687,7 +690,7 @@ class M3AdaptiveSampler:
             # 1. Affect Kernel adjustment
             if hasattr(core, 'affect_kernel'):
                 affect_state = core.affect_kernel.get_state()
-                affect_vec = self._normalize_affect_state(affect_state, getattr(core, 'qualia', None))
+                affect_vec = self._normalize_affect_state_to_sampler_5d(affect_state, getattr(core, 'qualia', None))
                 qualia_vec = self.torch.tensor(affect_vec, dtype=self.torch.float32).to(self.device)
             elif hasattr(core, 'qualia'):
                 # Fallback to old qualia
@@ -746,7 +749,7 @@ class M3AdaptiveSampler:
         try:
             # Exploration = entropy * engagement (qualia)
             if hasattr(core, 'affect_kernel'):
-                affect = self._normalize_affect_state(core.affect_kernel.get_state(), getattr(core, 'qualia', None))
+                affect = self._normalize_affect_state_to_sampler_5d(core.affect_kernel.get_state(), getattr(core, 'qualia', None))
                 novelty_or_entropy = affect[2]
                 arousal = affect[0]
                 exploration = novelty_or_entropy * arousal
@@ -1221,7 +1224,15 @@ class HFBackend:
         return _torch.from_numpy(z).to(device=device, dtype=_torch.float32).unsqueeze(0)
 
     @staticmethod
-    def _micro_update_step_state(core, _step: int, generated_ids: list, interval: int) -> bool:
+    def _micro_update_step_state(
+        core,
+        _step: int,
+        generated_ids: list,
+        interval: int,
+        mode: str = "coupled",
+        warmup_steps: int = 0,
+        entropy_momentum: float = 0.8,
+    ) -> bool:
         """Apply lightweight core state updates every ``interval`` steps."""
         if core is None or interval is None:
             return False
@@ -1229,25 +1240,71 @@ class HFBackend:
             interval = int(interval)
         except Exception:
             return False
+        try:
+            warmup_steps = int(warmup_steps)
+        except Exception:
+            warmup_steps = 0
+        mode = str(mode or "coupled").lower()
+        if mode not in ("coupled", "legacy", "off"):
+            mode = "coupled"
+        if mode == "off":
+            return False
+        if _step < max(0, warmup_steps):
+            return False
         if interval <= 0 or (_step <= 0) or (_step % interval != 0):
             return False
+
         updated = False
         try:
-            if hasattr(core, 'energy_ctrl'):
-                ec = core.energy_ctrl
-                before = float(getattr(ec, 'cognitive_energy', 0.0))
-                ec.cognitive_energy = max(0.0, before - 0.05 * interval)
-                if ec.cognitive_energy != before:
-                    updated = True
+            window = generated_ids[-interval:] if generated_ids else []
+            n_unique = len(set(window)) if window else 0
+            token_diversity = n_unique / max(interval, 1)
+
+            # PR#2: do not overwrite qualia.entropy; keep decode-side entropy separate.
             if hasattr(core, 'qualia'):
                 q = core.qualia
-                before = float(getattr(q, 'entropy', 0.0))
-                window = generated_ids[-interval:] if generated_ids else []
-                n_unique = len(set(window)) if window else 0
-                token_diversity = n_unique / max(interval, 1)
-                q.entropy = 0.8 * before + 0.2 * token_diversity
-                if q.entropy != before:
-                    updated = True
+                prev_decode_entropy = float(getattr(q, 'token_entropy', token_diversity))
+                momentum = float(np.clip(entropy_momentum, 0.0, 0.999))
+                decode_entropy = momentum * prev_decode_entropy + (1.0 - momentum) * token_diversity
+                q.token_entropy = float(decode_entropy)
+                updated = True
+
+                if mode == "legacy":
+                    before_entropy = float(getattr(q, 'entropy', 0.0))
+                    q.entropy = float(decode_entropy)
+                    updated = updated or (q.entropy != before_entropy)
+
+            # PR#3: couple energy dynamics to controller when possible.
+            if hasattr(core, 'energy_ctrl'):
+                ec = core.energy_ctrl
+                if mode == "legacy":
+                    before = float(getattr(ec, 'cognitive_energy', 0.0))
+                    ec.cognitive_energy = max(0.0, before - 0.05 * interval)
+                    updated = updated or (ec.cognitive_energy != before)
+                else:
+                    used_api = False
+                    if hasattr(ec, 'compute_cognitive_cost') and callable(getattr(ec, 'compute_cognitive_cost')):
+                        try:
+                            cost = float(ec.compute_cognitive_cost(token_count=max(1, len(window))))
+                            used_api = True
+                        except Exception:
+                            cost = float(max(1, len(window)))
+                    else:
+                        cost = float(max(1, len(window)))
+
+                    if hasattr(ec, 'update_energy') and callable(getattr(ec, 'update_energy')):
+                        try:
+                            ec.update_energy(cognitive_cost=cost)
+                            used_api = True
+                            updated = True
+                        except Exception:
+                            pass
+
+                    if not used_api:
+                        # Minimal fallback when controller API is unavailable.
+                        before = float(getattr(ec, 'cognitive_energy', 0.0))
+                        ec.cognitive_energy = max(0.0, before - 0.01 * cost)
+                        updated = updated or (ec.cognitive_energy != before)
         except Exception:
             return False
         return updated
@@ -1668,10 +1725,22 @@ class HFBackend:
         except Exception:
             forbidden_penalty = 0.0
         # How often to micro-update core state during decoding
+        _mu_cfg = get_global_config().micro_update
         try:
-            _core_update_interval = int(os.getenv('M3_HF_CORE_UPDATE_INTERVAL', '8'))
+            _core_update_interval = int(os.getenv('M3_HF_CORE_UPDATE_INTERVAL', str(_mu_cfg.interval)))
         except Exception:
-            _core_update_interval = 8
+            _core_update_interval = int(_mu_cfg.interval)
+        try:
+            _core_update_warmup = int(os.getenv('M3_HF_MICRO_UPDATE_WARMUP', str(_mu_cfg.warmup_steps)))
+        except Exception:
+            _core_update_warmup = int(_mu_cfg.warmup_steps)
+        _core_update_mode = os.getenv('M3_HF_MICRO_UPDATE_MODE', str(_mu_cfg.mode))
+        try:
+            _core_update_entropy_momentum = float(os.getenv('M3_HF_MICRO_UPDATE_ENTROPY_MOMENTUM', str(_mu_cfg.entropy_momentum)))
+        except Exception:
+            _core_update_entropy_momentum = float(_mu_cfg.entropy_momentum)
+        if os.getenv('M3_HF_USE_LEGACY_ENTROPY', '0').lower() in ('1', 'true', 'yes', 'on'):
+            _core_update_mode = 'legacy'
 
         for _step in range(max_new_tokens):
             # === M3 CONTROL 0: Lightweight core state micro-update ===
@@ -1681,6 +1750,9 @@ class HFBackend:
                 _step=_step,
                 generated_ids=generated_ids,
                 interval=_core_update_interval,
+                mode=_core_update_mode,
+                warmup_steps=_core_update_warmup,
+                entropy_momentum=_core_update_entropy_momentum,
             )
 
             with _torch.no_grad():

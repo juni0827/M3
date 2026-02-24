@@ -151,6 +151,100 @@ class AdaptiveSamplerInputShapeTests(unittest.TestCase):
         self.assertEqual(len(vec), 5)
 
 
+    def test_micro_update_updates_decode_entropy_not_qualia_entropy(self):
+        qualia = types.SimpleNamespace(entropy=0.91, token_entropy=0.2)
+        core = types.SimpleNamespace(qualia=qualia)
+
+        updated = TorchConversationalPolicy._micro_update_step_state(
+            core=core,
+            _step=8,
+            generated_ids=[1, 2, 3, 4, 5, 6, 7, 8],
+            interval=8,
+            mode="coupled",
+            warmup_steps=0,
+            entropy_momentum=0.8,
+        )
+        self.assertTrue(updated)
+        self.assertAlmostEqual(core.qualia.entropy, 0.91, places=6)
+        self.assertNotEqual(core.qualia.token_entropy, 0.2)
+
+    def test_sampler_prefers_decode_entropy_when_present(self):
+        from llm_adapter.llm_core import M3AdaptiveSampler
+
+        sampler = M3AdaptiveSampler(torch, device="cpu")
+        core = types.SimpleNamespace(
+            affect_kernel=types.SimpleNamespace(get_state=lambda: None),
+            qualia=types.SimpleNamespace(
+                entropy=0.05,
+                token_entropy=0.95,
+                engagement=1.0,
+                arousal=1.0,
+                valence=0.1,
+                frustration=0.0,
+            ),
+        )
+        high_topk = sampler._compute_top_k(core, 50)
+
+        core.qualia.token_entropy = 0.05
+        low_topk = sampler._compute_top_k(core, 50)
+
+        self.assertGreaterEqual(high_topk, low_topk)
+
+    def test_micro_update_uses_energy_controller_when_available(self):
+        class _Energy:
+            def __init__(self):
+                self.calls = []
+                self.cognitive_energy = 1.0
+
+            def compute_cognitive_cost(self, token_count: int):
+                self.calls.append(("compute", token_count))
+                return 0.25
+
+            def update_energy(self, cognitive_cost: float):
+                self.calls.append(("update", cognitive_cost))
+
+        core = types.SimpleNamespace(
+            qualia=types.SimpleNamespace(entropy=0.4, token_entropy=0.4),
+            energy_ctrl=_Energy(),
+        )
+        updated = TorchConversationalPolicy._micro_update_step_state(
+            core=core,
+            _step=8,
+            generated_ids=[1, 2, 3, 4, 5, 6, 7, 8],
+            interval=8,
+            mode="coupled",
+            warmup_steps=0,
+            entropy_momentum=0.8,
+        )
+        self.assertTrue(updated)
+        self.assertTrue(any(c[0] == "compute" for c in core.energy_ctrl.calls))
+        self.assertTrue(any(c[0] == "update" for c in core.energy_ctrl.calls))
+
+    def test_micro_update_interval_respected(self):
+        core = types.SimpleNamespace(qualia=types.SimpleNamespace(entropy=0.2, token_entropy=0.2))
+        updated = TorchConversationalPolicy._micro_update_step_state(
+            core=core,
+            _step=7,
+            generated_ids=[1, 2, 3, 4, 5, 6, 7],
+            interval=8,
+            mode="coupled",
+            warmup_steps=0,
+            entropy_momentum=0.8,
+        )
+        self.assertFalse(updated)
+
+    def test_micro_update_noop_when_core_missing(self):
+        updated = TorchConversationalPolicy._micro_update_step_state(
+            core=None,
+            _step=8,
+            generated_ids=[1, 2, 3, 4, 5, 6, 7, 8],
+            interval=8,
+            mode="coupled",
+            warmup_steps=0,
+            entropy_momentum=0.8,
+        )
+        self.assertFalse(updated)
+
 
 class M3PlanFeatureTests(unittest.TestCase):
     def test_01_q_head_rl_updates_for_speak_and_wait(self):
