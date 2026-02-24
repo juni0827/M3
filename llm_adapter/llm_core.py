@@ -746,7 +746,7 @@ class M3AdaptiveSampler:
         try:
             # Exploration = entropy * engagement (qualia)
             if hasattr(core, 'affect_kernel'):
-                affect = self._normalize_affect_state(core.affect_kernel.get_state(), getattr(core, 'qualia', None))
+                affect = self._normalize_affect_state_to_sampler_5d(core.affect_kernel.get_state(), getattr(core, 'qualia', None))
                 novelty_or_entropy = affect[2]
                 arousal = affect[0]
                 exploration = novelty_or_entropy * arousal
