@@ -635,10 +635,10 @@ class M3AdaptiveSampler:
             self.nn.Sigmoid()  # Output: [0, 1]
         ).to(device)
 
-    def _normalize_affect_state(self, affect_state, qualia=None):
-        """Normalize affect-like inputs to a stable 5D vector.
+    def _normalize_affect_state_to_sampler_5d(self, affect_state, qualia=None):
+        """Normalize affect-like inputs to the 5D sampler vector.
 
-        Output order: [arousal, valence, entropy/novelty, engagement, frustration].
+        Output order (sampler schema): [arousal, valence, entropy/novelty, engagement, frustration].
         """
         defaults = [
             float(getattr(qualia, 'arousal', 0.5)) if qualia is not None else 0.5,
