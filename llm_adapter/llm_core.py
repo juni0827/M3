@@ -687,6 +687,62 @@ class M3AdaptiveSampler:
             pass
         return float(default)
 
+    def _normalize_phi_for_influence(self, core, phi_value: float) -> float:
+        """Normalize phi into [0,1] before applying sampler influence."""
+        try:
+            mode = str(getattr(self.config, 'phi_norm_mode', 'dynamic')).lower()
+        except Exception:
+            mode = 'dynamic'
+
+        try:
+            phi = max(0.0, float(phi_value))
+        except Exception:
+            return 0.0
+
+        if mode == 'off':
+            return float(np.clip(phi, 0.0, 1.0))
+
+        if mode == 'static':
+            try:
+                denom = float(getattr(self.config, 'phi_norm_static_max', 1.0))
+                denom = max(float(getattr(self.config, 'phi_norm_min_denominator', 1e-6)), denom)
+            except Exception:
+                denom = 1.0
+            return float(np.clip(phi / denom, 0.0, 1.0))
+
+        hist = []
+        try:
+            if hasattr(core, 'phi_calculator') and getattr(core.phi_calculator, 'phi_history', None):
+                for v in core.phi_calculator.phi_history:
+                    fv = float(v)
+                    if np.isfinite(fv) and fv >= 0.0:
+                        hist.append(fv)
+        except Exception:
+            hist = []
+
+        try:
+            q = float(getattr(self.config, 'phi_norm_quantile', 0.9))
+        except Exception:
+            q = 0.9
+        q = float(np.clip(q, 0.01, 0.99))
+
+        if hist:
+            try:
+                denom = float(np.quantile(np.asarray(hist, dtype=np.float32), q))
+            except Exception:
+                denom = 1.0
+        else:
+            try:
+                denom = max(float(getattr(self.config, 'phi_norm_min_denominator', 1e-6)), 1.0)
+            except Exception:
+                denom = 1.0
+
+        try:
+            denom = max(float(getattr(self.config, 'phi_norm_min_denominator', 1e-6)), denom)
+        except Exception:
+            denom = max(1e-6, denom)
+        return float(np.clip(phi / denom, 0.0, 1.0))
+
     def _compute_temperature(self, core, base_temp: float) -> float:
         """
         M3-aware temperature adjustment.
@@ -726,8 +782,8 @@ class M3AdaptiveSampler:
 
             # 2. Phi adjustment (phi * temp)
             if hasattr(core, 'phi_calculator') and core.phi_calculator.phi_history:
-                phi = core.phi_calculator.phi_history[-1]
-                # phi [0, 1],  temp
+                phi = self._normalize_phi_for_influence(core, core.phi_calculator.phi_history[-1])
+                # phi in [0, 1]; higher integration (phi) reduces temperature for more focused sampling
                 temp = temp * (1.0 - self.config.phi_influence * phi)
 
             # 3. Energy adjustment (energy * temp)
@@ -8021,4 +8077,3 @@ def attach_llm_to_core(core, adapter=None, record: bool = True):
     except Exception as e:
         logger.exception('Failed to attach LLM adapter to core')
         raise
-
