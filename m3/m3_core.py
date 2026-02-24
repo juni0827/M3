@@ -2281,7 +2281,12 @@ class IITPhiCalculator:
             L = max(len(cause_repertoire), len(effect_repertoire))
             cause_repertoire = np.pad(cause_repertoire, (0, L - len(cause_repertoire)))
             effect_repertoire = np.pad(effect_repertoire, (0, L - len(effect_repertoire)))
-        phi = self._compute_phi_simple(cause_repertoire, effect_repertoire)
+        phi = self.ces.compute_phi(
+            cause_repertoire,
+            effect_repertoire,
+            method=method,
+            state=state,
+        )
         if np.isnan(phi) or np.isinf(phi):
             phi = 0.0
         self.phi_history.append(phi)
@@ -2463,86 +2468,13 @@ class IITPhiCalculator:
         return mics
 
     def _compute_phi_simple(self, cause_rep: np.ndarray, effect_rep: np.ndarray) -> float:
-        """
-        Simplified Phi computation for large systems (n>30) using repertoire analysis.
-        Uses principled IIT measures: integration, differentiation, and causal asymmetry.
-        """
-        if cause_rep is None or effect_rep is None:
-            return 0.0
-        
-        # Normalize distributions
-        cause_rep = np.array(cause_rep, dtype=np.float64) + 1e-12
-        effect_rep = np.array(effect_rep, dtype=np.float64) + 1e-12
-        cause_rep = cause_rep / np.sum(cause_rep)
-        effect_rep = effect_rep / np.sum(effect_rep)
-        
-        # 1. INTEGRATION: Measure mutual information between cause and effect
-        cause_entropy = self.ces._repertoire_entropy(cause_rep)
-        effect_entropy = self.ces._repertoire_entropy(effect_rep)
-        joint_entropy = self.ces._compute_joint_entropy(cause_rep, effect_rep)
-        
-        # Mutual information quantifies integration
-        mutual_info = max(0.0, cause_entropy + effect_entropy - joint_entropy)
-        
-        # 2. DIFFERENTIATION: Measure repertoire distinctiveness
-        # KL divergence: how different are cause/effect from uniform
-        n_states = len(cause_rep)
-        uniform = np.ones(n_states, dtype=np.float64) / float(n_states)
-        
-        kl_cause = np.sum(cause_rep * np.log2((cause_rep + 1e-12) / (uniform + 1e-12)))
-        kl_effect = np.sum(effect_rep * np.log2((effect_rep + 1e-12) / (uniform + 1e-12)))
-        differentiation = (kl_cause + kl_effect) / 2.0
-        
-        # 3. CAUSAL ASYMMETRY: Measure directional information flow
-        # KL divergence between cause and effect repertoires
-        kl_asymmetry = np.sum(cause_rep * np.log2((cause_rep + 1e-12) / (effect_rep + 1e-12)))
-        
-        # 4. INTEGRATION SCORE: Combine components with principled weights
-        # Integration (0.6): Primary measure of consciousness
-        # Differentiation (0.3): Distinguishability from noise
-        # Asymmetry (0.1): Directionality of causation
-        phi_integrated = (
-            mutual_info * 0.6 + 
-            differentiation * 0.3 + 
-            abs(kl_asymmetry) * 0.1
-        )
-        
-        # 5. BASELINE CORRECTION: Non-zero floor based on system complexity
-        # More complex systems (higher entropy) have higher baseline
-        baseline = (cause_entropy + effect_entropy) * 0.02
-        
-        result = float(max(phi_integrated, baseline))
-        return np.clip(result, 0.0, 10.0)  # Prevent extreme values
+        return self.ces._compute_phi_simple(cause_rep, effect_rep)
 
     def _compute_phi_full(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:
-        n = self.n_elements
-        if n <= 6:
-            return self._compute_phi_full_exhaustive(cause_rep, effect_rep, state)
-        elif n <= 15:
-            return self._compute_phi_cutset_sampling(cause_rep, effect_rep, state)
-        elif n <= 30:
-            return self._compute_phi_community_cluster(cause_rep, effect_rep, state)
-        else:
-            print(f'WARNING: Phi computation: n={n} > 30, using simple approximation (significant information loss)')
-            return self._compute_phi_simple(cause_rep, effect_rep)
+        return self.ces._compute_phi_full(cause_rep, effect_rep, state)
 
     def _compute_phi_full_exhaustive(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:
-        n = self.n_elements
-        full_integrated_info = self.ces._compute_integrated_information(cause_rep, effect_rep, set(range(n)), set())
-        min_partitioned_info = float('inf')
-        best_mip = None
-        for partition_size in range(1, n):
-            for subset in combinations(range(n), partition_size):
-                subset = set(subset)
-                complement = set(range(n)) - subset
-                partitioned_info = self.ces._compute_partitioned_information(cause_rep, effect_rep, subset, complement)
-                if partitioned_info < min_partitioned_info:
-                    min_partitioned_info = partitioned_info
-                    best_mip = (subset, complement)
-        phi = max(0.0, full_integrated_info - min_partitioned_info)
-        self.current_mip = best_mip
-        self.mip_history.append({'mip': best_mip, 'phi': phi, 'full_info': full_integrated_info, 'partitioned_info': min_partitioned_info, 'method': 'exhaustive'})
-        return self.ces._normalize_phi(phi, cause_rep)
+        return self.ces._compute_phi_full_exhaustive(cause_rep, effect_rep, state)
 
 # =============================
 # USHTS (Unified Sparse Heavy-Hitter Transition Store)
@@ -3047,6 +2979,22 @@ class CauseEffectStructure:
         max_possible_phi = np.log2(len(cause_rep)) * 2
         phi_normalized = phi / max(max_possible_phi, 1e-10)
         return float(np.clip(phi_normalized, 0.0, 1.0))
+
+
+    def compute_phi(self, cause_rep: np.ndarray, effect_rep: np.ndarray, method: str = "simple", state: Optional[np.ndarray]=None) -> float:
+        """Compute phi using method-specific CES approximations."""
+        method_key = str(method or "simple").strip().lower()
+        if method_key in {"simple", "approx", "fast"}:
+            return float(self._compute_phi_simple(cause_rep, effect_rep))
+        if method_key in {"full", "integrated"}:
+            return float(self._compute_phi_full(cause_rep, effect_rep, state))
+        if method_key in {"exhaustive"}:
+            return float(self._compute_phi_full_exhaustive(cause_rep, effect_rep, state))
+        if method_key in {"cutset", "cutset_sampling"}:
+            return float(self._compute_phi_cutset_sampling(cause_rep, effect_rep, state))
+        if method_key in {"community", "community_cluster"}:
+            return float(self._compute_phi_community_cluster(cause_rep, effect_rep, state))
+        return float(self._compute_phi_simple(cause_rep, effect_rep))
 
 
     def _compute_phi_cutset_sampling(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:

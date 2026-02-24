@@ -20,7 +20,7 @@ from llm_adapter.config import BridgeAdaptConfig, EarlyStopConfig, TorchPolicyCo
 from llm_adapter.llm_core import TorchConversationalPolicy
 from llm_adapter.m3_control_bridge import M3ControlBridge
 from llm_adapter.memory import M3EpisodicMemoryRetriever
-from m3.m3_core import CauseEffectStructure, ConsciousnessBus, EvolutionVisualizer, GrowingSOM
+from m3.m3_core import CauseEffectStructure, ConsciousnessBus, EvolutionVisualizer, GrowingSOM, IITPhiCalculator, MessageBus
 from m3.torch_policy import MoEFFN
 
 
@@ -566,6 +566,47 @@ class M3PlanFeatureTests(unittest.TestCase):
         self.assertEqual(nm_cfg.trunk_dim, 256)
         self.assertEqual(nm_cfg.warmup_steps, 100)
         self.assertEqual(nm_cfg.max_gain_delta, 0.3)
+
+
+class PhiResponsibilitySeparationTests(unittest.TestCase):
+    def test_phi_calculator_delegates_storage_to_ces(self):
+        calc = IITPhiCalculator(n_elements=4)
+        calc.compute_phi(state=np.array([0.1, 0.9, 0.2, 0.8], dtype=np.float64), method='simple')
+        calc.compute_phi(state=np.array([0.9, 0.1, 0.8, 0.2], dtype=np.float64), method='simple')
+
+        self.assertIsNotNone(calc._last_state_idx)
+        self.assertGreater(sum(calc.ces._rowsum.values()), 0)
+
+    def test_compute_phi_method_argument_has_effect(self):
+        calc = IITPhiCalculator(n_elements=4)
+        cause = np.array([0.5, 0.5], dtype=np.float64)
+        effect = np.array([0.5, 0.5], dtype=np.float64)
+
+        with mock.patch.object(calc.ces, '_compute_phi_simple', return_value=0.11) as simple_mock, \
+             mock.patch.object(calc.ces, '_compute_phi_full', return_value=0.77) as full_mock:
+            phi_simple = calc.compute_phi(cause, effect, method='simple')
+            phi_integrated = calc.compute_phi(cause, effect, method='integrated')
+
+        self.assertAlmostEqual(phi_simple, 0.11)
+        self.assertAlmostEqual(phi_integrated, 0.77)
+        self.assertEqual(simple_mock.call_count, 1)
+        self.assertEqual(full_mock.call_count, 1)
+
+    def test_phi_broadcast_contains_trend_and_history_len(self):
+        bus = MessageBus()
+        bus.register_module('observer')
+        calc = IITPhiCalculator(n_elements=4, message_bus=bus)
+
+        for value in [0.10, 0.12, 0.14, 0.16, 0.18, 0.20, 0.22, 0.24, 0.26, 0.28]:
+            calc.phi_history.append(value)
+        calc._broadcast_phi_update(0.28)
+
+        self.assertGreater(len(bus.broadcast_buffer), 0)
+        msg = bus.broadcast_buffer[-1]
+        self.assertIn('trend', msg.payload)
+        self.assertIn('history_len', msg.payload)
+        self.assertEqual(msg.payload['history_len'], 10)
+        self.assertEqual(msg.payload['trend'], 'rising')
 
 
 if __name__ == "__main__":
