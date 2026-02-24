@@ -634,6 +634,40 @@ class M3AdaptiveSampler:
             self.nn.Linear(64, 1),
             self.nn.Sigmoid()  # Output: [0, 1]
         ).to(device)
+
+    def _normalize_affect_state(self, affect_state, qualia=None):
+        """Normalize affect-like inputs to a stable 5D vector.
+
+        Output order: [arousal, valence, entropy/novelty, engagement, frustration].
+        """
+        defaults = [
+            float(getattr(qualia, 'arousal', 0.5)) if qualia is not None else 0.5,
+            float(getattr(qualia, 'valence', 0.5)) if qualia is not None else 0.5,
+            float(getattr(qualia, 'entropy', 0.5)) if qualia is not None else 0.5,
+            float(getattr(qualia, 'engagement', 0.5)) if qualia is not None else 0.5,
+            float(getattr(qualia, 'frustration', 0.0)) if qualia is not None else 0.0,
+        ]
+
+        if affect_state is None:
+            return defaults
+
+        if isinstance(affect_state, dict):
+            return [
+                float(affect_state.get('arousal', defaults[0])),
+                float(affect_state.get('valence', defaults[1])),
+                float(affect_state.get('entropy', affect_state.get('novelty', defaults[2]))),
+                float(affect_state.get('engagement', defaults[3])),
+                float(affect_state.get('frustration', defaults[4])),
+            ]
+
+        try:
+            vals = [float(v) for v in list(affect_state)]
+        except Exception:
+            return defaults
+
+        if len(vals) < 5:
+            vals = vals + defaults[len(vals):]
+        return vals[:5]
     
     def _compute_temperature(self, core, base_temp: float) -> float:
         """
@@ -652,9 +686,9 @@ class M3AdaptiveSampler:
         try:
             # 1. Affect Kernel adjustment
             if hasattr(core, 'affect_kernel'):
-                affect_state = core.affect_kernel.get_state() # [valence, arousal, dominance, novelty, clarity]
-                # Map to temp_predictor input (5D)
-                qualia_vec = self.torch.tensor(affect_state, dtype=self.torch.float32).to(self.device)
+                affect_state = core.affect_kernel.get_state()
+                affect_vec = self._normalize_affect_state(affect_state, getattr(core, 'qualia', None))
+                qualia_vec = self.torch.tensor(affect_vec, dtype=self.torch.float32).to(self.device)
             elif hasattr(core, 'qualia'):
                 # Fallback to old qualia
                 qualia_vec = self.torch.tensor([
@@ -712,11 +746,10 @@ class M3AdaptiveSampler:
         try:
             # Exploration = entropy * engagement (qualia)
             if hasattr(core, 'affect_kernel'):
-                # Use Novelty (index 3) and Arousal (index 1) as proxy for exploration
-                affect = core.affect_kernel.get_state()
-                novelty = affect[3]
-                arousal = affect[1]
-                exploration = novelty * arousal
+                affect = self._normalize_affect_state(core.affect_kernel.get_state(), getattr(core, 'qualia', None))
+                novelty_or_entropy = affect[2]
+                arousal = affect[0]
+                exploration = novelty_or_entropy * arousal
             elif hasattr(core, 'qualia'):
                 entropy = getattr(core.qualia, 'entropy', 0.5)
                 engagement = getattr(core.qualia, 'engagement', 0.5)
@@ -7971,5 +8004,4 @@ def attach_llm_to_core(core, adapter=None, record: bool = True):
     except Exception as e:
         logger.exception('Failed to attach LLM adapter to core')
         raise
-
 
