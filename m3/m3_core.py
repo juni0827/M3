@@ -2997,6 +2997,83 @@ class CauseEffectStructure:
         return float(self._compute_phi_simple(cause_rep, effect_rep))
 
 
+    def _compute_phi_simple(self, cause_rep: np.ndarray, effect_rep: np.ndarray) -> float:
+        """Fast phi approximation using entropy and mutual information measures."""
+        if cause_rep is None or effect_rep is None:
+            return 0.0
+        cause_rep = np.array(cause_rep, dtype=np.float64) + 1e-12
+        effect_rep = np.array(effect_rep, dtype=np.float64) + 1e-12
+        cause_rep = cause_rep / np.sum(cause_rep)
+        effect_rep = effect_rep / np.sum(effect_rep)
+        cause_entropy = self._repertoire_entropy(cause_rep)
+        effect_entropy = self._repertoire_entropy(effect_rep)
+        joint_entropy = self._compute_joint_entropy(cause_rep, effect_rep)
+        mutual_info = max(0.0, cause_entropy + effect_entropy - joint_entropy)
+        n_states = len(cause_rep)
+        uniform = np.ones(n_states, dtype=np.float64) / float(n_states)
+        kl_cause = np.sum(cause_rep * np.log2((cause_rep + 1e-12) / (uniform + 1e-12)))
+        kl_effect = np.sum(effect_rep * np.log2((effect_rep + 1e-12) / (uniform + 1e-12)))
+        differentiation = (kl_cause + kl_effect) / 2.0
+        kl_asymmetry = np.sum(cause_rep * np.log2((cause_rep + 1e-12) / (effect_rep + 1e-12)))
+        phi_integrated = mutual_info * 0.6 + differentiation * 0.3 + abs(kl_asymmetry) * 0.1
+        baseline = (cause_entropy + effect_entropy) * 0.02
+        result = float(max(phi_integrated, baseline))
+        return float(np.clip(result, 0.0, 10.0))
+
+    def _compute_phi_full(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:
+        """Full phi computation: routes to exhaustive, cutset, or community method based on system size."""
+        n = self.n_elements
+        if n <= 6:
+            return self._compute_phi_full_exhaustive(cause_rep, effect_rep, state)
+        elif n <= 15:
+            return self._compute_phi_cutset_sampling(cause_rep, effect_rep, state)
+        elif n <= 30:
+            return self._compute_phi_community_cluster(cause_rep, effect_rep, state)
+        else:
+            return self._compute_phi_simple(cause_rep, effect_rep)
+
+    def _compute_phi_full_exhaustive(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:
+        """Exhaustive phi computation by evaluating all non-trivial binary partitions."""
+        n = self.n_elements
+        all_indices = set(range(n))
+        full_integrated_info = self._compute_integrated_information(cause_rep, effect_rep, all_indices, set())
+        min_partitioned_info = float('inf')
+        best_mip = None
+        num_partitions = 0
+        if n >= 2:
+            for mask in range(1, 1 << (n - 1)):
+                subset = {i for i in range(n) if (mask >> i) & 1}
+                complement = all_indices - subset
+                if not subset or not complement:
+                    continue
+                num_partitions += 1
+                partitioned_info = self._compute_partitioned_information(cause_rep, effect_rep, subset, complement)
+                if partitioned_info < min_partitioned_info:
+                    min_partitioned_info = float(partitioned_info)
+                    best_mip = (subset, complement)
+        else:
+            min_partitioned_info = float(full_integrated_info)
+            best_mip = (all_indices, set())
+        phi = max(0.0, float(full_integrated_info) - float(min_partitioned_info))
+        self.current_mip = best_mip
+        try:
+            self.mip_history.append({
+                'mip': best_mip,
+                'phi': phi,
+                'full_info': float(full_integrated_info),
+                'partitioned_info': float(min_partitioned_info),
+                'method': 'full_exhaustive',
+                'examined_partitions': num_partitions,
+            })
+        except Exception:
+            pass
+        norm_phi = self._normalize_phi(phi, cause_rep)
+        try:
+            self.phi_history.append(float(norm_phi))
+        except Exception:
+            pass
+        return norm_phi
+
     def _compute_phi_cutset_sampling(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:
         n = self.n_elements
         full_integrated_info = self._compute_integrated_information(cause_rep, effect_rep, set(range(n)), set())
