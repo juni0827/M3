@@ -2996,7 +2996,100 @@ class CauseEffectStructure:
             return float(self._compute_phi_community_cluster(cause_rep, effect_rep, state))
         return float(self._compute_phi_simple(cause_rep, effect_rep))
 
+    def _compute_phi_simple(self, cause_rep: np.ndarray, effect_rep: np.ndarray) -> float:
+        """
+        Fast/approximate phi computation: use integrated information of the full
+        system without searching for a minimum-information partition.
+        """
+        n = self.n_elements
+        full_integrated_info = self._compute_integrated_information(
+            cause_rep,
+            effect_rep,
+            set(range(n)),
+            set(),
+        )
+        # No partition search in the simple method.
+        self.current_mip = None
+        phi = max(0.0, float(full_integrated_info))
+        norm_phi = self._normalize_phi(phi, cause_rep)
+        try:
+            self.phi_history.append(float(norm_phi))
+        except Exception:
+            pass
+        return norm_phi
 
+    def _compute_phi_full(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:
+        """
+        Full phi computation. Currently delegates to the exhaustive implementation
+        to avoid code duplication.
+        """
+        return self._compute_phi_full_exhaustive(cause_rep, effect_rep, state)
+
+    def _compute_phi_full_exhaustive(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:
+        """
+        Exhaustive phi computation by searching over all non-trivial bipartitions
+        of the system to find the minimum information partition (MIP).
+        """
+        n = self.n_elements
+        # Integrated information for the unpartitioned system
+        full_integrated_info = self._compute_integrated_information(
+            cause_rep,
+            effect_rep,
+            set(range(n)),
+            set(),
+        )
+        # Enumerate all unique bipartitions: for each non-empty proper subset of
+        # {0, ..., n-1}, treating (A, B) and (B, A) as the same partition by
+        # restricting the mask range.
+        all_indices = set(range(n))
+        min_partitioned_info = float("inf")
+        best_mip: Optional[Tuple[Set[int], Set[int]]] = None
+        num_partitions = 0
+        if n >= 2:
+            # Only iterate masks that do not include the highest-index bit to
+            # avoid counting both a subset and its complement.
+            max_mask = 1 << (n - 1)
+            for mask in range(1, max_mask):
+                subset = {i for i in range(n) if (mask >> i) & 1}
+                complement = all_indices - subset
+                if not subset or not complement:
+                    continue
+                num_partitions += 1
+                partitioned_info = self._compute_partitioned_information(
+                    cause_rep,
+                    effect_rep,
+                    subset,
+                    complement,
+                )
+                if partitioned_info < min_partitioned_info:
+                    min_partitioned_info = float(partitioned_info)
+                    best_mip = (subset, complement)
+        else:
+            # With fewer than 2 elements, there is no non-trivial partition.
+            min_partitioned_info = float(full_integrated_info)
+            best_mip = (all_indices, set())
+
+        phi = max(0.0, float(full_integrated_info) - float(min_partitioned_info))
+        self.current_mip = best_mip
+        try:
+            self.mip_history.append(
+                {
+                    "mip": best_mip,
+                    "phi": phi,
+                    "full_info": float(full_integrated_info),
+                    "partitioned_info": float(min_partitioned_info),
+                    "method": "full_exhaustive",
+                    "examined_partitions": num_partitions,
+                }
+            )
+        except Exception:
+            pass
+        norm_phi = self._normalize_phi(phi, cause_rep)
+        try:
+            self.phi_history.append(float(norm_phi))
+        except Exception:
+            pass
+        return norm_phi
     def _compute_phi_cutset_sampling(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:
         n = self.n_elements
         full_integrated_info = self._compute_integrated_information(cause_rep, effect_rep, set(range(n)), set())
