@@ -713,7 +713,10 @@ class M3AdaptiveSampler:
         hist = []
         try:
             if hasattr(core, 'phi_calculator') and getattr(core.phi_calculator, 'phi_history', None):
-                hist = [float(v) for v in list(core.phi_calculator.phi_history) if np.isfinite(float(v)) and float(v) >= 0.0]
+                for v in core.phi_calculator.phi_history:
+                    fv = float(v)
+                    if np.isfinite(fv) and fv >= 0.0:
+                        hist.append(fv)
         except Exception:
             hist = []
 
