@@ -30,8 +30,8 @@
     "promote_margin_min": 3,
     "promote_margin_frac": 0.01,
     "cooldown_updates": 8192,
-    "decay_half_life_updates": 10000000,
-    "cms_rehash_window_updates": 200000000,
+    "decay_half_life_updates": 10000,
+    "cms_rehash_window_updates": 20000,
     "seed": 1337,
     "row_cache_capacity": 200000
   },
@@ -39,7 +39,7 @@
     "embed_dim": 1024,
     "hidden_dim": 1024,
     "num_layers": 6,
-    "nhead": 8,
+    "nhead": 1,
     "learning_rate": 0.0003,
     "dropout": 0.1
   },
@@ -58,5 +58,5 @@
     "grad_clip_norm": 1.0,
     "checkpoint_file": "neuro_modulator.pt"
   },
-  "log_path": "bus.jsonl"
+  "log_path": "logs/bus.jsonl"
 }
