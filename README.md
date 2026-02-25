@@ -465,3 +465,18 @@ sequenceDiagram
 
 - 본 문서는 저장소의 Python AST를 기준으로 생성된 구조 정보를 포함합니다.
 - 대형 파일(`m3/m3_core.py`, `llm_adapter/llm_core.py`)은 클래스 및 메서드 수가 매우 많으므로 위 인벤토리를 우선 참조하세요.
+
+## Status Packet Automation
+
+This repository includes a GitHub Actions automation that builds a deterministic "Status Packet" on:
+- push to `main`
+- every `pull_request`
+- daily schedule (`UTC 00:00`)
+
+Generated files:
+- `docs/STATUS.md`
+- `docs/ARCHITECTURE_STATE.md`
+- `docs/RUNBOOK.md`
+- `docs/BACKLOG.md`
+
+The generator is `tools/build_status_packet.py` and reads optional runtime artifacts from `artifacts/latest_run` (for example `metrics.json`, `run_summary.json`, and latest `*.jsonl`). If artifacts are missing, docs are still generated with `UNKNOWN` markers.

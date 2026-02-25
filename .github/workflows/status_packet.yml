@@ -1,0 +1,72 @@
+name: Status Packet
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 0 * * *'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  status-packet:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate status packet docs
+        run: python tools/build_status_packet.py --repo-root . --out-dir docs --artifacts-dir artifacts/latest_run
+
+      - name: Upload docs artifact (PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: status-packet
+          path: |
+            docs/STATUS.md
+            docs/ARCHITECTURE_STATE.md
+            docs/RUNBOOK.md
+            docs/BACKLOG.md
+
+      - name: Comment PR with summary (optional)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = [
+              ' Status Packet generated for this PR.',
+              '',
+              '- Files: `docs/STATUS.md`, `docs/ARCHITECTURE_STATE.md`, `docs/RUNBOOK.md`, `docs/BACKLOG.md`',
+              '- Artifact: `status-packet` (download from the workflow run artifacts)',
+            ].join('\n');
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Commit and push docs (main push/schedule only)
+        if: github.event_name != 'pull_request'
+        run: |
+          git config user.name "m3-status-bot"
+          git config user.email "m3-status-bot@users.noreply.github.com"
+          git add docs/STATUS.md docs/ARCHITECTURE_STATE.md docs/RUNBOOK.md docs/BACKLOG.md
+          if git diff --cached --quiet; then
+            echo "No documentation changes detected."
+          else
+            git commit -m "chore(status): update status packet docs [skip ci]"
+            git push
+          fi

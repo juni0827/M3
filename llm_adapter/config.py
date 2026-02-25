@@ -59,6 +59,10 @@ class M3AdaptiveSamplerConfig:
     temp_min: float = 0.3
     temp_max: float = 2.0
     phi_influence: float = 0.3
+    phi_norm_mode: str = "dynamic"  # off|static|dynamic
+    phi_norm_static_max: float = 1.0
+    phi_norm_quantile: float = 0.9
+    phi_norm_min_denominator: float = 1e-6
     energy_influence: float = 0.4
     meta_influence: float = 0.2
     top_k_high_exploration: int = 50
