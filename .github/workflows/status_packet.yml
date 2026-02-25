@@ -46,7 +46,7 @@ jobs:
         with:
           script: |
             const body = [
-              '📦 Status Packet generated for this PR.',
+              ' Status Packet generated for this PR.',
               '',
               '- Files: `docs/STATUS.md`, `docs/ARCHITECTURE_STATE.md`, `docs/RUNBOOK.md`, `docs/BACKLOG.md`',
               '- Artifact: `status-packet` (download from the workflow run artifacts)',
