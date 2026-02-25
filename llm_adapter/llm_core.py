@@ -634,7 +634,115 @@ class M3AdaptiveSampler:
             self.nn.Linear(64, 1),
             self.nn.Sigmoid()  # Output: [0, 1]
         ).to(device)
+
+    def _normalize_affect_state(self, affect_state, qualia=None):
+        """Normalize affect-like inputs to a stable 5D vector.
+
+        Output order: [arousal, valence, entropy/novelty, engagement, frustration].
+        """
+        defaults = [
+            float(getattr(qualia, 'arousal', 0.5)) if qualia is not None else 0.5,
+            float(getattr(qualia, 'valence', 0.5)) if qualia is not None else 0.5,
+            float(getattr(qualia, 'entropy', 0.5)) if qualia is not None else 0.5,
+            float(getattr(qualia, 'engagement', 0.5)) if qualia is not None else 0.5,
+            float(getattr(qualia, 'frustration', 0.0)) if qualia is not None else 0.0,
+        ]
+
+        if affect_state is None:
+            return defaults
+
+        if isinstance(affect_state, dict):
+            return [
+                float(affect_state.get('arousal', defaults[0])),
+                float(affect_state.get('valence', defaults[1])),
+                float(affect_state.get('entropy', affect_state.get('novelty', defaults[2]))),
+                float(affect_state.get('engagement', defaults[3])),
+                float(affect_state.get('frustration', defaults[4])),
+            ]
+
+        try:
+            vals = [float(v) for v in list(affect_state)]
+        except Exception:
+            return defaults
+
+        if len(vals) < 5:
+            vals = vals + defaults[len(vals):]
+        return vals[:5]
     
+
+    def _resolve_decode_entropy(self, core, default: float = 0.5) -> float:
+        """Resolve decode-time entropy without overwriting qualia entropy semantics."""
+        if core is None:
+            return float(default)
+        for attr in ('decode_entropy', 'token_entropy'):
+            try:
+                if hasattr(core, attr):
+                    return float(getattr(core, attr))
+            except Exception:
+                pass
+        try:
+            if hasattr(core, 'qualia'):
+                return float(getattr(core.qualia, 'entropy', default))
+        except Exception:
+            pass
+        return float(default)
+
+    def _normalize_phi_for_influence(self, core, phi_value: float) -> float:
+        """Normalize phi into [0,1] before applying sampler influence."""
+        try:
+            mode = str(getattr(self.config, 'phi_norm_mode', 'dynamic')).lower()
+        except Exception:
+            mode = 'dynamic'
+
+        try:
+            phi = max(0.0, float(phi_value))
+        except Exception:
+            return 0.0
+
+        if mode == 'off':
+            return float(np.clip(phi, 0.0, 1.0))
+
+        if mode == 'static':
+            try:
+                denom = float(getattr(self.config, 'phi_norm_static_max', 1.0))
+                denom = max(float(getattr(self.config, 'phi_norm_min_denominator', 1e-6)), denom)
+            except Exception:
+                denom = 1.0
+            return float(np.clip(phi / denom, 0.0, 1.0))
+
+        hist = []
+        try:
+            if hasattr(core, 'phi_calculator') and getattr(core.phi_calculator, 'phi_history', None):
+                for v in core.phi_calculator.phi_history:
+                    fv = float(v)
+                    if np.isfinite(fv) and fv >= 0.0:
+                        hist.append(fv)
+        except Exception:
+            hist = []
+
+        try:
+            q = float(getattr(self.config, 'phi_norm_quantile', 0.9))
+        except Exception:
+            q = 0.9
+        q = float(np.clip(q, 0.01, 0.99))
+
+        if hist:
+            try:
+                denom = float(np.quantile(np.asarray(hist, dtype=np.float32), q))
+            except Exception:
+                denom = 1.0
+        else:
+            try:
+                denom = max(float(getattr(self.config, 'phi_norm_min_denominator', 1e-6)), 1.0)
+            except Exception:
+                denom = 1.0
+
+        try:
+            denom = max(float(getattr(self.config, 'phi_norm_min_denominator', 1e-6)), denom)
+        except Exception:
+            denom = max(1e-6, denom)
+        return float(np.clip(phi / denom, 0.0, 1.0))
+
     def _compute_temperature(self, core, base_temp: float) -> float:
         """
         M3-aware temperature adjustment.
@@ -652,15 +760,15 @@ class M3AdaptiveSampler:
         try:
             # 1. Affect Kernel adjustment
             if hasattr(core, 'affect_kernel'):
-                affect_state = core.affect_kernel.get_state() # [valence, arousal, dominance, novelty, clarity]
-                # Map to temp_predictor input (5D)
-                qualia_vec = self.torch.tensor(affect_state, dtype=self.torch.float32).to(self.device)
+                affect_state = core.affect_kernel.get_state()
+                affect_vec = self._normalize_affect_state(affect_state, getattr(core, 'qualia', None))
+                qualia_vec = self.torch.tensor(affect_vec, dtype=self.torch.float32).to(self.device)
             elif hasattr(core, 'qualia'):
                 # Fallback to old qualia
                 qualia_vec = self.torch.tensor([
                     getattr(core.qualia, 'arousal', 0.5),
                     getattr(core.qualia, 'valence', 0.5),
-                    getattr(core.qualia, 'entropy', 0.5),
+                    self._resolve_decode_entropy(core, 0.5),
                     getattr(core.qualia, 'engagement', 0.5),
                     getattr(core.qualia, 'frustration', 0.0)
                 ], dtype=self.torch.float32).to(self.device)
@@ -674,8 +782,8 @@ class M3AdaptiveSampler:
 
             # 2. Phi adjustment (phi * temp)
             if hasattr(core, 'phi_calculator') and core.phi_calculator.phi_history:
-                phi = core.phi_calculator.phi_history[-1]
-                # phi [0, 1],  temp
+                phi = self._normalize_phi_for_influence(core, core.phi_calculator.phi_history[-1])
+                # phi in [0, 1]; higher integration (phi) reduces temperature for more focused sampling
                 temp = temp * (1.0 - self.config.phi_influence * phi)
 
             # 3. Energy adjustment (energy * temp)
@@ -712,13 +820,12 @@ class M3AdaptiveSampler:
         try:
             # Exploration = entropy * engagement (qualia)
             if hasattr(core, 'affect_kernel'):
-                # Use Novelty (index 3) and Arousal (index 1) as proxy for exploration
-                affect = core.affect_kernel.get_state()
-                novelty = affect[3]
-                arousal = affect[1]
-                exploration = novelty * arousal
+                affect = self._normalize_affect_state(core.affect_kernel.get_state(), getattr(core, 'qualia', None))
+                novelty_or_entropy = affect[2]
+                arousal = affect[0]
+                exploration = novelty_or_entropy * arousal
             elif hasattr(core, 'qualia'):
-                entropy = getattr(core.qualia, 'entropy', 0.5)
+                entropy = self._resolve_decode_entropy(core, 0.5)
                 engagement = getattr(core.qualia, 'engagement', 0.5)
                 exploration = entropy * engagement
             else:
@@ -1206,15 +1313,14 @@ class HFBackend:
                 ec.cognitive_energy = max(0.0, before - 0.05 * interval)
                 if ec.cognitive_energy != before:
                     updated = True
-            if hasattr(core, 'qualia'):
-                q = core.qualia
-                before = float(getattr(q, 'entropy', 0.0))
-                window = generated_ids[-interval:] if generated_ids else []
-                n_unique = len(set(window)) if window else 0
-                token_diversity = n_unique / max(interval, 1)
-                q.entropy = 0.8 * before + 0.2 * token_diversity
-                if q.entropy != before:
-                    updated = True
+            before = float(getattr(core, 'decode_entropy', getattr(core, 'token_entropy', 0.0)))
+            window = generated_ids[-interval:] if generated_ids else []
+            n_unique = len(set(window)) if window else 0
+            token_diversity = n_unique / max(interval, 1)
+            decode_entropy = 0.8 * before + 0.2 * token_diversity
+            if decode_entropy != before:
+                updated = True
+            core.decode_entropy = decode_entropy
         except Exception:
             return False
         return updated
@@ -7971,5 +8077,3 @@ def attach_llm_to_core(core, adapter=None, record: bool = True):
     except Exception as e:
         logger.exception('Failed to attach LLM adapter to core')
         raise
-
-
