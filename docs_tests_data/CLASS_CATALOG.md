@@ -1,0 +1,1016 @@
+# CLASS_CATALOG
+
+- Generated: 2026-02-26T17:59:46+00:00
+- Commit: `UNKNOWN`
+- Branch: `UNKNOWN`
+- Repro seed/config: deterministic (no randomness used in generator)
+
+## Summary
+
+- Files: `13`
+- Classes: `111`
+- Functions: `54`
+- Methods: `983`
+
+## llm_adapter/layers.py
+
+### Classes
+
+- `PlasticBitLinear` (L9)
+  - methods:
+    - `__init__`
+    - `forward`
+    - `_quantize_weight`
+    - `_hebbian_update`
+    - `consolidate`
+    - `extra_repr`
+
+## llm_adapter/llm_core.py
+
+### Classes
+
+- `M3StateEncoder` (L182)
+  - methods:
+    - `__init__`
+    - `_infer_nhead`
+    - `_infer_fusion_layers`
+    - `_infer_dropout`
+    - `_lazy_init_projections`
+    - `forward`
+- `M3StateCache` (L401)
+  - methods:
+    - `__init__`
+    - `_infer_cache_size`
+    - `_infer_phi_trend_window`
+    - `update`
+    - `get_current_panels`
+    - `get_phi_trend`
+- `M3AwareDecoderLayer` (L512)
+  - methods:
+    - `__init__`
+    - `_infer_nhead`
+    - `_infer_dropout`
+    - `forward`
+- `M3AdaptiveSampler` (L618)
+  - methods:
+    - `__init__`
+    - `_normalize_affect_state`
+    - `_resolve_decode_entropy`
+    - `_normalize_phi_for_influence`
+    - `_compute_temperature`
+    - `_compute_top_k`
+    - `sample`
+- `HFBackend` (L901)
+  - methods:
+    - `get_instance`
+    - `is_available`
+    - `__init__`
+    - `_ensure_loaded`
+    - `_bridge_enabled`
+    - `_bridge_enabled_safe`
+    - `_note_control_health`
+    - `_compute_recent_control_stats`
+    - `_auto_control_selection`
+    - `_control_selection_mode`
+    - `_control_allows`
+    - `_ensure_control_bridge`
+    - `_neuro_enabled`
+    - `_ensure_neuro_modulator`
+    - `_save_neuro_checkpoint`
+    - `_load_neuro_checkpoint`
+    - `_neuro_status`
+    - `_prepare_bridge_state`
+    - `_micro_update_step_state`
+    - `_sample_next_token`
+    - `_token_critic_enabled`
+    - `_compute_sample_params`
+    - `_apply_bridge_logit_bias`
+    - `_apply_token_value_injection`
+    - ...
+- `TorchConversationalPolicy` (L2030)
+  - methods:
+    - `__init__`
+    - `_env_flag`
+    - `_apply_stability_policies`
+    - `_autonomy_params`
+    - `_rebuild_autonomy_optimizer`
+    - `set_autonomy_heads`
+    - `get_autonomy_diagnostics`
+    - `set_tokenizer_rebuild_guard`
+    - `_log_stability_event`
+    - `_collect_non_finite_issues`
+    - `_renorm_parameters`
+    - `_zero_invalid_gradients`
+    - `_set_token_head_frozen`
+    - `_guarded_optimizer_step`
+    - `_is_numeric_dump_response`
+    - `_is_backend_status_text`
+    - `_is_refusal_disclaimer`
+    - `_is_identity_drift_output`
+    - `_is_disallowed_generation_output`
+    - `_system_prompt_mode`
+    - `_system_prompt_enabled`
+    - `_get_system_prompt`
+    - `_verifier_tokens`
+    - `_phrase_repetition_score`
+    - ...
+- `UnifiedM3Policy` (L8274)
+  - methods:
+    - `__init__`
+    - `set_motor_policy`
+    - `sample_action`
+    - `update_motor`
+- `PlasticBrainPolicy` (L8301)
+  - methods:
+    - `__init__`
+    - `sample`
+    - `_state_vector`
+    - `learn`
+    - `generate`
+
+### Top-level Functions
+
+- `_normalize_log_dir`
+- `_normalize_log_file`
+- `_resolve_torch_device`
+- `_attach_control_compat`
+- `attach_llm_to_core`
+
+## llm_adapter/m3_control_bridge.py
+
+### Classes
+
+- `M3BridgeControls` (L17)
+- `M3ControlBridge` (L23)
+  - methods:
+    - `__init__`
+    - `_maybe_apply_spectral_norm`
+    - `_prepare_state`
+    - `forward`
+    - `regularization_loss`
+    - `renorm_parameters`
+- `LayerGateRuntime` (L197)
+  - methods:
+    - `__init__`
+    - `close`
+    - `apply`
+- `QualityGateResult` (L248)
+- `GenerationQualityGate` (L255)
+  - methods:
+    - `__init__`
+    - `_features`
+    - `evaluate`
+- `NeuroModControls` (L320)
+- `NeuroModulator` (L329)
+  - methods:
+    - `__init__`
+    - `_prepare_state`
+    - `_warmup_factor`
+    - `forward`
+    - `online_loss`
+    - `renorm_parameters`
+    - `maybe_apply_spectral_norm`
+- `NeuroModulatorRuntime` (L582)
+  - methods:
+    - `__init__`
+    - `apply`
+    - `close`
+
+### Top-level Functions
+
+- `_to_module_list`
+- `find_decoder_layers`
+
+## llm_adapter/m3_plastic_policy.py
+
+### Classes
+
+- `M3PlasticPolicy` (L15)
+  - methods:
+    - `__init__`
+    - `encoder`
+    - `reset_state`
+    - `forward`
+    - `sample`
+    - `sleep`
+    - `learn_from_text`
+
+## llm_adapter/memory.py
+
+### Classes
+
+- `_ANNBackendBase` (L48)
+  - methods:
+    - `fit`
+    - `query`
+- `_NumpyANNBackend` (L60)
+  - methods:
+    - `__init__`
+    - `fit`
+    - `query`
+- `_AnnoyANNBackend` (L85)
+  - methods:
+    - `__init__`
+    - `fit`
+    - `query`
+- `_FaissANNBackend` (L117)
+  - methods:
+    - `__init__`
+    - `fit`
+    - `query`
+- `M3EpisodicMemoryRetriever` (L148)
+  - methods:
+    - `__init__`
+    - `_log_ann_event`
+    - `_resolve_backend_name`
+    - `_supports_module`
+    - `_is_backend_blocked`
+    - `_mark_backend_failed`
+    - `_resolve_auto_backend`
+    - `set_ann_backend`
+    - `_create_backend_for_dim`
+    - `_maybe_log_query_event`
+    - `_dominant_dim`
+    - `refresh_index`
+    - `_needs_refresh`
+    - `query_candidates`
+    - `_get_episode_list`
+    - `_current_qualia_vector`
+    - `_episode_embedding`
+    - `_select_query_vector`
+    - `_compute_similarity_scores`
+    - `_infer_top_k`
+    - `retrieve_relevant_episodes`
+- `KNNItem` (L726)
+- `ConditionalKNNIndex` (L731)
+  - methods:
+    - `__init__`
+    - `_norm`
+    - `_softmax`
+    - `add`
+    - `_downsample`
+    - `query`
+
+### Top-level Functions
+
+- `_resolve_llm_log_path`
+
+## llm_adapter/remote.py
+
+### Top-level Functions
+
+- `_get_system_prompt`
+- `_system_prompt_mode`
+- `_system_prompt_enabled`
+- `_build_prompt`
+- `_dedupe_response`
+- `get_local_thinking`
+
+## llm_adapter/tokenization.py
+
+### Classes
+
+- `M3Tokenizer` (L28)
+  - methods:
+    - `__init__`
+    - `PAD`
+    - `BOS`
+    - `EOS`
+    - `encode`
+    - `decode`
+    - `vocab_size`
+    - `train`
+    - `_safe_text_iter`
+    - `_rebuild_state_path`
+    - `load_rebuild_state`
+    - `save_rebuild_state`
+    - `export_vocab_snapshot`
+    - `_collect_corpus_stats`
+    - `can_rebuild_safely`
+    - `observe_unknown_rate`
+    - `should_rebuild_vocab`
+    - `rebuild_vocab_from_corpus`
+    - `save`
+    - `from_config`
+
+### Top-level Functions
+
+- `_log_once`
+
+## m3/features.py
+
+### Classes
+
+- `HebbianMemory` (L13)
+  - methods:
+    - `__post_init__`
+    - `update`
+    - `read`
+    - `store_episode`
+    - `replay_episode`
+    - `similarity_score`
+    - `similarity_search`
+    - `retrieve_similar_episodes`
+- `FeatureSpec` (L143)
+- `Scope` (L295)
+  - methods:
+    - `encode`
+
+### Top-level Functions
+
+- `pack_scalar`
+- `pack_stats_sample`
+- `pack_spatial_pool`
+- `pack_learned_proj`
+
+## m3/m3_core.py
+
+### Classes
+
+- `Message` (L209)
+- `SpanMeta` (L219)
+- `MessageBus` (L230)
+  - methods:
+    - `__init__`
+    - `register_module`
+    - `send`
+    - `receive`
+    - `receive_all`
+    - `get_stats`
+    - `register_span`
+    - `close_span`
+    - `route_credit`
+- `RNGRegistry` (L380)
+  - methods:
+    - `__init__`
+    - `get`
+    - `episode`
+- `PolicyMLP` (L400)
+  - methods:
+    - `__init__`
+    - `adopt_linear`
+    - `forward`
+    - `sample`
+    - `record`
+    - `end_batch`
+    - `_approx_kl`
+    - `spectral_clip`
+    - `resize_input`
+    - `resize_hidden`
+    - `resize_output`
+- `FeatureBank` (L620)
+  - methods:
+    - `__init__`
+    - `set_mask`
+    - `_norm`
+    - `_update_stats`
+    - `_hash_embed`
+    - `build`
+    - `panels`
+    - `_feature_scores`
+    - `shrink`
+    - `merge`
+- `SkillsManager` (L1300)
+  - methods:
+    - `__init__`
+    - `observe`
+    - `get_gate_biases`
+- `SharedRepresentation` (L1347)
+  - methods:
+    - `__init__`
+    - `update_stats`
+    - `transform`
+    - `auto_tune_embed`
+    - `set_log_paths`
+    - `_log_jsonl`
+    - `autodiscover`
+    - `_score_spec`
+    - `_pack_spec`
+    - `_assemble_with_extra`
+    - `_mi_with_advantage`
+    - `_fisher_wrt_policy`
+    - `_redundancy_vs_existing`
+    - `start_ab_trial`
+    - `ab_update`
+    - `prune`
+    - `grow`
+    - `_register_default_specs`
+    - `register_spec`
+    - `unregister_spec`
+    - `compute_total_produced_dim`
+    - `measure_complexity`
+    - `should_grow`
+    - `adaptive_grow`
+- `MetaFeatureController` (L1846)
+  - methods:
+    - `__init__`
+    - `decide`
+    - `observe`
+    - `_pick_width`
+    - `autosize_step`
+- `GrowthTrigger` (L1965)
+  - methods:
+    - `__init__`
+    - `decide`
+    - `observe`
+- `SelfDynamicsModel` (L2004)
+  - methods:
+    - `__init__`
+    - `_update_stats`
+    - `forward`
+    - `train_batch`
+    - `save`
+    - `resize`
+    - `load`
+    - `sample`
+    - `update`
+    - `record`
+    - `end_batch`
+- `SimpleBanditEnv` (L2201)
+  - methods:
+    - `__init__`
+    - `reset`
+    - `step`
+- `IITPhiCalculator` (L2219)
+  - methods:
+    - `__init__`
+    - `_repertoire_entropy`
+    - `_compute_joint_entropy`
+    - `_compute_integrated_information`
+    - `_compute_partitioned_information`
+    - `_compute_partition_loss`
+    - `_normalize_phi`
+    - `update_state`
+    - `_check_structural_health`
+    - `compute_phi`
+    - `_broadcast_phi_update`
+    - `_state_to_index`
+    - `_effect_from_ces`
+    - `_cause_into_ces`
+    - `compute_mics`
+    - `_compute_phi_simple`
+    - `_compute_phi_full`
+    - `_compute_phi_full_exhaustive`
+- `_WalLog` (L2538)
+  - methods:
+    - `__init__`
+    - `append`
+    - `bytes`
+    - `cut_and_aggregate_sorted`
+- `_CmsSketch` (L2591)
+  - methods:
+    - `__init__`
+    - `_init_hash_salts`
+    - `set_seed`
+    - `_hashes`
+    - `estimate`
+    - `add`
+    - `scale_down_half`
+    - `maybe_rehash`
+- `_TopKIndex` (L2664)
+  - methods:
+    - `__init__`
+    - `_target_k`
+    - `_ensure_row`
+    - `_rebuild_heap`
+    - `inc`
+    - `maybe_promote`
+    - `items`
+    - `scale_down_half`
+- `_CsrStore` (L2762)
+  - methods:
+    - `__init__`
+    - `get`
+    - `items`
+    - `merge_delta_from_sorted_arrays`
+    - `scale_down_half`
+- `_RowCache` (L2843)
+  - methods:
+    - `__init__`
+    - `get`
+    - `put`
+    - `invalidate`
+    - `clear`
+- `CauseEffectStructure` (L2870)
+  - methods:
+    - `__init__`
+    - `add`
+    - `get`
+    - `topk_items`
+    - `iter_row`
+    - `rowsum`
+    - `prob`
+    - `compact`
+    - `decay`
+    - `set_seed`
+    - `_normalize_phi`
+    - `compute_phi`
+    - `_compute_phi_simple`
+    - `_compute_phi_full`
+    - `_compute_phi_simple`
+    - `_compute_phi_full`
+    - `_compute_phi_full_exhaustive`
+    - `_compute_phi_full_exhaustive`
+    - `_compute_phi_cutset_sampling`
+    - `_find_connected_component`
+    - `_compute_phi_community_cluster`
+    - `_detect_communities_greedy`
+    - `_modularity_gain`
+    - `_inter_community_strength`
+    - ...
+- `EvolutionVisualizer` (L3553)
+  - methods:
+    - `__init__`
+    - `update`
+    - `_update_neural_map`
+    - `add_major_event`
+    - `render_brain_growth`
+    - `render_network_growth`
+    - `render_full_display`
+    - `_make_bar`
+    - `get_scope_image`
+    - `get_ascii`
+- `ConceptPrototype` (L3909)
+- `ConceptualSpace` (L3916)
+  - methods:
+    - `__init__`
+    - `_initialize_basic_dimensions`
+    - `add_experience`
+    - `_discover_new_prototypes`
+    - `ground_experience`
+    - `_generate_meaning`
+- `EventType` (L4044)
+- `Event` (L4063)
+  - methods:
+    - `__lt__`
+- `GrowingSOM` (L4072)
+  - methods:
+    - `_adaptive_sigma`
+    - `_neighborhood_function`
+    - `__init__`
+    - `update`
+    - `sigma_decay`
+    - `find_bmu`
+    - `learn`
+    - `_should_grow`
+    - `_grow_neuron_intelligent`
+    - `_evaluate_growth_position`
+    - `_create_intelligent_connections`
+    - `_update_connections`
+    - `_prune_weak_connections`
+    - `get_statistics`
+    - `get_network_state`
+    - `get_topology_health`
+    - `_learning_gate`
+- `QualiaState` (L4418)
+  - methods:
+    - `__init__`
+    - `compute`
+    - `_process_incoming_messages`
+    - `_broadcast_qualia_state`
+    - `dominant_feeling`
+    - `to_dict`
+- `ConsciousContent` (L4532)
+  - methods:
+    - `__lt__`
+- `GlobalWorkspace` (L4542)
+  - methods:
+    - `__init__`
+    - `_write_policy_param`
+    - `get_policy_param_shadow_writes`
+    - `_offline_tune_policy`
+    - `apply_system_health`
+    - `_process_incoming_messages`
+    - `_send_focus_to_policy`
+    - `_broadcast_workspace_state`
+    - `submit_for_competition`
+    - `_try_integrate_content`
+    - `_calculate_semantic_similarity`
+    - `_adjust_salience_contextually`
+    - `_adjust_salience_with_exploration`
+    - `_record_association`
+    - `_update_semantic_clusters`
+    - `compete_for_consciousness`
+    - `_explore_b_selection`
+    - `_calculate_exploration_diversity`
+    - `_conservative_selection_enhanced`
+    - `_update_attention_explore_b`
+    - `_exploratory_selection`
+    - `_conservative_selection`
+    - `_calculate_diversity_score`
+    - `_update_attention_dynamically`
+    - ...
+- `GoalType` (L6088)
+- `Goal` (L6098)
+  - methods:
+    - `evaluate_achievement`
+- `GoalGenerator` (L6129)
+  - methods:
+    - `__init__`
+    - `update_qualia_statistics`
+    - `compute_goal_urgency`
+    - `generate_goal`
+    - `derive_meta_goal`
+    - `discover_goal_from_pattern`
+    - `compose_hierarchical_goal`
+    - `evaluate_discovered_goal`
+- `MetaCognitiveNetwork` (L6315)
+  - methods:
+    - `__init__`
+    - `forward`
+    - `learn`
+- `RecursiveSelfModel` (L6513)
+  - methods:
+    - `__init__`
+    - `introspect`
+    - `_verbalize_level1`
+    - `_verbalize_level2`
+    - `_verbalize_level3`
+    - `_verbalize_level4`
+    - `_verbalize_level5`
+    - `_verbalize_level6`
+    - `_verbalize_level7`
+    - `_detect_strange_loop`
+    - `update_meta_awareness`
+    - `downward_causation`
+    - `predict_next_state`
+    - `evaluate_prediction`
+    - `update_beliefs`
+    - `_neural_update_beliefs`
+    - `_do_meta_learning`
+    - `_heuristic_update_beliefs`
+    - `_update_meta_confidence`
+    - `revise_self_model`
+    - `revise_self_model_level2`
+    - `revise_self_model_level3`
+    - `revise_self_model_level4_emergency`
+    - `log_state`
+    - ...
+- `EpisodicMemoryTrace` (L7464)
+- `EpisodicMemory` (L7480)
+  - methods:
+    - `__init__`
+    - `encode_experience`
+    - `retrieve_by_time`
+    - `retrieve_by_semantic`
+    - `retrieve_by_emotion`
+    - `retrieve_similar_qualia`
+    - `consolidate`
+    - `construct_narrative`
+    - `_prune_memories`
+    - `_rebuild_indices`
+    - `get_statistics`
+    - `save`
+    - `load`
+- `StructuralOperator` (L7785)
+- `StructuralVersion` (L7800)
+  - methods:
+    - `compute_diff`
+- `ErrorProfile` (L7817)
+  - methods:
+    - `total_errors`
+    - `add_error`
+    - `dominant_pattern`
+- `StructuralOperatorEngine` (L7845)
+  - methods:
+    - `__init__`
+    - `_generate_version_id`
+    - `analyze_error_profile`
+    - `select_operator_sequence`
+    - `apply_operator`
+    - `_op_dim_increase`
+    - `_op_dim_decrease`
+    - `_op_sparsify`
+    - `_op_densify`
+    - `_op_project`
+    - `_op_compose`
+    - `_op_relink`
+    - `_op_prune`
+    - `rollback`
+    - `get_current_structure`
+- `Hypothesis` (L8050)
+- `AutonomousExperimentDesigner` (L8062)
+  - methods:
+    - `__init__`
+    - `generate_hypothesis`
+    - `design_experiment`
+    - `execute_experiment`
+    - `_statistical_analysis`
+    - `_bootstrap_test`
+    - `_bootstrap_ci`
+    - `evaluate_hypothesis`
+    - `apply_if_accepted`
+    - `generate_self_hypothesis`
+- `PlanningMode` (L8328)
+- `GoalStatus` (L8334)
+- `SubGoal` (L8342)
+  - methods:
+    - `is_completed`
+    - `should_evaluate`
+- `LongTermGoal` (L8384)
+  - methods:
+    - `update_progress`
+    - `should_redefine`
+    - `should_switch_to_exploration`
+    - `is_completed`
+- `LongTermPlanner` (L8468)
+  - methods:
+    - `__init__`
+    - `create_goal`
+    - `decompose_goal`
+    - `_schedule_actions`
+    - `execute_plan`
+    - `_evaluate_subgoal`
+    - `_generate_recommendations`
+    - `_check_termination`
+    - `handle_termination`
+    - `_redefine_goal`
+    - `_switch_mode`
+    - `get_status_report`
+- `ResourceType` (L8692)
+- `Budget` (L8700)
+  - methods:
+    - `available`
+    - `reserve`
+    - `consume`
+    - `release`
+    - `utilization`
+- `RewardSignal` (L8732)
+  - methods:
+    - `is_positive`
+- `BudgetDecision` (L8742)
+- `GlobalRewardBudgetScheduler` (L8748)
+  - methods:
+    - `__init__`
+    - `receive_reward`
+    - `_update_roi`
+    - `request_budget`
+    - `_try_defer_low_priority_tasks`
+    - `consume_budget`
+    - `get_priority_recommendation`
+    - `reallocate_budgets`
+    - `get_status`
+    - `reset_budget`
+    - `allocate_budget`
+- `UnifiedSubject` (L8914)
+  - methods:
+    - `__init__`
+    - `experience`
+    - `_compute_phenomenal_character`
+    - `_update_identity`
+    - `reflect_on_self`
+    - `bind_experience`
+    - `_create_gestalt`
+    - `_check_unity`
+- `MetaMetaMonitor` (L9040)
+  - methods:
+    - `__init__`
+    - `evaluate_model_quality`
+    - `record_revision_outcome`
+    - `get_revision_policy_status`
+- `EnergyBasedController` (L9145)
+  - methods:
+    - `__init__`
+    - `update_internal_statistics`
+    - `compute_qualia_pressure`
+    - `compute_self_model_drive`
+    - `update_activation`
+    - `compute_cognitive_cost`
+    - `update_energy`
+    - `_broadcast_energy_state`
+    - `should_continue`
+- `HebbianTrace` (L9492)
+  - methods:
+    - `__init__`
+    - `update`
+    - `read`
+    - `decay_step`
+- `RunningBaseline` (L9516)
+  - methods:
+    - `__init__`
+    - `update`
+    - `get`
+- `MetaController` (L9534)
+  - methods:
+    - `__init__`
+    - `decide`
+    - `observe`
+    - `save`
+    - `load`
+    - `snapshot`
+- `ConsciousnessBus` (L9716)
+  - methods:
+    - `__init__`
+    - `_log`
+    - `_enqueue`
+    - `_dispatch_event`
+    - `publish`
+    - `subscribe`
+    - `unsubscribe`
+    - `start_async_worker`
+    - `stop_async_worker`
+    - `drain`
+    - `stats`
+    - `push`
+    - `step`
+    - `top`
+    - `top_keys`
+- `AutoNamer` (L9985)
+  - methods:
+    - `__init__`
+    - `_slug`
+    - `_hash`
+    - `spec_name`
+    - `token_name_policy`
+- `M3ConsciousnessCore` (L10317)
+  - methods:
+    - `__init__`
+    - `_get_current_world_state`
+    - `_collect_affect_state_for_llm`
+    - `_collect_llm_memory`
+    - `_build_llm_prompt`
+    - `_meaning_pipeline_enabled`
+    - `_meaning_pipeline_cfg`
+    - `_collect_core_state_for_meaning`
+    - `_build_meaning_state`
+    - `_ground_meaning_state`
+    - `_build_response_plan`
+    - `_meaning_artifact_paths`
+    - `_log_meaning_pipeline_artifacts`
+    - `_emit_llm_response_with_plan`
+    - `_postprocess_llm_response`
+    - `_is_backend_or_error_response`
+    - `_is_disallowed_llm_response`
+    - `_verifier_tokens`
+    - `_evaluate_dialog_accuracy`
+    - `_apply_dialog_verifier_reward`
+    - `_emit_llm_response`
+    - `_memory_semantic_prefix`
+    - `_semantic_text_for_embedding`
+    - `_current_memory_qualia_vector`
+    - ...
+
+### Top-level Functions
+
+- `_default_docs_outdir`
+- `_write_jsonl_safe`
+- `_resolve_llm_adapter_log_path`
+- `_resolve_meaning_artifact_path`
+- `_normalize_phi_policy`
+- `_compute_phi_policy_from_history`
+- `_default_torch_device`
+- `_m3_torch_device`
+- `build_parser`
+- `main`
+- `_scope_compute_arousal`
+
+## m3/reward.py
+
+### Classes
+
+- `DriveTier` (L50)
+- `Drive` (L58)
+  - methods:
+    - `evaluate`
+- `_TorchAffectEncoder` (L92)
+  - methods:
+    - `__init__`
+    - `forward`
+- `AffectKernel` (L115)
+  - methods:
+    - `__init__`
+    - `infer`
+    - `infer_batch`
+    - `update_running_stats`
+    - `_to_1d_numpy`
+    - `_context_to_vec`
+    - `_normalize`
+    - `_concat`
+    - `_infer_torch`
+    - `_infer_batch_torch`
+    - `state_dict`
+    - `load_state_dict`
+- `AffectAxisConfig` (L344)
+- `AffectOverrideConfig` (L366)
+- `RewardSystem` (L375)
+  - methods:
+    - `__init__`
+    - `_register_viability_drive`
+    - `_register_affect_core_drives`
+    - `create_derived_drive`
+    - `deactivate_drive`
+    - `evaluate_all`
+    - `total_cost`
+
+### Top-level Functions
+
+- `_resolve_device`
+
+## m3/torch_policy.py
+
+### Classes
+
+- `_Expert` (L46)
+  - methods:
+    - `__init__`
+    - `forward`
+- `_MoEFFN` (L55)
+  - methods:
+    - `__init__`
+    - `forward`
+- `TorchSharedRepr` (L99)
+  - methods:
+    - `__init__`
+    - `forward`
+- `Expert` (L127)
+  - methods:
+    - `__init__`
+    - `forward`
+- `MoEFFN` (L137)
+  - methods:
+    - `__init__`
+    - `forward`
+- `PolicyModel` (L174)
+  - methods:
+    - `__init__`
+    - `forward`
+- `RolloutItem` (L217)
+- `TorchPolicy` (L228)
+  - methods:
+    - `__init__`
+    - `sigma`
+    - `sample`
+    - `record`
+    - `end_batch`
+    - `update`
+- `MLP` (L422)
+  - methods:
+    - `__init__`
+    - `forward`
+- `BRPolicyModel` (L435)
+  - methods:
+    - `__init__`
+    - `_get_expert`
+    - `_spec_summary`
+    - `forward`
+- `BRItem` (L503)
+- `BRPolicy` (L512)
+  - methods:
+    - `__init__`
+    - `sigma`
+    - `set_active_specs`
+    - `set_gate_bias`
+    - `sample`
+    - `diagnose`
+    - `record`
+    - `end_batch`
+    - `update_from_delayed_reward`
+
+### Top-level Functions
+
+- `_resolve_device`
+- `_switch_aux_terms`
+
+## m3/visualization.py
+
+### Classes
+
+- `Retinizer` (L91)
+  - methods:
+    - `__call__`
+- `FeatureSummarizer` (L166)
+  - methods:
+    - `__post_init__`
+    - `__call__`
+- `GlitchEncoder` (L288)
+  - methods:
+    - `__call__`
+
+### Top-level Functions
+
+- `get_hilbert_map`
+- `hilbert_index_to_xy`
+- `vector_to_grid`
+
+## run_llm_adapter.py
+
+### Top-level Functions
+
+- `_safe_print`
+- `_bool_env`
+- `_coerce_env_value`
+- `_set_env_vars`
+- `_on_response`
+- `_on_spontaneous`
+- `_start_research`
+- `_start_creation`
+- `_start_learning`
+- `_parse_profile_name`
+- `_apply_profile`
+- `_snapshot_state`
+- `_normalize_control_mode`
+- `_print_status`
+- `_print_help`
+- `_print_topology`
+- `_print_shadow_writes`
+- `_handle_command`

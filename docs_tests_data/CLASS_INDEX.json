@@ -1,0 +1,1765 @@
+{
+  "files": {
+    "llm_adapter/layers.py": {
+      "classes": [
+        {
+          "lineno": 9,
+          "methods": [
+            "__init__",
+            "forward",
+            "_quantize_weight",
+            "_hebbian_update",
+            "consolidate",
+            "extra_repr"
+          ],
+          "name": "PlasticBitLinear"
+        }
+      ],
+      "functions": []
+    },
+    "llm_adapter/llm_core.py": {
+      "classes": [
+        {
+          "lineno": 182,
+          "methods": [
+            "__init__",
+            "_infer_nhead",
+            "_infer_fusion_layers",
+            "_infer_dropout",
+            "_lazy_init_projections",
+            "forward"
+          ],
+          "name": "M3StateEncoder"
+        },
+        {
+          "lineno": 401,
+          "methods": [
+            "__init__",
+            "_infer_cache_size",
+            "_infer_phi_trend_window",
+            "update",
+            "get_current_panels",
+            "get_phi_trend"
+          ],
+          "name": "M3StateCache"
+        },
+        {
+          "lineno": 512,
+          "methods": [
+            "__init__",
+            "_infer_nhead",
+            "_infer_dropout",
+            "forward"
+          ],
+          "name": "M3AwareDecoderLayer"
+        },
+        {
+          "lineno": 618,
+          "methods": [
+            "__init__",
+            "_normalize_affect_state",
+            "_resolve_decode_entropy",
+            "_normalize_phi_for_influence",
+            "_compute_temperature",
+            "_compute_top_k",
+            "sample"
+          ],
+          "name": "M3AdaptiveSampler"
+        },
+        {
+          "lineno": 901,
+          "methods": [
+            "get_instance",
+            "is_available",
+            "__init__",
+            "_ensure_loaded",
+            "_bridge_enabled",
+            "_bridge_enabled_safe",
+            "_note_control_health",
+            "_compute_recent_control_stats",
+            "_auto_control_selection",
+            "_control_selection_mode",
+            "_control_allows",
+            "_ensure_control_bridge",
+            "_neuro_enabled",
+            "_ensure_neuro_modulator",
+            "_save_neuro_checkpoint",
+            "_load_neuro_checkpoint",
+            "_neuro_status",
+            "_prepare_bridge_state",
+            "_micro_update_step_state",
+            "_sample_next_token",
+            "_token_critic_enabled",
+            "_compute_sample_params",
+            "_apply_bridge_logit_bias",
+            "_apply_token_value_injection",
+            "_resolve_forbidden_token_ids",
+            "_apply_decode_control_params",
+            "_repeat_ngram_blocklist",
+            "_has_suffix_loop",
+            "_token_repetition_risk",
+            "generate_with_m3"
+          ],
+          "name": "HFBackend"
+        },
+        {
+          "lineno": 2030,
+          "methods": [
+            "__init__",
+            "_env_flag",
+            "_apply_stability_policies",
+            "_autonomy_params",
+            "_rebuild_autonomy_optimizer",
+            "set_autonomy_heads",
+            "get_autonomy_diagnostics",
+            "set_tokenizer_rebuild_guard",
+            "_log_stability_event",
+            "_collect_non_finite_issues",
+            "_renorm_parameters",
+            "_zero_invalid_gradients",
+            "_set_token_head_frozen",
+            "_guarded_optimizer_step",
+            "_is_numeric_dump_response",
+            "_is_backend_status_text",
+            "_is_refusal_disclaimer",
+            "_is_identity_drift_output",
+            "_is_disallowed_generation_output",
+            "_system_prompt_mode",
+            "_system_prompt_enabled",
+            "_get_system_prompt",
+            "_verifier_tokens",
+            "_phrase_repetition_score",
+            "_semantic_dup_score",
+            "_has_infinite_loop_pattern",
+            "_evaluate_generation_quality",
+            "_normalize_generation_contract",
+            "_meaning_mode",
+            "_meaning_effective_cfg",
+            "_should_gate_meaning",
+            "_should_use_semantic_scoring",
+            "_plan_text_for_scoring",
+            "_evaluate_semantic_candidate",
+            "_candidate_count",
+            "_plan_contract_text",
+            "_meaning_should_gate",
+            "_meaning_should_log",
+            "_meaning_is_soft_gate_allowed",
+            "_read_float",
+            "_read_int",
+            "_resolve_generation_sampling",
+            "_retry_generation_sampling",
+            "_strip_similar_context_block",
+            "_is_cuda_fatal_error",
+            "_trip_hf_circuit_breaker",
+            "_extract_last_user_text",
+            "_detect_language",
+            "_is_autonomy_prompt",
+            "_should_include_m3_state",
+            "_is_state_request",
+            "_build_decode_control",
+            "_sanitize_training_record",
+            "_generate_safe_fallback",
+            "save_model",
+            "_record_example",
+            "_default_tokenizer_corpus_files",
+            "_copy_vocab_rows",
+            "_token_maps_for_copy",
+            "reload_tokenizer_and_resize",
+            "_maybe_auto_rebuild_tokenizer",
+            "_ensure_bridge_adapt_optimizer",
+            "_adapt_bridge_online",
+            "enable_m3_integration",
+            "_normalize_affect_state",
+            "_get_affect_state",
+            "_update_m3_cache",
+            "_build_m3_memory",
+            "build_m3_memory",
+            "_vectorize_panels",
+            "_snapshot_vector",
+            "_build_full_state_vector",
+            "_build_m3_context",
+            "start_credit_consumer",
+            "stop_credit_consumer",
+            "_autonomy_core_features",
+            "_state_vector",
+            "_build_autonomy_prefix",
+            "_run_core_steps",
+            "_run_checkpoint_if_enabled",
+            "_drain_user_message",
+            "_handle_user_turn",
+            "_wait_for_user_interrupt",
+            "_autonomy_text_embedding",
+            "_autonomy_novelty",
+            "_repetition_penalty",
+            "_compute_autonomy_reward",
+            "_update_autonomy_q",
+            "_run_autonomy_turn",
+            "start_autonomy_loop",
+            "stop_autonomy_loop",
+            "submit_user_message",
+            "_autonomy_seed_prompt",
+            "_parse_user_m3_transcript",
+            "_unified_loop",
+            "_consume_credits",
+            "_process_credit_message",
+            "load_model",
+            "_beta_schedule",
+            "_update_task_weights_gradnorm",
+            "_normalize_targets",
+            "_alpha_scheduler_uncertainty",
+            "_log_jsonl",
+            "_adv_headroom",
+            "_looks_like_toolcall",
+            "_sample_toolcall_variants",
+            "_quick_eval_proxy",
+            "_predict_value_scalar",
+            "_build_cond_key",
+            "_sample",
+            "_build_hf_quality_gate_inputs",
+            "_generate_with_hf",
+            "_apply_quality_gate_if_enabled",
+            "_semantic_perspective_prefix",
+            "embed_text",
+            "generate",
+            "score_value",
+            "collect_knn_from_teacher",
+            "learn_pair",
+            "train_batch",
+            "train_on_example",
+            "_iter_dpo_records_from_dir",
+            "_stable_hash",
+            "_split_train_val",
+            "collect_dpo_preferences_from_logs",
+            "train_supervised_with_early_stopping",
+            "train_dpo_with_early_stopping",
+            "train_dpo_from_dir",
+            "_extract_supervised_pair",
+            "_iter_supervised_records_from_dir",
+            "train_supervised_from_dir",
+            "evaluate_supervised_from_dir",
+            "evaluate_dpo_from_dir",
+            "auto_train_and_test_from_data_set",
+            "train_all_from_data_set",
+            "_sequence_logprob",
+            "dpo_step",
+            "dpo_batch_step",
+            "_is_empty_prompt_or_response",
+            "train_value_head",
+            "train_token_value_head"
+          ],
+          "name": "TorchConversationalPolicy"
+        },
+        {
+          "lineno": 8274,
+          "methods": [
+            "__init__",
+            "set_motor_policy",
+            "sample_action",
+            "update_motor"
+          ],
+          "name": "UnifiedM3Policy"
+        },
+        {
+          "lineno": 8301,
+          "methods": [
+            "__init__",
+            "sample",
+            "_state_vector",
+            "learn",
+            "generate"
+          ],
+          "name": "PlasticBrainPolicy"
+        }
+      ],
+      "functions": [
+        "_normalize_log_dir",
+        "_normalize_log_file",
+        "_resolve_torch_device",
+        "_attach_control_compat",
+        "attach_llm_to_core"
+      ]
+    },
+    "llm_adapter/m3_control_bridge.py": {
+      "classes": [
+        {
+          "lineno": 17,
+          "methods": [],
+          "name": "M3BridgeControls"
+        },
+        {
+          "lineno": 23,
+          "methods": [
+            "__init__",
+            "_maybe_apply_spectral_norm",
+            "_prepare_state",
+            "forward",
+            "regularization_loss",
+            "renorm_parameters"
+          ],
+          "name": "M3ControlBridge"
+        },
+        {
+          "lineno": 197,
+          "methods": [
+            "__init__",
+            "close",
+            "apply"
+          ],
+          "name": "LayerGateRuntime"
+        },
+        {
+          "lineno": 248,
+          "methods": [],
+          "name": "QualityGateResult"
+        },
+        {
+          "lineno": 255,
+          "methods": [
+            "__init__",
+            "_features",
+            "evaluate"
+          ],
+          "name": "GenerationQualityGate"
+        },
+        {
+          "lineno": 320,
+          "methods": [],
+          "name": "NeuroModControls"
+        },
+        {
+          "lineno": 329,
+          "methods": [
+            "__init__",
+            "_prepare_state",
+            "_warmup_factor",
+            "forward",
+            "online_loss",
+            "renorm_parameters",
+            "maybe_apply_spectral_norm"
+          ],
+          "name": "NeuroModulator"
+        },
+        {
+          "lineno": 582,
+          "methods": [
+            "__init__",
+            "apply",
+            "close"
+          ],
+          "name": "NeuroModulatorRuntime"
+        }
+      ],
+      "functions": [
+        "_to_module_list",
+        "find_decoder_layers"
+      ]
+    },
+    "llm_adapter/m3_plastic_policy.py": {
+      "classes": [
+        {
+          "lineno": 15,
+          "methods": [
+            "__init__",
+            "encoder",
+            "reset_state",
+            "forward",
+            "sample",
+            "sleep",
+            "learn_from_text"
+          ],
+          "name": "M3PlasticPolicy"
+        }
+      ],
+      "functions": []
+    },
+    "llm_adapter/memory.py": {
+      "classes": [
+        {
+          "lineno": 48,
+          "methods": [
+            "fit",
+            "query"
+          ],
+          "name": "_ANNBackendBase"
+        },
+        {
+          "lineno": 60,
+          "methods": [
+            "__init__",
+            "fit",
+            "query"
+          ],
+          "name": "_NumpyANNBackend"
+        },
+        {
+          "lineno": 85,
+          "methods": [
+            "__init__",
+            "fit",
+            "query"
+          ],
+          "name": "_AnnoyANNBackend"
+        },
+        {
+          "lineno": 117,
+          "methods": [
+            "__init__",
+            "fit",
+            "query"
+          ],
+          "name": "_FaissANNBackend"
+        },
+        {
+          "lineno": 148,
+          "methods": [
+            "__init__",
+            "_log_ann_event",
+            "_resolve_backend_name",
+            "_supports_module",
+            "_is_backend_blocked",
+            "_mark_backend_failed",
+            "_resolve_auto_backend",
+            "set_ann_backend",
+            "_create_backend_for_dim",
+            "_maybe_log_query_event",
+            "_dominant_dim",
+            "refresh_index",
+            "_needs_refresh",
+            "query_candidates",
+            "_get_episode_list",
+            "_current_qualia_vector",
+            "_episode_embedding",
+            "_select_query_vector",
+            "_compute_similarity_scores",
+            "_infer_top_k",
+            "retrieve_relevant_episodes"
+          ],
+          "name": "M3EpisodicMemoryRetriever"
+        },
+        {
+          "lineno": 726,
+          "methods": [],
+          "name": "KNNItem"
+        },
+        {
+          "lineno": 731,
+          "methods": [
+            "__init__",
+            "_norm",
+            "_softmax",
+            "add",
+            "_downsample",
+            "query"
+          ],
+          "name": "ConditionalKNNIndex"
+        }
+      ],
+      "functions": [
+        "_resolve_llm_log_path"
+      ]
+    },
+    "llm_adapter/remote.py": {
+      "classes": [],
+      "functions": [
+        "_get_system_prompt",
+        "_system_prompt_mode",
+        "_system_prompt_enabled",
+        "_build_prompt",
+        "_dedupe_response",
+        "get_local_thinking"
+      ]
+    },
+    "llm_adapter/tokenization.py": {
+      "classes": [
+        {
+          "lineno": 28,
+          "methods": [
+            "__init__",
+            "PAD",
+            "BOS",
+            "EOS",
+            "encode",
+            "decode",
+            "vocab_size",
+            "train",
+            "_safe_text_iter",
+            "_rebuild_state_path",
+            "load_rebuild_state",
+            "save_rebuild_state",
+            "export_vocab_snapshot",
+            "_collect_corpus_stats",
+            "can_rebuild_safely",
+            "observe_unknown_rate",
+            "should_rebuild_vocab",
+            "rebuild_vocab_from_corpus",
+            "save",
+            "from_config"
+          ],
+          "name": "M3Tokenizer"
+        }
+      ],
+      "functions": [
+        "_log_once"
+      ]
+    },
+    "m3/features.py": {
+      "classes": [
+        {
+          "lineno": 13,
+          "methods": [
+            "__post_init__",
+            "update",
+            "read",
+            "store_episode",
+            "replay_episode",
+            "similarity_score",
+            "similarity_search",
+            "retrieve_similar_episodes"
+          ],
+          "name": "HebbianMemory"
+        },
+        {
+          "lineno": 143,
+          "methods": [],
+          "name": "FeatureSpec"
+        },
+        {
+          "lineno": 295,
+          "methods": [
+            "encode"
+          ],
+          "name": "Scope"
+        }
+      ],
+      "functions": [
+        "pack_scalar",
+        "pack_stats_sample",
+        "pack_spatial_pool",
+        "pack_learned_proj"
+      ]
+    },
+    "m3/m3_core.py": {
+      "classes": [
+        {
+          "lineno": 209,
+          "methods": [],
+          "name": "Message"
+        },
+        {
+          "lineno": 219,
+          "methods": [],
+          "name": "SpanMeta"
+        },
+        {
+          "lineno": 230,
+          "methods": [
+            "__init__",
+            "register_module",
+            "send",
+            "receive",
+            "receive_all",
+            "get_stats",
+            "register_span",
+            "close_span",
+            "route_credit"
+          ],
+          "name": "MessageBus"
+        },
+        {
+          "lineno": 380,
+          "methods": [
+            "__init__",
+            "get",
+            "episode"
+          ],
+          "name": "RNGRegistry"
+        },
+        {
+          "lineno": 400,
+          "methods": [
+            "__init__",
+            "adopt_linear",
+            "forward",
+            "sample",
+            "record",
+            "end_batch",
+            "_approx_kl",
+            "spectral_clip",
+            "resize_input",
+            "resize_hidden",
+            "resize_output"
+          ],
+          "name": "PolicyMLP"
+        },
+        {
+          "lineno": 620,
+          "methods": [
+            "__init__",
+            "set_mask",
+            "_norm",
+            "_update_stats",
+            "_hash_embed",
+            "build",
+            "panels",
+            "_feature_scores",
+            "shrink",
+            "merge"
+          ],
+          "name": "FeatureBank"
+        },
+        {
+          "lineno": 1300,
+          "methods": [
+            "__init__",
+            "observe",
+            "get_gate_biases"
+          ],
+          "name": "SkillsManager"
+        },
+        {
+          "lineno": 1347,
+          "methods": [
+            "__init__",
+            "update_stats",
+            "transform",
+            "auto_tune_embed",
+            "set_log_paths",
+            "_log_jsonl",
+            "autodiscover",
+            "_score_spec",
+            "_pack_spec",
+            "_assemble_with_extra",
+            "_mi_with_advantage",
+            "_fisher_wrt_policy",
+            "_redundancy_vs_existing",
+            "start_ab_trial",
+            "ab_update",
+            "prune",
+            "grow",
+            "_register_default_specs",
+            "register_spec",
+            "unregister_spec",
+            "compute_total_produced_dim",
+            "measure_complexity",
+            "should_grow",
+            "adaptive_grow"
+          ],
+          "name": "SharedRepresentation"
+        },
+        {
+          "lineno": 1846,
+          "methods": [
+            "__init__",
+            "decide",
+            "observe",
+            "_pick_width",
+            "autosize_step"
+          ],
+          "name": "MetaFeatureController"
+        },
+        {
+          "lineno": 1965,
+          "methods": [
+            "__init__",
+            "decide",
+            "observe"
+          ],
+          "name": "GrowthTrigger"
+        },
+        {
+          "lineno": 2004,
+          "methods": [
+            "__init__",
+            "_update_stats",
+            "forward",
+            "train_batch",
+            "save",
+            "resize",
+            "load",
+            "sample",
+            "update",
+            "record",
+            "end_batch"
+          ],
+          "name": "SelfDynamicsModel"
+        },
+        {
+          "lineno": 2201,
+          "methods": [
+            "__init__",
+            "reset",
+            "step"
+          ],
+          "name": "SimpleBanditEnv"
+        },
+        {
+          "lineno": 2219,
+          "methods": [
+            "__init__",
+            "_repertoire_entropy",
+            "_compute_joint_entropy",
+            "_compute_integrated_information",
+            "_compute_partitioned_information",
+            "_compute_partition_loss",
+            "_normalize_phi",
+            "update_state",
+            "_check_structural_health",
+            "compute_phi",
+            "_broadcast_phi_update",
+            "_state_to_index",
+            "_effect_from_ces",
+            "_cause_into_ces",
+            "compute_mics",
+            "_compute_phi_simple",
+            "_compute_phi_full",
+            "_compute_phi_full_exhaustive"
+          ],
+          "name": "IITPhiCalculator"
+        },
+        {
+          "lineno": 2538,
+          "methods": [
+            "__init__",
+            "append",
+            "bytes",
+            "cut_and_aggregate_sorted"
+          ],
+          "name": "_WalLog"
+        },
+        {
+          "lineno": 2591,
+          "methods": [
+            "__init__",
+            "_init_hash_salts",
+            "set_seed",
+            "_hashes",
+            "estimate",
+            "add",
+            "scale_down_half",
+            "maybe_rehash"
+          ],
+          "name": "_CmsSketch"
+        },
+        {
+          "lineno": 2664,
+          "methods": [
+            "__init__",
+            "_target_k",
+            "_ensure_row",
+            "_rebuild_heap",
+            "inc",
+            "maybe_promote",
+            "items",
+            "scale_down_half"
+          ],
+          "name": "_TopKIndex"
+        },
+        {
+          "lineno": 2762,
+          "methods": [
+            "__init__",
+            "get",
+            "items",
+            "merge_delta_from_sorted_arrays",
+            "scale_down_half"
+          ],
+          "name": "_CsrStore"
+        },
+        {
+          "lineno": 2843,
+          "methods": [
+            "__init__",
+            "get",
+            "put",
+            "invalidate",
+            "clear"
+          ],
+          "name": "_RowCache"
+        },
+        {
+          "lineno": 2870,
+          "methods": [
+            "__init__",
+            "add",
+            "get",
+            "topk_items",
+            "iter_row",
+            "rowsum",
+            "prob",
+            "compact",
+            "decay",
+            "set_seed",
+            "_normalize_phi",
+            "compute_phi",
+            "_compute_phi_simple",
+            "_compute_phi_full",
+            "_compute_phi_simple",
+            "_compute_phi_full",
+            "_compute_phi_full_exhaustive",
+            "_compute_phi_full_exhaustive",
+            "_compute_phi_cutset_sampling",
+            "_find_connected_component",
+            "_compute_phi_community_cluster",
+            "_detect_communities_greedy",
+            "_modularity_gain",
+            "_inter_community_strength",
+            "_compute_integrated_information",
+            "_compute_partitioned_information",
+            "_compute_partition_loss",
+            "_repertoire_entropy",
+            "_compute_joint_entropy",
+            "get_phi_trend",
+            "get_consciousness_level"
+          ],
+          "name": "CauseEffectStructure"
+        },
+        {
+          "lineno": 3553,
+          "methods": [
+            "__init__",
+            "update",
+            "_update_neural_map",
+            "add_major_event",
+            "render_brain_growth",
+            "render_network_growth",
+            "render_full_display",
+            "_make_bar",
+            "get_scope_image",
+            "get_ascii"
+          ],
+          "name": "EvolutionVisualizer"
+        },
+        {
+          "lineno": 3909,
+          "methods": [],
+          "name": "ConceptPrototype"
+        },
+        {
+          "lineno": 3916,
+          "methods": [
+            "__init__",
+            "_initialize_basic_dimensions",
+            "add_experience",
+            "_discover_new_prototypes",
+            "ground_experience",
+            "_generate_meaning"
+          ],
+          "name": "ConceptualSpace"
+        },
+        {
+          "lineno": 4044,
+          "methods": [],
+          "name": "EventType"
+        },
+        {
+          "lineno": 4063,
+          "methods": [
+            "__lt__"
+          ],
+          "name": "Event"
+        },
+        {
+          "lineno": 4072,
+          "methods": [
+            "_adaptive_sigma",
+            "_neighborhood_function",
+            "__init__",
+            "update",
+            "sigma_decay",
+            "find_bmu",
+            "learn",
+            "_should_grow",
+            "_grow_neuron_intelligent",
+            "_evaluate_growth_position",
+            "_create_intelligent_connections",
+            "_update_connections",
+            "_prune_weak_connections",
+            "get_statistics",
+            "get_network_state",
+            "get_topology_health",
+            "_learning_gate"
+          ],
+          "name": "GrowingSOM"
+        },
+        {
+          "lineno": 4418,
+          "methods": [
+            "__init__",
+            "compute",
+            "_process_incoming_messages",
+            "_broadcast_qualia_state",
+            "dominant_feeling",
+            "to_dict"
+          ],
+          "name": "QualiaState"
+        },
+        {
+          "lineno": 4532,
+          "methods": [
+            "__lt__"
+          ],
+          "name": "ConsciousContent"
+        },
+        {
+          "lineno": 4542,
+          "methods": [
+            "__init__",
+            "_write_policy_param",
+            "get_policy_param_shadow_writes",
+            "_offline_tune_policy",
+            "apply_system_health",
+            "_process_incoming_messages",
+            "_send_focus_to_policy",
+            "_broadcast_workspace_state",
+            "submit_for_competition",
+            "_try_integrate_content",
+            "_calculate_semantic_similarity",
+            "_adjust_salience_contextually",
+            "_adjust_salience_with_exploration",
+            "_record_association",
+            "_update_semantic_clusters",
+            "compete_for_consciousness",
+            "_explore_b_selection",
+            "_calculate_exploration_diversity",
+            "_conservative_selection_enhanced",
+            "_update_attention_explore_b",
+            "_exploratory_selection",
+            "_conservative_selection",
+            "_calculate_diversity_score",
+            "_update_attention_dynamically",
+            "_select_cluster_representatives",
+            "_balanced_selection",
+            "_manage_attention_focus",
+            "broadcast",
+            "_extract_safe_content_attrs",
+            "_get_current_timestamp",
+            "_calculate_age",
+            "_measure_performance",
+            "_create_safe_focus_description",
+            "_create_safe_content_descriptions",
+            "_calculate_safe_workspace_metrics",
+            "_calculate_current_diversity",
+            "_calculate_current_novelty",
+            "_calculate_focus_stability",
+            "_calculate_success_rate",
+            "_generate_safe_predictions",
+            "_generate_predictions",
+            "_create_focus_description",
+            "_create_content_descriptions",
+            "_find_content_cluster",
+            "_calculate_workspace_metrics",
+            "_calculate_content_diversity",
+            "_calculate_content_stability",
+            "_create_attention_context",
+            "_count_recent_switches",
+            "_calculate_focus_coherence",
+            "_calculate_performance_trend",
+            "detect_errors_from_broadcast",
+            "update_policy_from_errors",
+            "_calculate_performance_bonus",
+            "_count_consecutive_failures",
+            "_reinforce_current_policy",
+            "_calculate_adaptive_learning_rate",
+            "_update_param_with_momentum",
+            "_evaluate_policy_effectiveness",
+            "get_policy_recommendations",
+            "_generate_immediate_recommendations",
+            "_generate_strategic_recommendations",
+            "_generate_risk_mitigation_recommendations",
+            "_generate_optimization_recommendations",
+            "_generate_meta_learning_insights",
+            "_prioritize_recommendations",
+            "_get_error_specific_adjustments",
+            "_calculate_policy_diversity",
+            "_analyze_optimal_policy_patterns",
+            "_suggest_meta_parameter_optimization",
+            "_analyze_learning_rate_effectiveness",
+            "_analyze_error_patterns",
+            "_extract_actionable_insights",
+            "_analyze_parameter_interactions",
+            "get_conscious_summary",
+            "get_policy_status",
+            "metrics_window"
+          ],
+          "name": "GlobalWorkspace"
+        },
+        {
+          "lineno": 6088,
+          "methods": [],
+          "name": "GoalType"
+        },
+        {
+          "lineno": 6098,
+          "methods": [
+            "evaluate_achievement"
+          ],
+          "name": "Goal"
+        },
+        {
+          "lineno": 6129,
+          "methods": [
+            "__init__",
+            "update_qualia_statistics",
+            "compute_goal_urgency",
+            "generate_goal",
+            "derive_meta_goal",
+            "discover_goal_from_pattern",
+            "compose_hierarchical_goal",
+            "evaluate_discovered_goal"
+          ],
+          "name": "GoalGenerator"
+        },
+        {
+          "lineno": 6315,
+          "methods": [
+            "__init__",
+            "forward",
+            "learn"
+          ],
+          "name": "MetaCognitiveNetwork"
+        },
+        {
+          "lineno": 6513,
+          "methods": [
+            "__init__",
+            "introspect",
+            "_verbalize_level1",
+            "_verbalize_level2",
+            "_verbalize_level3",
+            "_verbalize_level4",
+            "_verbalize_level5",
+            "_verbalize_level6",
+            "_verbalize_level7",
+            "_detect_strange_loop",
+            "update_meta_awareness",
+            "downward_causation",
+            "predict_next_state",
+            "evaluate_prediction",
+            "update_beliefs",
+            "_neural_update_beliefs",
+            "_do_meta_learning",
+            "_heuristic_update_beliefs",
+            "_update_meta_confidence",
+            "revise_self_model",
+            "revise_self_model_level2",
+            "revise_self_model_level3",
+            "revise_self_model_level4_emergency",
+            "log_state",
+            "to_dict",
+            "detect_capability_gaps",
+            "generate_self_improvement_hypothesis",
+            "test_hypothesis",
+            "_save_state",
+            "_restore_state",
+            "_apply_hypothesis_action",
+            "compose_skills",
+            "register_skill",
+            "discover_skill_composition",
+            "_evaluate_skill_composition",
+            "autonomous_expansion_step"
+          ],
+          "name": "RecursiveSelfModel"
+        },
+        {
+          "lineno": 7464,
+          "methods": [],
+          "name": "EpisodicMemoryTrace"
+        },
+        {
+          "lineno": 7480,
+          "methods": [
+            "__init__",
+            "encode_experience",
+            "retrieve_by_time",
+            "retrieve_by_semantic",
+            "retrieve_by_emotion",
+            "retrieve_similar_qualia",
+            "consolidate",
+            "construct_narrative",
+            "_prune_memories",
+            "_rebuild_indices",
+            "get_statistics",
+            "save",
+            "load"
+          ],
+          "name": "EpisodicMemory"
+        },
+        {
+          "lineno": 7785,
+          "methods": [],
+          "name": "StructuralOperator"
+        },
+        {
+          "lineno": 7800,
+          "methods": [
+            "compute_diff"
+          ],
+          "name": "StructuralVersion"
+        },
+        {
+          "lineno": 7817,
+          "methods": [
+            "total_errors",
+            "add_error",
+            "dominant_pattern"
+          ],
+          "name": "ErrorProfile"
+        },
+        {
+          "lineno": 7845,
+          "methods": [
+            "__init__",
+            "_generate_version_id",
+            "analyze_error_profile",
+            "select_operator_sequence",
+            "apply_operator",
+            "_op_dim_increase",
+            "_op_dim_decrease",
+            "_op_sparsify",
+            "_op_densify",
+            "_op_project",
+            "_op_compose",
+            "_op_relink",
+            "_op_prune",
+            "rollback",
+            "get_current_structure"
+          ],
+          "name": "StructuralOperatorEngine"
+        },
+        {
+          "lineno": 8050,
+          "methods": [],
+          "name": "Hypothesis"
+        },
+        {
+          "lineno": 8062,
+          "methods": [
+            "__init__",
+            "generate_hypothesis",
+            "design_experiment",
+            "execute_experiment",
+            "_statistical_analysis",
+            "_bootstrap_test",
+            "_bootstrap_ci",
+            "evaluate_hypothesis",
+            "apply_if_accepted",
+            "generate_self_hypothesis"
+          ],
+          "name": "AutonomousExperimentDesigner"
+        },
+        {
+          "lineno": 8328,
+          "methods": [],
+          "name": "PlanningMode"
+        },
+        {
+          "lineno": 8334,
+          "methods": [],
+          "name": "GoalStatus"
+        },
+        {
+          "lineno": 8342,
+          "methods": [
+            "is_completed",
+            "should_evaluate"
+          ],
+          "name": "SubGoal"
+        },
+        {
+          "lineno": 8384,
+          "methods": [
+            "update_progress",
+            "should_redefine",
+            "should_switch_to_exploration",
+            "is_completed"
+          ],
+          "name": "LongTermGoal"
+        },
+        {
+          "lineno": 8468,
+          "methods": [
+            "__init__",
+            "create_goal",
+            "decompose_goal",
+            "_schedule_actions",
+            "execute_plan",
+            "_evaluate_subgoal",
+            "_generate_recommendations",
+            "_check_termination",
+            "handle_termination",
+            "_redefine_goal",
+            "_switch_mode",
+            "get_status_report"
+          ],
+          "name": "LongTermPlanner"
+        },
+        {
+          "lineno": 8692,
+          "methods": [],
+          "name": "ResourceType"
+        },
+        {
+          "lineno": 8700,
+          "methods": [
+            "available",
+            "reserve",
+            "consume",
+            "release",
+            "utilization"
+          ],
+          "name": "Budget"
+        },
+        {
+          "lineno": 8732,
+          "methods": [
+            "is_positive"
+          ],
+          "name": "RewardSignal"
+        },
+        {
+          "lineno": 8742,
+          "methods": [],
+          "name": "BudgetDecision"
+        },
+        {
+          "lineno": 8748,
+          "methods": [
+            "__init__",
+            "receive_reward",
+            "_update_roi",
+            "request_budget",
+            "_try_defer_low_priority_tasks",
+            "consume_budget",
+            "get_priority_recommendation",
+            "reallocate_budgets",
+            "get_status",
+            "reset_budget",
+            "allocate_budget"
+          ],
+          "name": "GlobalRewardBudgetScheduler"
+        },
+        {
+          "lineno": 8914,
+          "methods": [
+            "__init__",
+            "experience",
+            "_compute_phenomenal_character",
+            "_update_identity",
+            "reflect_on_self",
+            "bind_experience",
+            "_create_gestalt",
+            "_check_unity"
+          ],
+          "name": "UnifiedSubject"
+        },
+        {
+          "lineno": 9040,
+          "methods": [
+            "__init__",
+            "evaluate_model_quality",
+            "record_revision_outcome",
+            "get_revision_policy_status"
+          ],
+          "name": "MetaMetaMonitor"
+        },
+        {
+          "lineno": 9145,
+          "methods": [
+            "__init__",
+            "update_internal_statistics",
+            "compute_qualia_pressure",
+            "compute_self_model_drive",
+            "update_activation",
+            "compute_cognitive_cost",
+            "update_energy",
+            "_broadcast_energy_state",
+            "should_continue"
+          ],
+          "name": "EnergyBasedController"
+        },
+        {
+          "lineno": 9492,
+          "methods": [
+            "__init__",
+            "update",
+            "read",
+            "decay_step"
+          ],
+          "name": "HebbianTrace"
+        },
+        {
+          "lineno": 9516,
+          "methods": [
+            "__init__",
+            "update",
+            "get"
+          ],
+          "name": "RunningBaseline"
+        },
+        {
+          "lineno": 9534,
+          "methods": [
+            "__init__",
+            "decide",
+            "observe",
+            "save",
+            "load",
+            "snapshot"
+          ],
+          "name": "MetaController"
+        },
+        {
+          "lineno": 9716,
+          "methods": [
+            "__init__",
+            "_log",
+            "_enqueue",
+            "_dispatch_event",
+            "publish",
+            "subscribe",
+            "unsubscribe",
+            "start_async_worker",
+            "stop_async_worker",
+            "drain",
+            "stats",
+            "push",
+            "step",
+            "top",
+            "top_keys"
+          ],
+          "name": "ConsciousnessBus"
+        },
+        {
+          "lineno": 9985,
+          "methods": [
+            "__init__",
+            "_slug",
+            "_hash",
+            "spec_name",
+            "token_name_policy"
+          ],
+          "name": "AutoNamer"
+        },
+        {
+          "lineno": 10317,
+          "methods": [
+            "__init__",
+            "_get_current_world_state",
+            "_collect_affect_state_for_llm",
+            "_collect_llm_memory",
+            "_build_llm_prompt",
+            "_meaning_pipeline_enabled",
+            "_meaning_pipeline_cfg",
+            "_collect_core_state_for_meaning",
+            "_build_meaning_state",
+            "_ground_meaning_state",
+            "_build_response_plan",
+            "_meaning_artifact_paths",
+            "_log_meaning_pipeline_artifacts",
+            "_emit_llm_response_with_plan",
+            "_postprocess_llm_response",
+            "_is_backend_or_error_response",
+            "_is_disallowed_llm_response",
+            "_verifier_tokens",
+            "_evaluate_dialog_accuracy",
+            "_apply_dialog_verifier_reward",
+            "_emit_llm_response",
+            "_memory_semantic_prefix",
+            "_semantic_text_for_embedding",
+            "_current_memory_qualia_vector",
+            "_current_memory_phi",
+            "_encode_semantic_memory_trace",
+            "_record_dialog_trace",
+            "_llm_fallback_text",
+            "handle_user_message",
+            "_generate_utterance",
+            "_save_checkpoint",
+            "_load_checkpoint",
+            "_save_chat_history",
+            "_load_chat_history",
+            "run_autonomous",
+            "_decide_action",
+            "snapshot",
+            "export_state_vector",
+            "_scheduler_update",
+            "_policy_obs",
+            "extract_embedding",
+            "_torch_shared_z",
+            "_align_z_for_sdm",
+            "_cda_rollout_advantages",
+            "grow_feature_bank",
+            "_action_vector",
+            "_plan_action_cem",
+            "_ab_test_rule",
+            "_policy_signals",
+            "_safe_eval_expr",
+            "_synthesize_policy_rule",
+            "_execute_action",
+            "_submit_to_workspace",
+            "_experience_qualia",
+            "_evaluate_action_outcome",
+            "_get_structure_snapshot",
+            "_apply_structure_snapshot",
+            "_evaluate_structure",
+            "_snapshot_feature_state",
+            "_restore_feature_state",
+            "_sandbox_evaluate_specs",
+            "run_meta_proposal_cycle",
+            "set_vision_folder",
+            "set_vision_loop",
+            "set_vision_shuffle",
+            "set_vision_camera",
+            "push_external_frame",
+            "clear_vision_source",
+            "_reflect_and_learn",
+            "_make_bar",
+            "_should_terminate",
+            "_log_runtime_event",
+            "_phi_threshold_policy",
+            "_copy_state_overlap",
+            "_recreate_policy_with_transfer",
+            "_project_obs_to_dim",
+            "_policy_obs_adapted",
+            "_maybe_adaptive_feature_bank_growth",
+            "_update_visualization",
+            "_scope_build_pred_err_map",
+            "_scope_compute_td_error",
+            "_scope_get_gw_ignition",
+            "_vision_resize_nn",
+            "_vision_build_retina",
+            "_vision_optical_flow",
+            "_vision_depth_from_flow",
+            "_vision_compute_error",
+            "_vision_features",
+            "describe_current_vision",
+            "_mix_err_maps",
+            "set_spatial_goal",
+            "set_spatial_goal3d",
+            "_space_step_attention",
+            "_space_compose_image",
+            "_log_state",
+            "_print_summary",
+            "_flush_logs",
+            "_recent_policy_avg",
+            "_save_policy_snapshots",
+            "policy_report",
+            "solve_arc_dir",
+            "_arc_load_problem",
+            "_arc_cache_path",
+            "_arc_load_cache",
+            "_arc_save_cache",
+            "_arc_update_cache",
+            "_arc_compile_macros",
+            "_arc_rot90",
+            "_arc_rot180",
+            "_arc_rot270",
+            "_arc_flip_h",
+            "_arc_flip_v",
+            "_arc_transpose",
+            "_arc_identity",
+            "_arc_connected_components",
+            "_arc_bbox_of_largest_region",
+            "_arc_fill_bbox",
+            "_arc_mode_color",
+            "_arc_out_mode_from_train",
+            "_arc_keep_largest",
+            "_arc_crop_largest",
+            "_arc_move_largest_tl",
+            "_arc_center_largest",
+            "_arc_paint_largest_outmode",
+            "_arc_bbox_border_largest",
+            "_arc_palette_map_from_train",
+            "_arc_remap_hist",
+            "_introspect_internal_state",
+            "_research_m3_state_summary",
+            "_generate_research_plan",
+            "_creative_output_path",
+            "_append_creative_output",
+            "run_autonomous_creation",
+            "_detect_research_needs_from_internal_dynamics",
+            "_formulate_research_question_from_need",
+            "_generate_cognitive_plan",
+            "_execute_cognitive_step",
+            "_conduct_investigation",
+            "_single_consciousness_step",
+            "_build_phi_state_vector",
+            "_extract_variable_value",
+            "_inject_perturbation",
+            "run_autonomous_research",
+            "_discover_datasets",
+            "_learn_text_data",
+            "_learn_json_data",
+            "_learn_tsv_data",
+            "_learn_vector_data",
+            "_learn_image_data",
+            "_learn_legal_case",
+            "_learn_word2vec_model",
+            "_learn_entity_embedding",
+            "_feed_features_to_memory",
+            "learn_from_dataset",
+            "run_autonomous_learning",
+            "_arc_ops_library",
+            "_arc_apply_program",
+            "_arc_score_program",
+            "_arc_search",
+            "_bootstrap_ci",
+            "run_research"
+          ],
+          "name": "M3ConsciousnessCore"
+        }
+      ],
+      "functions": [
+        "_default_docs_outdir",
+        "_write_jsonl_safe",
+        "_resolve_llm_adapter_log_path",
+        "_resolve_meaning_artifact_path",
+        "_normalize_phi_policy",
+        "_compute_phi_policy_from_history",
+        "_default_torch_device",
+        "_m3_torch_device",
+        "build_parser",
+        "main",
+        "_scope_compute_arousal"
+      ]
+    },
+    "m3/reward.py": {
+      "classes": [
+        {
+          "lineno": 50,
+          "methods": [],
+          "name": "DriveTier"
+        },
+        {
+          "lineno": 58,
+          "methods": [
+            "evaluate"
+          ],
+          "name": "Drive"
+        },
+        {
+          "lineno": 92,
+          "methods": [
+            "__init__",
+            "forward"
+          ],
+          "name": "_TorchAffectEncoder"
+        },
+        {
+          "lineno": 115,
+          "methods": [
+            "__init__",
+            "infer",
+            "infer_batch",
+            "update_running_stats",
+            "_to_1d_numpy",
+            "_context_to_vec",
+            "_normalize",
+            "_concat",
+            "_infer_torch",
+            "_infer_batch_torch",
+            "state_dict",
+            "load_state_dict"
+          ],
+          "name": "AffectKernel"
+        },
+        {
+          "lineno": 344,
+          "methods": [],
+          "name": "AffectAxisConfig"
+        },
+        {
+          "lineno": 366,
+          "methods": [],
+          "name": "AffectOverrideConfig"
+        },
+        {
+          "lineno": 375,
+          "methods": [
+            "__init__",
+            "_register_viability_drive",
+            "_register_affect_core_drives",
+            "create_derived_drive",
+            "deactivate_drive",
+            "evaluate_all",
+            "total_cost"
+          ],
+          "name": "RewardSystem"
+        }
+      ],
+      "functions": [
+        "_resolve_device"
+      ]
+    },
+    "m3/torch_policy.py": {
+      "classes": [
+        {
+          "lineno": 46,
+          "methods": [
+            "__init__",
+            "forward"
+          ],
+          "name": "_Expert"
+        },
+        {
+          "lineno": 55,
+          "methods": [
+            "__init__",
+            "forward"
+          ],
+          "name": "_MoEFFN"
+        },
+        {
+          "lineno": 99,
+          "methods": [
+            "__init__",
+            "forward"
+          ],
+          "name": "TorchSharedRepr"
+        },
+        {
+          "lineno": 127,
+          "methods": [
+            "__init__",
+            "forward"
+          ],
+          "name": "Expert"
+        },
+        {
+          "lineno": 137,
+          "methods": [
+            "__init__",
+            "forward"
+          ],
+          "name": "MoEFFN"
+        },
+        {
+          "lineno": 174,
+          "methods": [
+            "__init__",
+            "forward"
+          ],
+          "name": "PolicyModel"
+        },
+        {
+          "lineno": 217,
+          "methods": [],
+          "name": "RolloutItem"
+        },
+        {
+          "lineno": 228,
+          "methods": [
+            "__init__",
+            "sigma",
+            "sample",
+            "record",
+            "end_batch",
+            "update"
+          ],
+          "name": "TorchPolicy"
+        },
+        {
+          "lineno": 422,
+          "methods": [
+            "__init__",
+            "forward"
+          ],
+          "name": "MLP"
+        },
+        {
+          "lineno": 435,
+          "methods": [
+            "__init__",
+            "_get_expert",
+            "_spec_summary",
+            "forward"
+          ],
+          "name": "BRPolicyModel"
+        },
+        {
+          "lineno": 503,
+          "methods": [],
+          "name": "BRItem"
+        },
+        {
+          "lineno": 512,
+          "methods": [
+            "__init__",
+            "sigma",
+            "set_active_specs",
+            "set_gate_bias",
+            "sample",
+            "diagnose",
+            "record",
+            "end_batch",
+            "update_from_delayed_reward"
+          ],
+          "name": "BRPolicy"
+        }
+      ],
+      "functions": [
+        "_resolve_device",
+        "_switch_aux_terms"
+      ]
+    },
+    "m3/visualization.py": {
+      "classes": [
+        {
+          "lineno": 91,
+          "methods": [
+            "__call__"
+          ],
+          "name": "Retinizer"
+        },
+        {
+          "lineno": 166,
+          "methods": [
+            "__post_init__",
+            "__call__"
+          ],
+          "name": "FeatureSummarizer"
+        },
+        {
+          "lineno": 288,
+          "methods": [
+            "__call__"
+          ],
+          "name": "GlitchEncoder"
+        }
+      ],
+      "functions": [
+        "get_hilbert_map",
+        "hilbert_index_to_xy",
+        "vector_to_grid"
+      ]
+    },
+    "run_llm_adapter.py": {
+      "classes": [],
+      "functions": [
+        "_safe_print",
+        "_bool_env",
+        "_coerce_env_value",
+        "_set_env_vars",
+        "_on_response",
+        "_on_spontaneous",
+        "_start_research",
+        "_start_creation",
+        "_start_learning",
+        "_parse_profile_name",
+        "_apply_profile",
+        "_snapshot_state",
+        "_normalize_control_mode",
+        "_print_status",
+        "_print_help",
+        "_print_topology",
+        "_print_shadow_writes",
+        "_handle_command"
+      ]
+    }
+  },
+  "summary": {
+    "classes": 111,
+    "files": 13,
+    "functions": 54,
+    "methods": 983
+  }
+}

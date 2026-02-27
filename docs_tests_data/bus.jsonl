@@ -1,0 +1,184 @@
+{"ts": 1772121328.6739295, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121328.6764405}
+{"ts": 1772121343.9811716, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121343.9836733}
+{"ts": 1772121397.120235, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121397.1217442}
+{"ts": 1772121398.583476, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121398.5859687}
+{"ts": 1772121405.0390968, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121405.0414033}
+{"ts": 1772121419.4225078, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121419.424628}
+{"ts": 1772121421.2610915, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121421.2635133}
+{"ts": 1772121435.9277916, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121435.930288}
+{"ts": 1772121441.3139617, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121441.3164926}
+{"ts": 1772121449.5504146, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121449.5528016}
+{"ts": 1772121451.335865, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121451.3368616}
+{"ts": 1772121471.835578, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121471.836575}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121473.3137915}
+{"ts": 1772121473.3128607, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"ts": 1772121485.0831902, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121485.0852835}
+{"ts": 1772121495.843046, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121495.844709}
+{"ts": 1772121497.7790246, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121497.7800229}
+{"ts": 1772121512.3220417, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121512.3241196}
+{"ts": 1772121514.05965, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121514.0606759}
+{"ts": 1772121525.542006, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121525.5430033}
+{"ts": 1772121527.2292461, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121527.2320228}
+{"ts": 1772121535.2899477, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121535.2919717}
+{"ts": 1772121537.0615714, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121537.0650663}
+{"ts": 1772121549.0056872, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121549.0069551}
+{"ts": 1772121553.1918561, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121553.1918561}
+{"ts": 1772121563.1532362, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121563.1552436}
+{"ts": 1772121567.3759801, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121567.377482}
+{"ts": 1772121583.9214377, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121583.9239378}
+{"ts": 1772121586.4831069, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121586.4846237}
+{"ts": 1772121601.8608878, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121601.8635294}
+{"ts": 1772121604.6008666, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121604.6033788}
+{"ts": 1772121627.018095, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121627.0205312}
+{"ts": 1772121627.8547807, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121627.8557773}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121640.7155805}
+n": 32}
+{"ts": 1772121647.8862321, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121647.887229}
+{"ts": 1772121661.2509868, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121661.2514896}
+{"ts": 1772121662.881741, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121662.8832421}
+{"ts": 1772121672.5471103, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121672.5492363}
+{"ts": 1772121677.4364502, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121677.4369514}
+{"ts": 1772121685.1046178, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121685.1071818}
+{"ts": 1772121691.4005666, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121691.401564}
+{"ts": 1772121696.3410587, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121696.3420553}
+{"ts": 1772121700.5339136, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121700.5349104}
+{"ts": 1772121703.0028405, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121703.0053532}
+{"ts": 1772121706.7895281, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121706.7905295}
+{"ts": 1772121722.8180494, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121722.8195472}
+{"ts": 1772121725.0372362, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121725.0406806}
+{"ts": 1772121727.219738, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121727.2215288}
+{"ts": 1772121731.9602876, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121731.962346}
+{"ts": 1772121736.9279318, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121736.928929}
+{"ts": 1772121740.4585812, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121740.4595838}
+{"ts": 1772121744.5652204, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121744.5662217}
+{"ts": 1772121746.8876042, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121746.8901176}
+{"ts": 1772121750.4744608, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121750.4769702}
+{"ts": 1772121752.6291468, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121752.6301436}
+{"ts": 1772121754.8156219, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121754.8176563}
+{"ts": 1772121758.9107814, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121758.91221}
+{"ts": 1772121760.97892, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121760.9804313}
+{"ts": 1772121766.184449, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121766.1854465}
+{"ts": 1772121768.252182, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121768.252182}
+{"ts": 1772121772.15278, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121772.1548169}
+{"ts": 1772121780.1945078, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121780.1965072}
+{"ts": 1772121782.8220894, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121782.8220894}
+{"ts": 1772121785.6382236, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121785.6399662}
+{"ts": 1772121785.7485375, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121785.7511222}
+{"ts": 1772121787.0125186, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121787.0140178}
+{"ts": 1772121799.8819346, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121799.8834355}
+{"ts": 1772121800.3022463, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121800.3037481}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121801.56543}
+{"ts": 1772121801.56543, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"ts": 1772121803.9674602, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121803.9684567}
+{"ts": 1772121809.6522584, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121809.653255}
+{"ts": 1772121811.4323275, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121811.4348917}
+{"ts": 1772121813.4252138, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121813.4252138}
+{"ts": 1772121814.86881, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121814.869811}
+{"ts": 1772121821.0578468, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121821.0593543}
+{"ts": 1772121822.5542507, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121822.5552478}
+{"ts": 1772121824.2570632, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121824.2596536}
+{"ts": 1772121826.240176, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121826.241174}
+{"ts": 1772121827.2261472, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121827.2271442}
+{"ts": 1772121828.9312909, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121828.9332976}
+{"ts": 1772121831.2007704, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121831.2007704}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121838.2488942}
+{"ts": 1772121838.2488942, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"ts": 1772121841.8248198, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121841.8258164}
+{"ts": 1772121843.7700906, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121843.7715917}
+{"ts": 1772121848.424458, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121848.424458}
+{"ts": 1772121851.3363178, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121851.3373146}
+{"ts": 1772121857.8699155, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772121857.8709486}
+{"ts": 1772121862.97379, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121862.9747868}
+{"ts": 1772121869.799335, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121869.801722}
+{"ts": 1772121871.653013, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121871.6540098}
+{"ts": 1772121877.4887667, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772121877.4887667}
+{"ts": 1772128030.4689834, "source": "user", "key": "utter.user", "salience": 0.7, "confidence": 0.9, "ttl": 8, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.7, "ts": 1772128030.4714837}
+{"ts": 1772128030.4765692, "source": "system", "key": "utter.self", "salience": 0.8, "confidence": 1.0, "ttl": 10, "vector_len": 32}
+{"kind": "consciousness_bus_dispatch", "event": "dispatch", "topic": "token", "priority": 0.8, "ts": 1772128030.4765692}
