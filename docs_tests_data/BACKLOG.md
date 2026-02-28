@@ -1,8 +1,8 @@
 # BACKLOG
 
-- Generated: 2026-02-26T17:59:46+00:00
-- Commit: `UNKNOWN`
-- Branch: `UNKNOWN`
+- Generated: 2026-02-28T11:55:17+00:00
+- Commit: `12bf33713188dd51df20b53081ebd3918d664065`
+- Branch: `main`
 - Repro seed/config: deterministic (no randomness used in generator)
 
 ## Prioritized next actions
@@ -14,4 +14,4 @@
 
 ## Open risks / tech debt
 
-- `m3\m3_core.py:17314` # TODO: Handle structured JSONL specifically if needed
+- `m3/m3_core.py:17314` # TODO: Handle structured JSONL specifically if needed
