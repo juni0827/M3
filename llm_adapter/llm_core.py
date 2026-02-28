@@ -112,6 +112,8 @@ try:
     )
     from .memory import ConditionalKNNIndex, KNNItem, M3EpisodicMemoryRetriever
     from .tokenization import M3Tokenizer, AutoTokenizer
+    from .semantic_scorer import SemanticScorer
+    from .meaning_pipeline import format_plan_fallback_prompt
 except Exception:
     # Support running file directly (script) where package-relative imports fail
     from llm_adapter.config import (
@@ -136,6 +138,8 @@ except Exception:
     )
     from llm_adapter.memory import ConditionalKNNIndex, KNNItem, M3EpisodicMemoryRetriever
     from llm_adapter.tokenization import M3Tokenizer, AutoTokenizer
+    from llm_adapter.semantic_scorer import SemanticScorer
+    from llm_adapter.meaning_pipeline import format_plan_fallback_prompt
 
 try:
     from .m3_control_bridge import (
@@ -1900,25 +1904,57 @@ class HFBackend:
         return self._tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
 
 
-# Redirecting all outputs to the unified logs folder (with safe fallback)
-DEFAULT_OUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../docs&tests&data_sets/tests/logs'))
-OUT_DIR = os.getenv('LLM_ADAPTER_LOG_DIR', DEFAULT_OUT_DIR)
-try:
-    os.makedirs(OUT_DIR, exist_ok=True)
-except Exception:
+# Redirecting all outputs to a single unified logs folder (with safe fallback)
+DEFAULT_OUT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'docs_tests_data')
+)
+
+
+def _normalize_log_dir(raw_dir: Optional[str]) -> str:
+    path = str(raw_dir or "").strip() or DEFAULT_OUT_DIR
+    if not os.path.isabs(path):
+        path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', path))
     try:
-        import tempfile
-        OUT_DIR = tempfile.gettempdir()
-        os.makedirs(OUT_DIR, exist_ok=True)
+        os.makedirs(path, exist_ok=True)
+        return path
     except Exception:
-        OUT_DIR = os.path.abspath(os.path.dirname(__file__))
         try:
-            os.makedirs(OUT_DIR, exist_ok=True)
+            import tempfile
+            fallback = os.path.abspath(tempfile.gettempdir())
+            os.makedirs(fallback, exist_ok=True)
+            return fallback
         except Exception:
-            pass
+            fallback = os.path.abspath(os.path.dirname(__file__))
+            try:
+                os.makedirs(fallback, exist_ok=True)
+            except Exception:
+                pass
+            return fallback
+
+
+def _normalize_log_file(raw_path: Optional[str], base_dir: str, default_name: str = 'llm_adapter.log') -> str:
+    value = str(raw_path or "").strip() or str(default_name)
+    if not os.path.isabs(value):
+        value = os.path.join(base_dir, value)
+    path = os.path.abspath(value)
+    try:
+        os.makedirs(os.path.dirname(path) or base_dir, exist_ok=True)
+    except Exception:
+        pass
+    return path
+
+
+OUT_DIR = _normalize_log_dir(os.getenv('LLM_ADAPTER_LOG_DIR', DEFAULT_OUT_DIR))
 TRAINING_PATH = os.path.join(OUT_DIR, 'llm_training_data.jsonl')
 
-LOG_PATH = os.getenv('LLM_ADAPTER_LOG_PATH', os.path.join(OUT_DIR, 'llm_adapter.log'))
+LOG_PATH = _normalize_log_file(
+    os.getenv('LLM_ADAPTER_LOG_PATH') or os.getenv('LLM_ADAPTER_LOG'),
+    OUT_DIR,
+    'llm_adapter.log',
+)
+os.environ['LLM_ADAPTER_LOG_DIR'] = OUT_DIR
+os.environ.setdefault('LLM_ADAPTER_LOG_PATH', LOG_PATH)
+os.environ.setdefault('LLM_ADAPTER_LOG', LOG_PATH)
 
 logger = logging.getLogger('llm_adapter')
 
@@ -1944,12 +1980,6 @@ if not logger.handlers:
     handler = None
     log_paths = [LOG_PATH]
     try:
-        alt_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'logs'))
-        os.makedirs(alt_dir, exist_ok=True)
-        log_paths.append(os.path.join(alt_dir, 'llm_adapter.log'))
-    except Exception:
-        pass
-    try:
         import tempfile
         log_paths.append(os.path.join(tempfile.gettempdir(), f'llm_adapter_{os.getpid()}.log'))
     except Exception:
@@ -1957,7 +1987,9 @@ if not logger.handlers:
     for path in log_paths:
         try:
             handler = RotatingFileHandler(path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding='utf-8')
-            LOG_PATH = path
+            LOG_PATH = os.path.abspath(path)
+            os.environ['LLM_ADAPTER_LOG_PATH'] = LOG_PATH
+            os.environ['LLM_ADAPTER_LOG'] = LOG_PATH
             break
         except Exception:
             handler = None
@@ -2197,7 +2229,7 @@ class TorchConversationalPolicy:
         # Load checkpoint if available (safe)
         checkpoint_path = os.getenv(
             "LLM_CHECKPOINT_PATH",
-            os.path.join('docs&tests&data_sets', 'tests', 'logs', 'llm_checkpoint.pt')
+            os.path.join(OUT_DIR, 'llm_checkpoint.pt')
         )
         if os.path.exists(checkpoint_path):
             try:
@@ -2343,6 +2375,14 @@ class TorchConversationalPolicy:
         control_window = max(8, int(os.getenv("M3_CONTROL_HEALTH_WINDOW", "24")))
         self._control_health_window = deque(maxlen=control_window)
         self._auto_mode_fail_streak = 0
+        # Semantic scoring pipeline
+        self._meaning_cfg = get_global_config().meaning_pipeline
+        self._grounding_cfg = get_global_config().grounding
+        self._response_plan_cfg = get_global_config().response_plan
+        self._semantic_scorer_cfg = get_global_config().semantic_scorer
+        self.semantic_scorer = SemanticScorer(self._semantic_scorer_cfg)
+        # Backward-compatible alias kept for older checks.
+        self._semantic_scorer = self.semantic_scorer
 
     def _env_flag(self, name: str, default: bool = False) -> bool:
         raw = os.getenv(name, "1" if default else "0")
@@ -2991,6 +3031,215 @@ class TorchConversationalPolicy:
             min_score = float(os.getenv("M3_CONTROL_MIN_AUTONOMY_SCORE", "0.08"))
         return score >= min_score, info
 
+    @staticmethod
+    def _normalize_generation_contract(
+        generation_contract: Optional[Any],
+    ) -> Dict[str, Any]:
+        if not generation_contract:
+            return {}
+        if isinstance(generation_contract, dict):
+            return generation_contract
+        if isinstance(generation_contract, str):
+            try:
+                parsed = json.loads(generation_contract)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return {"mode": generation_contract}
+        return {}
+
+    def _meaning_mode(self, generation_contract: Optional[Any]) -> str:
+        cfg = self._meaning_cfg
+        contract = self._normalize_generation_contract(generation_contract)
+        forced_mode = str(contract.get("mode", "")).strip().lower()
+        if forced_mode in {"", "off", "none", "false", "0"}:
+            forced_mode = ""
+        # Compatibility: legacy contract mode from m3_core means "meaning_first".
+        # In that case apply runtime config mode for backward compatibility.
+        if forced_mode == "meaning_first":
+            forced_mode = ""
+        if not forced_mode:
+            # Optional runtime override via contract/env in case this is
+            # called outside a strict context.
+            forced_mode = str(os.getenv("M3_MEANING_PIPELINE_MODE", "")).strip().lower()
+        if forced_mode:
+            return forced_mode
+        return str(getattr(cfg, "mode", "off")).strip().lower() if cfg else "off"
+
+    def _meaning_effective_cfg(self, generation_contract: Optional[Any]) -> Dict[str, Any]:
+        cfg = self._meaning_cfg
+        base: Dict[str, Any] = {}
+        if cfg is not None:
+            base.update(
+                {
+                    "enabled": bool(getattr(cfg, "enabled", False)),
+                    "mode": str(getattr(cfg, "mode", "off")).strip().lower(),
+                    "candidate_count": int(getattr(cfg, "candidate_count", 4) or 4),
+                    "force_clarify_overall_uncertainty_threshold": float(
+                        getattr(cfg, "force_clarify_overall_uncertainty_threshold", 0.62)
+                    ),
+                    "force_clarify_grounding_uncertainty_threshold": float(
+                        getattr(cfg, "force_clarify_grounding_uncertainty_threshold", 0.50)
+                    ),
+                }
+            )
+        contract = self._normalize_generation_contract(generation_contract)
+        if isinstance(contract, dict):
+            contract_cfg = contract.get("config") or contract.get("meaning_pipeline")
+            if isinstance(contract_cfg, dict):
+                base.update({k: v for k, v in contract_cfg.items() if v is not None})
+        env_mode = str(os.getenv("M3_MEANING_PIPELINE_MODE", "")).strip().lower()
+        if env_mode:
+            base["mode"] = env_mode
+        return base
+
+    def _should_gate_meaning(self, meaning_state: Optional[Dict[str, Any]], generation_contract: Optional[Any]) -> bool:
+        cfg = self._meaning_effective_cfg(generation_contract)
+        if not cfg.get("enabled", False):
+            return False
+        return str(cfg.get("mode", "off")).strip().lower() in {"soft_gate", "full"}
+
+    def _should_use_semantic_scoring(
+        self,
+        meaning_state: Optional[Dict[str, Any]],
+        response_plan: Optional[Dict[str, Any]],
+        generation_contract: Optional[Any],
+    ) -> bool:
+        if not self._should_gate_meaning(meaning_state, generation_contract):
+            return False
+        if not getattr(self, "_semantic_scorer", None):
+            return False
+        if not self._semantic_scorer_cfg.enabled:
+            return False
+        if generation_contract is not None and str(
+            self._normalize_generation_contract(generation_contract).get("mode", "")
+        ).strip().lower() in {"shadow", "off"}:
+            return False
+        if meaning_state is None and response_plan is None:
+            return False
+        return True
+
+    def _plan_text_for_scoring(self, meaning_state: Optional[Dict[str, Any]], response_plan: Optional[Dict[str, Any]]) -> str:
+        if isinstance(response_plan, dict):
+            claim_texts = [
+                str(x.get("text", "")).strip()
+                for x in list(response_plan.get("allowed_claims", []) or [])
+                if isinstance(x, dict)
+            ]
+            claim_texts = [c for c in claim_texts if c]
+            if claim_texts:
+                return " ".join(claim_texts)
+        if isinstance(response_plan, dict):
+            points = [str(x).strip() for x in list(response_plan.get("key_points", []) or []) if str(x).strip()]
+            if points:
+                return " ".join(points)
+        if isinstance(meaning_state, dict):
+            return str(meaning_state.get("user_goal", "")).strip()
+        return ""
+
+    def _evaluate_semantic_candidate(
+        self,
+        response: str,
+        meaning_state: Optional[Dict[str, Any]],
+        response_plan: Optional[Dict[str, Any]],
+        generation_contract: Optional[Any],
+        user_text: str,
+    ) -> Tuple[bool, Dict[str, Any], Any]:
+        scorer = getattr(self, "_semantic_scorer", None)
+        if scorer is None:
+            return False, {"enabled": False}, None
+        sem = scorer.evaluate(
+            user_text=user_text,
+            response_text=str(response or ""),
+            meaning_state=meaning_state,
+            response_plan=response_plan,
+            generation_contract=generation_contract,
+        )
+        try:
+            scorer.save_eval_record(
+                {
+                    "user_text": str(user_text or ""),
+                    "response_text": str(response or ""),
+                    "answer_type": str((response_plan or {}).get("answer_type", "")) if isinstance(response_plan, dict) else "",
+                    "plan_contract": self._normalize_generation_contract(generation_contract),
+                    "overall": float(getattr(sem, "overall", 0.0)),
+                    "entailment": float(getattr(sem, "entailment", 0.0)),
+                    "contradiction": float(getattr(sem, "contradiction", 0.0)),
+                    "plan_adherence": float(getattr(sem, "plan_adherence", 0.0)),
+                    "identity_consistency": float(getattr(sem, "identity_consistency", 0.0)),
+                    "reasons": list(getattr(sem, "reasons", [])),
+                    "passed": bool(getattr(sem, "pass_check", False)),
+                }
+            )
+        except Exception:
+            pass
+        return bool(getattr(sem, "pass_check", False)), {
+            "plan_adherence": float(getattr(sem, "plan_adherence", 0.0)),
+            "entailment": float(getattr(sem, "entailment", 0.0)),
+            "identity_consistency": float(getattr(sem, "identity_consistency", 0.0)),
+            "contradiction": float(getattr(sem, "contradiction", 0.0)),
+            "overall": float(getattr(sem, "overall", 0.0)),
+            "reasons": list(getattr(sem, "reasons", [])),
+        }, sem
+
+    def _candidate_count(self) -> int:
+        try:
+            n = int(os.getenv("M3_MEANING_PIPELINE_CANDIDATE_COUNT", str(self._semantic_scorer_cfg.candidate_count)))
+        except Exception:
+            n = int(getattr(self._semantic_scorer_cfg, "candidate_count", 4))
+        return max(1, int(n))
+
+    def _plan_contract_text(
+        self,
+        response_plan: Optional[Dict[str, Any]],
+        meaning_state: Optional[Dict[str, Any]] = None,
+        generation_contract: Optional[Any] = None,
+    ) -> str:
+        if response_plan is None:
+            return ""
+        safe_plan = {
+            "answer_type": str(response_plan.get("answer_type", "")),
+            "key_points": list(response_plan.get("key_points", []) or [])[:5],
+            "must_avoid": list(response_plan.get("must_avoid", []) or []),
+            "clarify_if_uncertain": bool(response_plan.get("clarify_if_uncertain", True)),
+            "style": dict(response_plan.get("style", {}) or {}),
+            "validation_targets": dict(response_plan.get("validation_targets", {}) or {}),
+        }
+        if meaning_state and isinstance(meaning_state, dict):
+            safe_plan["turn_id"] = meaning_state.get("turn_id")
+        if generation_contract is not None:
+            contract = self._normalize_generation_contract(generation_contract)
+            safe_plan["contract_mode"] = contract.get("mode")
+        return json.dumps({"generation_contract": "meaning_plan", "plan": safe_plan}, ensure_ascii=False)
+
+    def _meaning_should_gate(self, meaning_state: Optional[Dict[str, Any]], generation_contract: Optional[Any]) -> bool:
+        if not getattr(self._meaning_cfg, "enabled", False):
+            return False
+        mode = self._meaning_mode(generation_contract)
+        return mode in {"soft_gate", "full"}
+
+    def _meaning_should_log(self, meaning_state: Optional[Dict[str, Any]], generation_contract: Optional[Any]) -> bool:
+        if not getattr(self._meaning_cfg, "enabled", False):
+            return False
+        mode = self._meaning_mode(generation_contract)
+        return mode in {"shadow", "soft_gate", "full"}
+
+    def _meaning_is_soft_gate_allowed(self, meaning_state: Optional[Dict[str, Any]]) -> bool:
+        mode = self._meaning_mode(None)
+        if mode != "soft_gate":
+            return True
+        cfg = self._meaning_cfg
+        if not cfg:
+            return True
+        raw = str(cfg.soft_gate_intent_whitelist or "").strip()
+        if not raw:
+            return True
+        allow = {x.strip().lower() for x in raw.split(",") if x.strip()}
+        if not allow:
+            return True
+        intent = str((meaning_state or {}).get("intent", "")).strip().lower()
+        return intent in allow or not intent
+
     def _read_float(self, name: str, default: float) -> float:
         try:
             return float(os.getenv(name, str(default)))
@@ -3438,7 +3687,15 @@ class TorchConversationalPolicy:
             pass
         return rec
 
-    def _generate_safe_fallback(self, prompt: str, chat_messages: Optional[List[Dict[str, str]]] = None, max_len: int = 60) -> str:
+    def _generate_safe_fallback(
+        self,
+        prompt: str,
+        chat_messages: Optional[List[Dict[str, str]]] = None,
+        max_len: int = 60,
+        meaning_state: Optional[Dict[str, Any]] = None,
+        response_plan: Optional[Dict[str, Any]] = None,
+        generation_contract: Optional[Any] = None,
+    ) -> str:
         user_text = self._extract_last_user_text(prompt)
         if not user_text and chat_messages:
             try:
@@ -3449,6 +3706,13 @@ class TorchConversationalPolicy:
                 pass
         if not user_text:
             user_text = str(prompt or "").strip()
+        if isinstance(response_plan, dict):
+            ans_type = str(response_plan.get("answer_type", "")).strip().lower()
+            if ans_type in {"clarify", "abstain"}:
+                try:
+                    return format_plan_fallback_prompt(response_plan=response_plan, meaning_state=meaning_state)
+                except Exception:
+                    pass
         safe_temp = None
         safe_top_k = None
         safe_top_p = None
@@ -5436,7 +5700,8 @@ class TorchConversationalPolicy:
     def _log_jsonl(self, path: str, obj: dict):
         """Helper to append JSONL log entries."""
         try:
-            with open(path, 'a', encoding='utf-8') as f:
+            resolved_path = _normalize_log_file(path, OUT_DIR, 'llm_adapter.log')
+            with open(resolved_path, 'a', encoding='utf-8') as f:
                 import json as _json
                 f.write(_json.dumps(obj, ensure_ascii=False) + "\n")
         except Exception:
@@ -5743,14 +6008,23 @@ class TorchConversationalPolicy:
             vec = _np.nan_to_num(vec, nan=0.0, posinf=0.0, neginf=0.0).astype(_np.float32)
         return vec
 
-    def generate(self, prompt: str, max_len: int = 60, temperature: float = None,
-                 top_k: int = None, top_p: float = None,
-                 mem: Optional[np.ndarray] = None,
-                 prefix_embed: Optional[np.ndarray] = None,
-                 knn_provider: Optional[Any] = None,
-                 knn_alpha: float = 0.0,
-                 affect_state: Optional[np.ndarray] = None,
-                 source: str = "generate") -> str:
+    def generate(
+        self,
+        prompt: str,
+        max_len: int = 60,
+        temperature: float = None,
+        top_k: int = None,
+        top_p: float = 0.9,
+        mem: Optional[np.ndarray] = None,
+        prefix_embed: Optional[np.ndarray] = None,
+        knn_provider: Optional[Any] = None,
+        knn_alpha: float = 0.0,
+        affect_state: Optional[np.ndarray] = None,
+        source: str = "generate",
+        meaning_state: Optional[Dict[str, Any]] = None,
+        response_plan: Optional[Dict[str, Any]] = None,
+        generation_contract: Optional[Any] = None,
+    ) -> str:
         t = self.tok
         core = getattr(self, 'core', None)
         raw_prompt = prompt
@@ -5761,7 +6035,14 @@ class TorchConversationalPolicy:
             pass
         if getattr(self, "_hf_circuit_open", False):
             self._note_control_health(False, "hf_circuit_open")
-            return self._generate_safe_fallback(str(raw_prompt), chat_messages=None, max_len=max_len)
+            return self._generate_safe_fallback(
+                str(raw_prompt),
+                chat_messages=None,
+                max_len=max_len,
+                meaning_state=meaning_state,
+                response_plan=response_plan,
+                generation_contract=generation_contract,
+            )
         # System identity / behavior prefix (configurable / optional)
         sys_identity = self._get_system_prompt()
         
@@ -5916,7 +6197,7 @@ class TorchConversationalPolicy:
             except Exception:
                 pass
 
-        # === HuggingFace backend: full M3 parameter control ===
+        # === HuggingFace backend: unified generation + scoring loop ===
         used_hf = False
         if self.use_hf and HFBackend.is_available():
             used_hf = True
@@ -5938,13 +6219,52 @@ class TorchConversationalPolicy:
                     m3_sampler=self.m3_sampler,
                 )
                 gate_payload['decode_control'] = decode_control
-                attempts = max(0, int(os.getenv("M3_CONTROL_RETRY", "1")))
+
                 gate = getattr(self, '_quality_gate', None)
+                use_semantic_scoring = self._should_use_semantic_scoring(
+                    meaning_state=meaning_state,
+                    response_plan=response_plan,
+                    generation_contract=generation_contract,
+                )
+                legacy_retry = max(0, int(os.getenv("M3_CONTROL_RETRY", "1")))
+                candidate_budget = max(1, self._candidate_count() if use_semantic_scoring else 1, legacy_retry + 1)
+                if candidate_budget <= 0:
+                    candidate_budget = 1
+
                 # start from configured defaults / runtime inputs
                 cur_temp = gate_payload['temperature']
                 cur_top_k = gate_payload['top_k']
                 cur_top_p = gate_payload['top_p']
-                for attempt in range(attempts + 1):
+
+                # Inject plan contract into system context when available.
+                if response_plan is not None:
+                    contract_text = self._plan_contract_text(response_plan, meaning_state, generation_contract)
+                    if contract_text:
+                        system_content = f"{system_content}\n\n{contract_text}".strip()
+                        # keep training prompt in sync with injected plan contract context
+                        prompt_parts = []
+                        if system_content:
+                            prompt_parts.append(system_content)
+                        if transcript_msgs is not None:
+                            for m in transcript_msgs:
+                                role = 'User' if m.get('role') == 'user' else 'M3'
+                                prompt_parts.append(f"{role}: {m.get('content', '')}")
+                            prompt_parts.append('M3:')
+                        else:
+                            prompt_parts.append(chat_messages[-1].get('content', ''))
+                        prompt = "\n\n".join([p for p in prompt_parts if p is not None])
+                        if transcript_msgs is not None:
+                            chat_messages = ([{'role': 'system', 'content': system_content}] if system_content else []) + transcript_msgs
+                        else:
+                            chat_messages = ([{'role': 'system', 'content': system_content}] if system_content else []) + [
+                                {'role': 'user', 'content': chat_messages[-1].get('content', '')}
+                            ]
+
+                best_response: Optional[str] = None
+                best_score: float = -1.0
+                best_passed_quality = False
+                best_passed_semantic = False
+                for attempt in range(candidate_budget):
                     response = self._generate_with_hf(
                         hf=hf,
                         prompt=prompt,
@@ -5961,8 +6281,22 @@ class TorchConversationalPolicy:
                         base_top_p=cur_top_p,
                         decode_control=decode_control,
                     )
-                    if response and response.strip():
-                        if gate is not None:
+                    if not response or not str(response).strip():
+                        if attempt < candidate_budget - 1:
+                            try:
+                                cur_temp, cur_top_k, cur_top_p = self._retry_generation_sampling(
+                                    temperature=cur_temp,
+                                    top_k=cur_top_k,
+                                    top_p=cur_top_p,
+                                )
+                            except Exception:
+                                cur_temp = max(0.15, float(cur_temp) * 0.8)
+                                cur_top_k = max(5, int(cur_top_k) if int(cur_top_k) < 24 else int(cur_top_k * 0.8))
+                                cur_top_p = max(0.70, float(cur_top_p) * 0.95)
+                        continue
+
+                    if gate is not None:
+                        try:
                             gate_payload.update({
                                 'hf': hf,
                                 'prompt': prompt,
@@ -5987,32 +6321,13 @@ class TorchConversationalPolicy:
                                 top_k=cur_top_k,
                                 top_p=cur_top_p,
                             )
-                        passed, _ = self._evaluate_generation_quality(prompt, response, source=source)
-                        if passed:
-                            if not self._is_disallowed_generation_output(response):
-                                try:
-                                    self._record_example(prompt, response, source='generate_hf')
-                                except Exception:
-                                    pass
-                                try:
-                                    self._adapt_bridge_online(
-                                        hf=hf,
-                                        prompt=prompt,
-                                        response=response,
-                                        z_m3=bridge_state,
-                                    )
-                                except Exception:
-                                    pass
-                                try:
-                                    self._maybe_auto_rebuild_tokenizer()
-                                except Exception:
-                                    pass
-                                self._note_control_health(True, "hf_generate_ok")
-                                return response
-                            logger.warning('[HFBackend] filtered disallowed output; switching to fallback')
-                        elif attempt < attempts:
+                        except Exception:
+                            pass
+
+                    if not response or not str(response).strip():
+                        if attempt < candidate_budget - 1:
                             logger.warning(
-                                f'[HFBackend] quality gate rejected output on attempt {attempt+1}/{attempts+1}; re-sampling with stricter params'
+                                f'[HFBackend] quality gate returned empty on attempt {attempt+1}/{candidate_budget}; re-sampling with stricter params'
                             )
                             try:
                                 cur_temp, cur_top_k, cur_top_p = self._retry_generation_sampling(
@@ -6024,21 +6339,124 @@ class TorchConversationalPolicy:
                                 cur_temp = max(0.15, float(cur_temp) * 0.8)
                                 cur_top_k = max(5, int(cur_top_k) if int(cur_top_k) < 24 else int(cur_top_k * 0.8))
                                 cur_top_p = max(0.70, float(cur_top_p) * 0.95)
-                            continue
-                        logger.warning('[HFBackend] filtered by generation quality; switching to fallback')
+                        continue
+
+                    passed_quality, q_info = self._evaluate_generation_quality(prompt, response, source=source)
+                    user_text = self._extract_last_user_text(prompt)
+                    if use_semantic_scoring:
+                        passed_semantic, sem_info, _ = self._evaluate_semantic_candidate(
+                            response=str(response),
+                            meaning_state=meaning_state,
+                            response_plan=response_plan,
+                            generation_contract=generation_contract,
+                            user_text=user_text,
+                        )
+                    else:
+                        passed_semantic = True
+                        sem_info = {"overall": 0.0, "plan_adherence": 0.0, "identity_consistency": 1.0}
+
+                    quality_score = float(q_info.get("score", 0.0))
+                    semantic_overall = float(sem_info.get("overall", 0.0))
+                    composite = float(0.35 * quality_score + 0.65 * semantic_overall) if use_semantic_scoring else float(quality_score)
+                    if use_semantic_scoring and not passed_semantic:
+                        composite *= 0.25
+                    if not passed_quality:
+                        composite *= 0.55
+
+                    if self._is_disallowed_generation_output(response):
+                        logger.warning('[HFBackend] filtered disallowed output candidate')
+                    elif composite > best_score:
+                        best_score = composite
+                        best_response = response.strip()
+                        best_passed_quality = bool(passed_quality)
+                        best_passed_semantic = bool(passed_semantic)
+                        if use_semantic_scoring and passed_semantic and passed_quality and quality_score >= 0.80:
+                            break
+                        if not use_semantic_scoring and passed_quality and composite > 0.30:
+                            break
+
+                    if attempt < candidate_budget - 1 and not passed_semantic:
+                        logger.warning(
+                            f'[HFBackend] semantic candidate rejected on attempt {attempt+1}/{candidate_budget}: '
+                            f'{", ".join(sem_info.get("reasons", []))}'
+                        )
+                        try:
+                            cur_temp, cur_top_k, cur_top_p = self._retry_generation_sampling(
+                                temperature=cur_temp,
+                                top_k=cur_top_k,
+                                top_p=cur_top_p,
+                            )
+                        except Exception:
+                            cur_temp = max(0.15, float(cur_temp) * 0.8)
+                            cur_top_k = max(5, int(cur_top_k) if int(cur_top_k) < 24 else int(cur_top_k * 0.8))
+                            cur_top_p = max(0.70, float(cur_top_p) * 0.95)
+                    elif attempt < candidate_budget - 1 and not passed_quality:
+                        logger.warning(
+                            f'[HFBackend] quality rejected on attempt {attempt+1}/{candidate_budget}; re-sampling with stricter params'
+                        )
+                        try:
+                            cur_temp, cur_top_k, cur_top_p = self._retry_generation_sampling(
+                                temperature=cur_temp,
+                                top_k=cur_top_k,
+                                top_p=cur_top_p,
+                            )
+                        except Exception:
+                            cur_temp = max(0.15, float(cur_temp) * 0.8)
+                            cur_top_k = max(5, int(cur_top_k) if int(cur_top_k) < 24 else int(cur_top_k * 0.8))
+                            cur_top_p = max(0.70, float(cur_top_p) * 0.95)
+
+                if best_response is not None and not self._is_disallowed_generation_output(best_response):
+                    if (not use_semantic_scoring and best_passed_quality) or (use_semantic_scoring and best_passed_semantic):
+                        try:
+                            self._record_example(prompt, best_response, source='generate_hf')
+                        except Exception:
+                            pass
+                        try:
+                            self._adapt_bridge_online(
+                                hf=hf,
+                                prompt=prompt,
+                                response=best_response,
+                                z_m3=bridge_state,
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            self._maybe_auto_rebuild_tokenizer()
+                        except Exception:
+                            pass
+                        self._note_control_health(True, "hf_generate_ok")
+                        return best_response
+                if use_semantic_scoring:
+                    logger.warning('[HFBackend] filtered by semantic evaluation; switching to fallback')
+                else:
+                    logger.warning('[HFBackend] filtered by generation quality; switching to fallback')
             except Exception as e:
                 logger.warning(f'[HFBackend] generation failed ({e})')
                 if self._is_cuda_fatal_error(e):
                     self._trip_hf_circuit_breaker(e)
                 self._note_control_health(False, f"hf_exception:{e}")
-                return self._generate_safe_fallback(prompt, chat_messages=chat_messages, max_len=max_len)
+                return self._generate_safe_fallback(
+                    prompt,
+                    chat_messages=chat_messages,
+                    max_len=max_len,
+                    meaning_state=meaning_state,
+                    response_plan=response_plan,
+                    generation_contract=generation_contract,
+                )
 
         # HF backend disabled or unavailable: continue with safe fallback.
         if used_hf:
             self._note_control_health(False, "hf_filtered_or_fallback")
         else:
             self._note_control_health(False, "hf_unavailable_or_fallback")
-        return self._generate_safe_fallback(prompt, chat_messages=chat_messages, max_len=max_len)
+        return self._generate_safe_fallback(
+            prompt,
+            chat_messages=chat_messages,
+            max_len=max_len,
+            meaning_state=meaning_state,
+            response_plan=response_plan,
+            generation_contract=generation_contract,
+        )
 
     def score_value(self, prompt: str, candidate: str, mem: Optional[np.ndarray] = None) -> float:
         """Estimate value for a candidate response (scaffolding for Step 3)."""

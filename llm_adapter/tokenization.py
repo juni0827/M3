@@ -67,29 +67,29 @@ class M3Tokenizer:
                 self._type = "hf"
                 hf_loaded = True
             else:
-                 # Check unified logs path
-                 default_path = os.path.join('docs&tests&data_sets', 'tests', 'logs', 'tokenizer.json')
-                 # Check legacy path
-                 legacy_path = os.path.join('out_m3', 'tokenizer.json')
-                 
-                 found_path = None
-                 if os.path.exists(default_path):
-                     found_path = default_path
-                 elif os.path.exists(legacy_path):
-                     found_path = legacy_path
-                     
-                 if found_path:
-                     logger.info(f"Loading tokenizer from default path {found_path}")
-                     self._backend = Tokenizer.from_file(found_path)
-                     self._type = "hf"
-                     hf_loaded = True
-                 else:
-                     # No vocab file yet: fallback to tiktoken/byte until a rebuild provides one.
-                     hf_reason = "missing_vocab"
-                     _log_once(
-                         "info",
-                         "No vocab file found. Skipping HF BPE initialization to avoid empty vocabulary.",
-                     )
+                # Check unified data path
+                default_path = os.path.join('docs_tests_data', 'tokenizer.json')
+                # Check legacy paths
+                legacy_path = os.path.join('out_m3', 'tokenizer.json')
+
+                found_path = None
+                if os.path.exists(default_path):
+                    found_path = default_path
+                elif os.path.exists(legacy_path):
+                    found_path = legacy_path
+
+                if found_path:
+                    logger.info(f"Loading tokenizer from default path {found_path}")
+                    self._backend = Tokenizer.from_file(found_path)
+                    self._type = "hf"
+                    hf_loaded = True
+                else:
+                    # No vocab file yet: fallback to tiktoken/byte until a rebuild provides one.
+                    hf_reason = "missing_vocab"
+                    _log_once(
+                        "info",
+                        "No vocab file found. Skipping HF BPE initialization to avoid empty vocabulary.",
+                    )
             
             if hf_loaded:
                 self._backend.add_special_tokens(self.special_tokens)

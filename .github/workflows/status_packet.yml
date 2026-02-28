@@ -27,7 +27,10 @@ jobs:
           python-version: '3.11'
 
       - name: Generate status packet docs
-        run: python tools/build_status_packet.py --repo-root . --out-dir docs --artifacts-dir artifacts/latest_run
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python tools/build_status_packet.py --repo-root . --out-dir docs_tests_data --artifacts-dir docs_tests_data/artifacts/latest_run --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA"
 
       - name: Upload docs artifact (PR only)
         if: github.event_name == 'pull_request'
@@ -35,10 +38,16 @@ jobs:
         with:
           name: status-packet
           path: |
-            docs/STATUS.md
-            docs/ARCHITECTURE_STATE.md
-            docs/RUNBOOK.md
-            docs/BACKLOG.md
+            docs_tests_data/STATUS.md
+            docs_tests_data/ARCHITECTURE_STATE.md
+            docs_tests_data/RUNBOOK.md
+            docs_tests_data/BACKLOG.md
+            docs_tests_data/VISUAL_MAP.md
+            docs_tests_data/VISUAL_MAP.svg
+            docs_tests_data/CLASS_CATALOG.md
+            docs_tests_data/CHANGE_REPORT.md
+            docs_tests_data/CLASS_INDEX.json
+            docs_tests_data/CHANGESET.json
 
       - name: Comment PR with summary (optional)
         if: github.event_name == 'pull_request'
@@ -48,7 +57,8 @@ jobs:
             const body = [
               ' Status Packet generated for this PR.',
               '',
-              '- Files: `docs/STATUS.md`, `docs/ARCHITECTURE_STATE.md`, `docs/RUNBOOK.md`, `docs/BACKLOG.md`',
+              '- Files: `STATUS`, `ARCHITECTURE_STATE`, `RUNBOOK`, `BACKLOG`, `VISUAL_MAP.md`, `VISUAL_MAP.svg`, `CLASS_CATALOG`, `CHANGE_REPORT`',
+              '- Visuals: `VISUAL_MAP.svg` (single consolidated dashboard)',
               '- Artifact: `status-packet` (download from the workflow run artifacts)',
             ].join('\n');
             github.rest.issues.createComment({
@@ -63,7 +73,7 @@ jobs:
         run: |
           git config user.name "m3-status-bot"
           git config user.email "m3-status-bot@users.noreply.github.com"
-          git add docs/STATUS.md docs/ARCHITECTURE_STATE.md docs/RUNBOOK.md docs/BACKLOG.md
+          git add docs_tests_data/STATUS.md docs_tests_data/ARCHITECTURE_STATE.md docs_tests_data/RUNBOOK.md docs_tests_data/BACKLOG.md docs_tests_data/VISUAL_MAP.md docs_tests_data/VISUAL_MAP.svg docs_tests_data/CLASS_CATALOG.md docs_tests_data/CHANGE_REPORT.md docs_tests_data/CLASS_INDEX.json docs_tests_data/CHANGESET.json
           if git diff --cached --quiet; then
             echo "No documentation changes detected."
           else

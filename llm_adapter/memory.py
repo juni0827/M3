@@ -18,6 +18,32 @@ from llm_adapter.config import (
 
 logger = logging.getLogger('llm_adapter')
 
+_DEFAULT_LLM_LOG_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'docs_tests_data')
+)
+
+
+def _resolve_llm_log_path() -> str:
+    raw_dir = str(os.getenv("LLM_ADAPTER_LOG_DIR", _DEFAULT_LLM_LOG_DIR) or "").strip()
+    if not raw_dir:
+        raw_dir = _DEFAULT_LLM_LOG_DIR
+    if not os.path.isabs(raw_dir):
+        raw_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', raw_dir))
+    try:
+        os.makedirs(raw_dir, exist_ok=True)
+    except Exception:
+        pass
+    raw_path = str(
+        os.getenv("LLM_ADAPTER_LOG")
+        or os.getenv("LLM_ADAPTER_LOG_PATH")
+        or "llm_adapter.log"
+    ).strip()
+    if not raw_path:
+        raw_path = "llm_adapter.log"
+    if not os.path.isabs(raw_path):
+        raw_path = os.path.join(raw_dir, raw_path)
+    return os.path.abspath(raw_path)
+
 
 class _ANNBackendBase:
     """Minimal ANN backend interface."""
@@ -153,7 +179,7 @@ class M3EpisodicMemoryRetriever:
         payload = {"kind": "ann_backend", "event": str(event), "t": int(time.time() * 1000)}
         payload.update(kwargs)
         try:
-            path = os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log")
+            path = _resolve_llm_log_path()
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         except Exception:

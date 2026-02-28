@@ -3,12 +3,14 @@ __pycache__/
 *.pyc
 .vscode/
 llm_adapter.log
+/docs_tests_data/*.log
+/docs_tests_data/*.jsonl
 
 # Temporary / generated model artifacts
 *.pt.bad
-log/logs/llm_checkpoint.pt
+/docs_tests_data/llm_checkpoint.pt
 *.tmp
 *.temp
 
-# Keep logs except training artifacts in versioned test logs
-/docs&tests&data_sets/tests/logs/*.log
+# Legacy nested log folder pattern
+/docs_tests_data/tests/logs/*.log

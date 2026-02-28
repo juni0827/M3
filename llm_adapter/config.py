@@ -328,6 +328,65 @@ class NeuroModulatorConfig:
 
 
 @dataclass
+class MeaningPipelineConfig:
+    """Configuration for meaning-first generation pipeline."""
+    enabled: bool = True
+    mode: str = "shadow"
+    candidate_count: int = 4
+    artifact_dir: str = "docs_tests_data"
+    mean_state_log: str = "meaning_state.jsonl"
+    plan_log: str = "response_plan.jsonl"
+    min_history_turns: int = 6
+    soft_gate_intent_whitelist: str = "identity_query,state_query,world_query,task_request,clarification,meta_control"
+    force_clarify_uncertainty_threshold: float = 0.45
+    force_clarify_overall_uncertainty_threshold: float = 0.62
+    force_clarify_grounding_uncertainty_threshold: float = 0.50
+
+
+@dataclass
+class GroundingConfig:
+    """Configuration for grounding stage and evidence checks."""
+    enabled: bool = True
+    evidence_lookback: int = 20
+    entity_match_threshold: float = 0.15
+    require_evidence_for_direct: bool = True
+    world_model_strength: float = 0.50
+    self_model_strength: float = 0.45
+
+
+@dataclass
+class ResponsePlanConfig:
+    """Configuration for plan schema and constraints."""
+    enabled: bool = True
+    must_avoid: List[str] = field(
+        default_factory=lambda: ["ai_identity_claim", "no_feelings_claim", "provider_claim"]
+    )
+    max_key_points: int = 5
+    language_default: str = "auto"
+    answer_style: str = "short"
+    answer_tone: str = "factual"
+    entailment_min: float = 0.62
+    plan_adherence_min: float = 0.75
+    identity_consistency_min: float = 0.90
+
+
+@dataclass
+class SemanticScorerConfig:
+    """Configuration for NLI/semantic scoring stage."""
+    enabled: bool = True
+    candidate_count: int = 4
+    model_name: str = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
+    fallback_strategy: str = "always"
+    entailment_min: float = 0.62
+    contradiction_max: float = 0.35
+    plan_adherence_min: float = 0.75
+    identity_consistency_min: float = 0.90
+    nli_device: str = "auto"
+    log_path: str = "semantic_eval.jsonl"
+    rejection_stats_path: str = "rejection_reason_stats.json"
+
+
+@dataclass
 class M3LLMConfig:
     """Master configuration combining all sub-configs."""
     state_encoder: M3StateEncoderConfig = field(default_factory=M3StateEncoderConfig)
@@ -350,6 +409,10 @@ class M3LLMConfig:
     observation_adapter: ObservationAdapterConfig = field(default_factory=ObservationAdapterConfig)
     consciousness_bus: ConsciousnessBusConfig = field(default_factory=ConsciousnessBusConfig)
     neuro_modulator: NeuroModulatorConfig = field(default_factory=NeuroModulatorConfig)
+    meaning_pipeline: MeaningPipelineConfig = field(default_factory=MeaningPipelineConfig)
+    grounding: GroundingConfig = field(default_factory=GroundingConfig)
+    response_plan: ResponsePlanConfig = field(default_factory=ResponsePlanConfig)
+    semantic_scorer: SemanticScorerConfig = field(default_factory=SemanticScorerConfig)
 
     @classmethod
     def from_json(cls, path: str) -> 'M3LLMConfig':
@@ -382,6 +445,10 @@ class M3LLMConfig:
             observation_adapter=ObservationAdapterConfig(**data.get('observation_adapter', {})),
             consciousness_bus=ConsciousnessBusConfig(**data.get('consciousness_bus', {})),
             neuro_modulator=NeuroModulatorConfig(**data.get('neuro_modulator', {})),
+            meaning_pipeline=MeaningPipelineConfig(**data.get('meaning_pipeline', {})),
+            grounding=GroundingConfig(**data.get('grounding', {})),
+            response_plan=ResponsePlanConfig(**data.get('response_plan', {})),
+            semantic_scorer=SemanticScorerConfig(**data.get('semantic_scorer', {})),
         )
 
     def to_json(self, path: str):
@@ -413,6 +480,10 @@ class M3LLMConfig:
             'observation_adapter': dict(self.observation_adapter.__dict__),
             'consciousness_bus': dict(self.consciousness_bus.__dict__),
             'neuro_modulator': dict(self.neuro_modulator.__dict__),
+            'meaning_pipeline': dict(self.meaning_pipeline.__dict__),
+            'grounding': dict(self.grounding.__dict__),
+            'response_plan': dict(self.response_plan.__dict__),
+            'semantic_scorer': dict(self.semantic_scorer.__dict__),
         }
         dir_path = os.path.dirname(path) or '.'
         os.makedirs(dir_path, exist_ok=True)
@@ -482,6 +553,10 @@ def print_config_summary(config: Optional[M3LLMConfig] = None):
         ('Observation Adapter', cfg.observation_adapter),
         ('Consciousness Bus', cfg.consciousness_bus),
         ('Neuro Modulator', cfg.neuro_modulator),
+        ('Meaning Pipeline', cfg.meaning_pipeline),
+        ('Grounding', cfg.grounding),
+        ('Response Plan', cfg.response_plan),
+        ('Semantic Scorer', cfg.semantic_scorer),
     ]
     for section_name, section_config in sections:
         print(f"\n[{section_name}]")
@@ -563,6 +638,48 @@ def validate_config(config: Optional[M3LLMConfig] = None) -> bool:
             errors.append("neuro_modulator.checkpoint_file must be a non-empty string when set")
         elif os.path.isdir(cfg.neuro_modulator.checkpoint_file):
             errors.append("neuro_modulator.checkpoint_file must refer to a file path, not a directory")
+
+    if not cfg.meaning_pipeline.enabled:
+        pass
+    if cfg.meaning_pipeline.mode not in {"off", "shadow", "soft_gate", "full"}:
+        errors.append("meaning_pipeline.mode must be one of off|shadow|soft_gate|full")
+    if cfg.meaning_pipeline.candidate_count < 1:
+        errors.append("meaning_pipeline.candidate_count must be >= 1")
+    if not 0.0 <= cfg.meaning_pipeline.force_clarify_uncertainty_threshold <= 1.0:
+        errors.append("meaning_pipeline.force_clarify_uncertainty_threshold must be in [0,1]")
+    if not 0.0 <= cfg.meaning_pipeline.force_clarify_overall_uncertainty_threshold <= 1.0:
+        errors.append("meaning_pipeline.force_clarify_overall_uncertainty_threshold must be in [0,1]")
+    if not 0.0 <= cfg.meaning_pipeline.force_clarify_grounding_uncertainty_threshold <= 1.0:
+        errors.append("meaning_pipeline.force_clarify_grounding_uncertainty_threshold must be in [0,1]")
+    if cfg.grounding.evidence_lookback <= 0:
+        errors.append("grounding.evidence_lookback must be > 0")
+    if not 0.0 <= cfg.grounding.entity_match_threshold <= 1.0:
+        errors.append("grounding.entity_match_threshold must be in [0,1]")
+    if cfg.response_plan.max_key_points < 1:
+        errors.append("response_plan.max_key_points must be >= 1")
+    if not 0.0 <= cfg.response_plan.entailment_min <= 1.0:
+        errors.append("response_plan.entailment_min must be in [0,1]")
+    if not 0.0 <= cfg.response_plan.plan_adherence_min <= 1.0:
+        errors.append("response_plan.plan_adherence_min must be in [0,1]")
+    if not 0.0 <= cfg.response_plan.identity_consistency_min <= 1.0:
+        errors.append("response_plan.identity_consistency_min must be in [0,1]")
+
+    if cfg.semantic_scorer.candidate_count <= 0:
+        errors.append("semantic_scorer.candidate_count must be > 0")
+    if (
+        not cfg.semantic_scorer.enabled
+        and cfg.semantic_scorer.fallback_strategy
+        and str(cfg.semantic_scorer.fallback_strategy).strip().lower() not in {"heuristic", "always"}
+    ):
+        errors.append("semantic_scorer.fallback_strategy must be heuristic|always when disabled")
+    if cfg.semantic_scorer.entailment_min < 0.0 or cfg.semantic_scorer.entailment_min > 1.0:
+        errors.append("semantic_scorer.entailment_min must be in [0,1]")
+    if cfg.semantic_scorer.contradiction_max < 0.0 or cfg.semantic_scorer.contradiction_max > 1.0:
+        errors.append("semantic_scorer.contradiction_max must be in [0,1]")
+    if cfg.semantic_scorer.plan_adherence_min < 0.0 or cfg.semantic_scorer.plan_adherence_min > 1.0:
+        errors.append("semantic_scorer.plan_adherence_min must be in [0,1]")
+    if cfg.semantic_scorer.identity_consistency_min < 0.0 or cfg.semantic_scorer.identity_consistency_min > 1.0:
+        errors.append("semantic_scorer.identity_consistency_min must be in [0,1]")
 
     if errors:
         logger.error("Config validation failed:")

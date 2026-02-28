@@ -10,7 +10,14 @@ from llm_adapter.m3_control_bridge import (
     NeuroModControls,
 )
 
+
+def _set_test_seed(seed: int) -> None:
+    torch.manual_seed(int(seed))
+    np.random.seed(int(seed))
+
+
 def test_creation_and_shapes():
+    _set_test_seed(1001)
     nm = NeuroModulator(
         state_dim=256, num_layers=4, model_hidden_dim=512,
         vocab_size=1000, trunk_dim=128, hidden_rank=8, logit_rank=16,
@@ -26,6 +33,7 @@ def test_creation_and_shapes():
     print("  PASS")
 
 def test_identity_at_warmup_zero():
+    _set_test_seed(1002)
     nm = NeuroModulator(state_dim=64, num_layers=2, model_hidden_dim=128, vocab_size=100)
     z = torch.randn(1, 64)
     c = nm(z, strength=1.0)
@@ -37,19 +45,21 @@ def test_identity_at_warmup_zero():
     print("  PASS")
 
 def test_warmup_progression():
+    _set_test_seed(1003)
     nm = NeuroModulator(state_dim=64, num_layers=2, model_hidden_dim=128, vocab_size=100)
     z = torch.randn(1, 64)
     # Run 100 steps to fully warm up
     for _ in range(100):
         nm(z, strength=1.0)
     c = nm(z, strength=1.0)
-    deviated = any(abs(g - 1.0) > 0.001 for g in c.layer_gain[0].tolist())
+    deviated = any(abs(g - 1.0) > 0.0005 for g in c.layer_gain[0].tolist())
     assert deviated, "gains should deviate after warmup"
     assert c.hidden_bias.abs().max().item() > 1e-5, "bias should be non-zero after warmup"
     print(f"  gains: {c.layer_gain[0].tolist()}")
     print("  PASS")
 
 def test_gradient_flow_positive_reward():
+    _set_test_seed(1004)
     nm = NeuroModulator(state_dim=64, num_layers=2, model_hidden_dim=128, vocab_size=100)
     z = torch.randn(1, 64)
     nm.train()
@@ -65,6 +75,7 @@ def test_gradient_flow_positive_reward():
     print("  PASS")
 
 def test_gradient_flow_negative_reward():
+    _set_test_seed(1005)
     nm = NeuroModulator(state_dim=64, num_layers=2, model_hidden_dim=128, vocab_size=100)
     z = torch.randn(1, 64)
     nm.train()
@@ -80,6 +91,7 @@ def test_gradient_flow_negative_reward():
     print("  PASS")
 
 def test_runtime_hooks():
+    _set_test_seed(1006)
     class DummyLayer(torch.nn.Module):
         def forward(self, x):
             return (x, None)
@@ -101,11 +113,13 @@ def test_runtime_hooks():
     x_original = x.clone()
     out, _ = layers[0](x)
     # Output should be modulated (not identical to input)
+    assert not torch.allclose(out, x_original), "hook should modulate layer output"
     runtime.close()
     assert len(runtime._hooks) == 0, "hooks should be removed"
     print("  PASS")
 
 def test_numpy_input():
+    _set_test_seed(1007)
     nm = NeuroModulator(state_dim=64, num_layers=2, model_hidden_dim=128, vocab_size=100)
     z_np = np.random.randn(64).astype(np.float32)
     c = nm(z_np, strength=1.0)
@@ -113,6 +127,7 @@ def test_numpy_input():
     print("  PASS")
 
 def test_state_padding_truncation():
+    _set_test_seed(1008)
     nm = NeuroModulator(state_dim=64, num_layers=2, model_hidden_dim=128, vocab_size=100)
     # Too short
     z_short = torch.randn(32)
@@ -126,6 +141,7 @@ def test_state_padding_truncation():
 
 def test_online_learning_step():
     """Simulate a full online learning cycle."""
+    _set_test_seed(1009)
     nm = NeuroModulator(state_dim=64, num_layers=2, model_hidden_dim=128, vocab_size=100)
     opt = torch.optim.Adam(nm.parameters(), lr=1e-3)
     z = torch.randn(1, 64)

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 # Path and environment-based defaults
 _ROOT = _os.path.dirname(_os.path.dirname(__file__))
-_LOG_DIR = _os.path.join(_ROOT, 'logs')
+_LOG_DIR = _os.path.join(_ROOT, 'docs_tests_data')
 _os.makedirs(_LOG_DIR, exist_ok=True)
 QUALIA_LOG_PATH = _os.environ.get('M3_BUS_LOG', _os.path.join(_LOG_DIR, 'bus.jsonl'))
 

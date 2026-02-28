@@ -11,7 +11,18 @@ from m3.config import QUALIA_CFG, QUALIA_LOG_PATH, _CESConfig
 from m3.features import HebbianMemory, FeatureSpec, pack_learned_proj, pack_scalar, pack_spatial_pool, pack_stats_sample, Scope
 from m3.visualization import FeatureSummarizer, GlitchEncoder, Retinizer, hilbert_index_to_xy, vector_to_grid
 from m3.reward import RewardSystem
+from m3.meaning_pipeline import (
+    build_meaning_state as _pipeline_build_meaning_state,
+    build_response_plan as _pipeline_build_response_plan,
+    build_generation_contract as _pipeline_build_generation_contract,
+    ground_meaning_state as _pipeline_ground_meaning_state,
+    format_plan_fallback_prompt as _pipeline_format_plan_fallback_prompt,
+)
 from functools import lru_cache
+
+def _default_docs_outdir() -> str:
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs_tests_data"))
+
 
 def _write_jsonl_safe(path, obj):
     try:
@@ -20,6 +31,42 @@ def _write_jsonl_safe(path, obj):
             f.write(_json.dumps(obj, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+def _resolve_llm_adapter_log_path(default_name: str = "llm_adapter.log") -> str:
+    base_dir = str(
+        os.getenv(
+            "LLM_ADAPTER_LOG_DIR",
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs_tests_data")),
+        )
+        or ""
+    ).strip()
+    if not base_dir:
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs_tests_data"))
+    if not os.path.isabs(base_dir):
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", base_dir))
+    try:
+        os.makedirs(base_dir, exist_ok=True)
+    except Exception:
+        pass
+    raw_path = str(os.getenv("LLM_ADAPTER_LOG") or os.getenv("LLM_ADAPTER_LOG_PATH") or default_name).strip()
+    if not raw_path:
+        raw_path = default_name
+    if not os.path.isabs(raw_path):
+        raw_path = os.path.join(base_dir, raw_path)
+    return os.path.abspath(raw_path)
+
+
+def _resolve_meaning_artifact_path(default_name: str) -> str:
+    base_dir = os.path.dirname(_resolve_llm_adapter_log_path("llm_adapter.log"))
+    raw_name = str(
+        os.getenv(f"LLM_ADAPTER_MEANING_{default_name.upper().replace('.', '_')}", default_name)
+    ).strip()
+    if not raw_name:
+        raw_name = default_name
+    if not os.path.isabs(raw_name):
+        raw_name = os.path.join(base_dir, raw_name)
+    return os.path.abspath(raw_name)
 
 
 def _normalize_phi_policy(raw: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
@@ -2249,6 +2296,14 @@ class IITPhiCalculator:
     def compute_phi(self, cause_repertoire: Optional[np.ndarray]=None, effect_repertoire: Optional[np.ndarray]=None, state: Optional[np.ndarray]=None, method: str='simple') -> float:
         """Phi (integrated information) computation. If state is provided, it updates the internal state.
         If repertoires are not given, it derives them from USHTS at the current index."""
+        def _finalize(phi_value: float) -> float:
+            if np.isnan(phi_value) or np.isinf(phi_value):
+                phi_value = 0.0
+            self.phi_history.append(float(phi_value))
+            # MULTI-LOOP: Broadcast phi update to all modules
+            self._broadcast_phi_update(float(phi_value))
+            return float(phi_value)
+
         if state is not None:
             self.update_state(state)
         # If repertoires not given, derive from USHTS at current index
@@ -2261,7 +2316,7 @@ class IITPhiCalculator:
             # unify support set
             support = sorted(set(eff_ids).union(cau_ids))
             if not support:
-                return 0.0
+                return _finalize(0.0)
             id_to_pos = {sid: i for i, sid in enumerate(support)}
             eff_vec = np.zeros(len(support), dtype=np.float64)
             for sid, c in zip(eff_ids, eff_counts):
@@ -2275,7 +2330,7 @@ class IITPhiCalculator:
             effect_repertoire = (eff_vec + alpha) / (max(1e-12, eff_vec.sum() + alpha * V))
             cause_repertoire = (cau_vec + alpha) / (max(1e-12, cau_vec.sum() + alpha * V))
         if cause_repertoire is None or effect_repertoire is None:
-            return 0.0
+            return _finalize(0.0)
         if len(cause_repertoire) != len(effect_repertoire):
             # pad to equal length if needed
             L = max(len(cause_repertoire), len(effect_repertoire))
@@ -2287,14 +2342,7 @@ class IITPhiCalculator:
             method=method,
             state=state,
         )
-        if np.isnan(phi) or np.isinf(phi):
-            phi = 0.0
-        self.phi_history.append(phi)
-        
-        # MULTI-LOOP: Broadcast phi update to all modules
-        self._broadcast_phi_update(phi)
-        
-        return phi
+        return _finalize(float(phi))
     
     def _broadcast_phi_update(self, phi: float):
         """Broadcast phi value to all modules"""
@@ -10269,7 +10317,7 @@ if _TORCH_OK:
 class M3ConsciousnessCore:
 
 
-    def __init__(self, n: int=512, K: int=12, seed=None, max_iterations=None, outdir: str='docs&tests&data_sets/tests/logs'):
+    def __init__(self, n: int=512, K: int=12, seed=None, max_iterations=None, outdir: str='docs_tests_data'):
         self.rngr = RNGRegistry(seed)
         if seed is None:
             seed = int(time.time() * 1000) % 2 ** 32
@@ -10278,7 +10326,12 @@ class M3ConsciousnessCore:
         self.n = n
         self.K = K
         self.max_iterations: Optional[int] = max_iterations
-        self.outdir = outdir
+        resolved_outdir = str(outdir or 'docs_tests_data')
+        if resolved_outdir in ('docs_tests_data', ''):
+            resolved_outdir = _default_docs_outdir()
+        if not os.path.isabs(resolved_outdir):
+            resolved_outdir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", resolved_outdir))
+        self.outdir = resolved_outdir
         self._adaptive_threshold_cfg: Dict[str, Any] = {
             "enabled": True,
             "warmup_steps": 256,
@@ -10841,6 +10894,189 @@ class M3ConsciousnessCore:
         prompt += "M3:"
         return prompt
 
+    def _meaning_pipeline_enabled(self) -> bool:
+        try:
+            return str(os.getenv("M3_MEANING_PIPELINE_ENABLED", "1")).strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+        except Exception:
+            return True
+
+    def _meaning_pipeline_cfg(self) -> Dict[str, Any]:
+        # Keep minimal runtime knobs in core to avoid hard dependency on config plumbing
+        # before adapter initialization.
+        def _to_float(name: str, default: float) -> float:
+            try:
+                return float(os.getenv(name, str(default)))
+            except Exception:
+                return float(default)
+
+        def _to_int(name: str, default: int) -> int:
+            try:
+                return int(os.getenv(name, str(default)))
+            except Exception:
+                return int(default)
+
+        return {
+            "candidate_entities_limit": _to_int("M3_MEANING_ENTITY_LIMIT", 12),
+            "force_clarify_overall_uncertainty_threshold": _to_float(
+                "M3_MEANING_FORCE_CLARIFY_OVERALL_UNCERTAINTY_THRESHOLD",
+                0.62,
+            ),
+            "force_clarify_grounding_uncertainty_threshold": _to_float(
+                "M3_MEANING_FORCE_CLARIFY_GROUNDING_UNCERTAINTY_THRESHOLD",
+                0.50,
+            ),
+        }
+
+    def _collect_core_state_for_meaning(self) -> Dict[str, Any]:
+        summary: Dict[str, Any] = {}
+        try:
+            world_state = self._get_current_world_state()
+        except Exception:
+            world_state = {"stability": 0.0, "delta_hat": 0.0, "energy_level": 0.0}
+        summary.update({
+            "stability": float(world_state.get("stability", 0.0) or 0.0),
+            "delta_hat": float(world_state.get("delta_hat", 0.0) or 0.0),
+            "energy_level": float(world_state.get("energy_level", 0.0) or 0.0),
+            "meta_awareness": float(getattr(self.self_model, "meta_awareness", 0.0) or 0.0),
+        })
+        try:
+            summary["meta_confidence"] = float(getattr(self.self_model, "meta_confidence", 0.5) or 0.5)
+        except Exception:
+            summary["meta_confidence"] = 0.5
+        try:
+            summary["belief_summary"] = str(self.self_model.introspect())[:240]
+        except Exception:
+            summary["belief_summary"] = ""
+        return summary
+
+    def _build_meaning_state(
+        self,
+        user_text: str,
+        chat_history: Optional[Any] = None,
+        core_state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        cfg = self._meaning_pipeline_cfg()
+        return _pipeline_build_meaning_state(
+            user_text=user_text,
+            chat_history=chat_history,
+            core_state=core_state,
+            cfg=cfg,
+        )
+
+    def _ground_meaning_state(
+        self,
+        meaning_state: Optional[Dict[str, Any]],
+        chat_history: Optional[Any] = None,
+        core_state: Optional[Any] = None,
+    ) -> tuple[Dict[str, Any], list]:
+        if not meaning_state:
+            return {}, []
+        grounded, evidence = _pipeline_ground_meaning_state(
+            meaning_state=meaning_state,
+            core_state=core_state if core_state is not None else self,
+            chat_history=chat_history,
+            grounding_cfg=self._meaning_pipeline_cfg(),
+        )
+        return grounded, evidence
+
+    def _build_response_plan(
+        self,
+        meaning_state: Dict[str, Any],
+        grounded_evidence: Optional[Any] = None,
+        cfg: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        plan_cfg = cfg if isinstance(cfg, dict) else self._meaning_pipeline_cfg()
+        plan_cfg.setdefault("must_avoid", ["ai_identity_claim", "no_feelings_claim", "provider_claim"])
+        return _pipeline_build_response_plan(
+            meaning_state=meaning_state,
+            grounded_evidence=grounded_evidence,
+            cfg=plan_cfg,
+        )
+
+    def _meaning_artifact_paths(self) -> Dict[str, str]:
+        return {
+            "meaning_state": _resolve_meaning_artifact_path("meaning_state.jsonl"),
+            "response_plan": _resolve_meaning_artifact_path("response_plan.jsonl"),
+            "semantic_eval": _resolve_meaning_artifact_path("semantic_eval.jsonl"),
+            "rejection_stats": _resolve_meaning_artifact_path("rejection_reason_stats.json"),
+        }
+
+    def _log_meaning_pipeline_artifacts(
+        self,
+        meaning_state: Optional[Dict[str, Any]],
+        response_plan: Optional[Dict[str, Any]],
+        grounding_evidence: Optional[Any] = None,
+    ) -> None:
+        if not self._meaning_pipeline_enabled():
+            return
+        if not meaning_state:
+            return
+        paths = self._meaning_artifact_paths()
+        _write_jsonl_safe(paths["meaning_state"], {
+            "ts": float(time.time()),
+            "turn_id": meaning_state.get("turn_id"),
+            "intent": meaning_state.get("intent"),
+            "uncertainty": meaning_state.get("uncertainty"),
+            "entities": meaning_state.get("entities", []),
+            "answer_type": (response_plan or {}).get("answer_type", "direct"),
+        })
+        if response_plan:
+            rec_plan = dict(response_plan)
+            if grounding_evidence is not None:
+                rec_plan["grounded_evidence_count"] = len(list(grounding_evidence))
+            _write_jsonl_safe(paths["response_plan"], rec_plan)
+
+    def _emit_llm_response_with_plan(
+        self,
+        prompt: str,
+        meaning_state: Optional[Dict[str, Any]],
+        response_plan: Optional[Dict[str, Any]],
+        generation_contract: Optional[Dict[str, Any]] = None,
+        mem=None,
+        affect_state=None,
+        max_len: int = 100,
+    ):
+        adapter = getattr(self, 'llm_adapter', None) or getattr(self, 'llm', None)
+        if adapter is None:
+            return None, "[System: LLM Adapter not connected]"
+
+        contract = generation_contract or _pipeline_build_generation_contract(response_plan, meaning_state=meaning_state)
+        try:
+            response = adapter.generate(
+                prompt,
+                mem=mem,
+                affect_state=affect_state,
+                max_len=max_len,
+                meaning_state=meaning_state,
+                response_plan=response_plan,
+                generation_contract=contract,
+            )
+            response = self._postprocess_llm_response(response)
+        except Exception as e:
+            if generation_contract is None:
+                logging.debug(f"LLM generate(pipeline) failed: {e}")
+            return None, str(e)
+
+        if not response or not response.strip():
+            return None, "EMPTY"
+
+        response = response.strip()
+        if self._is_disallowed_llm_response(response):
+            return None, response
+        self._chat_history.append({'role': 'assistant', 'text': response, 't': int(getattr(self, 't', 0))})
+        if getattr(self, 'bus', None) is not None:
+            try:
+                vec_resp = self.feature_bank._hash_embed(response, self.feature_bank.embed_dim) if getattr(self, 'feature_bank', None) else np.zeros((32,), np.float32)
+                self.bus.push('system', 'utter.self', vec_resp.astype(np.float32), salience=0.8, confidence=1.0, ttl=10)
+            except Exception:
+                pass
+        return response, None
+
     def _postprocess_llm_response(self, text: str) -> str:
         if not text:
             return text
@@ -11194,9 +11430,58 @@ class M3ConsciousnessCore:
             self._record_dialog_trace(None, msg, response, prompt)
             return response
 
+        self._last_meaning_state = None
+        self._last_response_plan = None
+        apply_meaning = self._meaning_pipeline_enabled()
+        err: Optional[str] = None
+        response: Optional[str] = None
+        meaning_state: Optional[Dict[str, Any]] = None
+        response_plan: Optional[Dict[str, Any]] = None
+        grounded_evidence: Optional[list] = None
+        generation_contract: Optional[Any] = None
+
+        if apply_meaning:
+            try:
+                core_state = self._collect_core_state_for_meaning()
+                meaning_state = self._build_meaning_state(
+                    user_text=msg,
+                    chat_history=list(getattr(self, '_chat_history', [])),
+                    core_state=core_state,
+                )
+                meaning_state, grounded_evidence = self._ground_meaning_state(
+                    meaning_state=meaning_state,
+                    chat_history=list(getattr(self, '_chat_history', [])),
+                    core_state=core_state,
+                )
+                response_plan = self._build_response_plan(
+                    meaning_state=meaning_state,
+                    grounded_evidence=grounded_evidence,
+                )
+                generation_contract = _pipeline_build_generation_contract(response_plan, meaning_state=meaning_state)
+                self._last_meaning_state = meaning_state
+                self._last_response_plan = response_plan
+                self._log_meaning_pipeline_artifacts(meaning_state, response_plan, grounded_evidence)
+            except Exception:
+                apply_meaning = False
+
         affect = self._collect_affect_state_for_llm()
         mem = self._collect_llm_memory(adapter, affect_state=affect)
-        response, err = self._emit_llm_response(prompt, mem=mem, affect_state=affect, max_len=100)
+        if apply_meaning:
+            try:
+                response, err = self._emit_llm_response_with_plan(
+                    prompt,
+                    meaning_state=meaning_state,
+                    response_plan=response_plan,
+                    generation_contract=generation_contract,
+                    mem=mem,
+                    affect_state=affect,
+                    max_len=100,
+                )
+            except Exception as e:
+                err = str(e)
+                response = None
+        if response is None:
+            response, err = self._emit_llm_response(prompt, mem=mem, affect_state=affect, max_len=100)
         if response is not None:
             self._apply_dialog_verifier_reward(msg, response)
             self._record_dialog_trace(adapter, msg, response, prompt)
@@ -13418,7 +13703,7 @@ class M3ConsciousnessCore:
 
     def _log_runtime_event(self, kind: str, **payload: Any) -> None:
         try:
-            path = os.path.join(self.outdir, "llm_adapter.log")
+            path = _resolve_llm_adapter_log_path("llm_adapter.log")
             rec = {"kind": str(kind), "t": int(getattr(self, "t", 0))}
             rec.update(payload)
             _write_jsonl_safe(path, rec)
@@ -16283,7 +16568,7 @@ def build_parser():
     ap.add_argument('--n', type=int, default=512, help='Number of nodes')
     ap.add_argument('--K', type=int, default=8, help='Number of categories')
     ap.add_argument('--seed', type=int, default=None, help='Random seed (None=random)')
-    ap.add_argument('--outdir', type=str, default='docs&tests&data_sets/tests/logs', help='Output directory')
+    ap.add_argument('--outdir', type=str, default=_default_docs_outdir(), help='Output directory')
     ap.add_argument('--no-gui', action='store_true', help='Run without GUI (default: GUI enabled)')
     # ARC options (optional)
     ap.add_argument('--arc_dir', type=str, default=None, help='ARC problems folder (JSON files, recursive)')

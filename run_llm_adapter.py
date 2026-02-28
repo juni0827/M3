@@ -116,6 +116,17 @@ project_root = Path(__file__).resolve().parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+# Centralize adapter logs under docs_tests_data by default.
+default_log_dir = (project_root / "docs_tests_data").resolve()
+try:
+    default_log_dir.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+default_log_path = str((default_log_dir / "llm_adapter.log").resolve())
+os.environ.setdefault("LLM_ADAPTER_LOG_DIR", str(default_log_dir))
+os.environ.setdefault("LLM_ADAPTER_LOG_PATH", default_log_path)
+os.environ.setdefault("LLM_ADAPTER_LOG", default_log_path)
+
 print(f"Project root: {project_root}")
 
 from llm_adapter import attach_llm_to_core, TorchConversationalPolicy

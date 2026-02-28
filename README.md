@@ -2,6 +2,7 @@
 
 이 문서는 이 저장소의 **모든 Python 코드 파일**(모듈/클래스/함수/메서드)과 상호 연결 로직을 정리한 상세 아키텍처 문서입니다.
 This README provides a architecture map of all Python modules/classes/functions and their integration flows.
+If Mermaid blocks render as plain text in your editor, open `docs_tests_data/VISUAL_MAP.svg` after running the status packet generator.
 
 ## 1) 전체 구조 요약
 
@@ -53,20 +54,23 @@ sequenceDiagram
 ## 4) 파일별 코드 인벤토리 (모듈/클래스/함수/메서드)
 
 ### `llm_adapter/__init__.py`
+
 - 모듈명: `llm_adapter`
 - 코드 라인 수: **66**
 - Top-level 클래스 수: **0** / Top-level 함수 수: **0**
 
-**클래스 목록**: 없음
+#### 클래스 목록: 없음 (`llm_adapter/__init__.py`)
 
-**함수 목록**: 없음
+#### 함수 목록: 없음 (`llm_adapter/__init__.py`)
 
 ### `llm_adapter/config.py`
+
 - 모듈명: `llm_adapter.config`
 - 코드 라인 수: **564**
 - Top-level 클래스 수: **22** / Top-level 함수 수: **6**
 
-**클래스 목록**
+### 클래스 목록
+
 - `M3StateEncoderConfig` (line 18)
 - `M3StateCacheConfig` (line 32)
 - `M3AwareDecoderLayerConfig` (line 45)
@@ -90,7 +94,8 @@ sequenceDiagram
 - `NeuroModulatorConfig` (line 293) — NeuroModulator weight-level consciousness control 설정
 - `M3LLMConfig` (line 327) → methods: `from_json`, `to_json`
 
-**함수 목록**
+#### 함수 목록 (`llm_adapter/config.py`)
+
 - `set_global_config` (line 423)
 - `get_global_config` (line 429)
 - `create_default_config_file` (line 439)
@@ -99,21 +104,25 @@ sequenceDiagram
 - `validate_config` (line 494)
 
 ### `llm_adapter/layers.py`
+
 - 모듈명: `llm_adapter.layers`
 - 코드 라인 수: **133**
 - Top-level 클래스 수: **1** / Top-level 함수 수: **0**
 
-**클래스 목록**
+#### 클래스 목록 (`llm_adapter/layers.py`)
+
 - `PlasticBitLinear` (line 9) → methods: `__init__`, `forward`, `_quantize_weight`, `_hebbian_update`, `consolidate`, `extra_repr`
 
-**함수 목록**: 없음
+#### 함수 목록: 없음 (`llm_adapter/layers.py`)
 
 ### `llm_adapter/llm_core.py`
+
 - 모듈명: `llm_adapter.llm_core`
 - 코드 라인 수: **7984**
 - Top-level 클래스 수: **8** / Top-level 함수 수: **3**
 
-**클래스 목록**
+#### 클래스 목록 (`llm_adapter/llm_core.py`)
+
 - `M3StateEncoder` (line 154) → methods: `__init__`, `_infer_nhead`, `_infer_fusion_layers`, `_infer_dropout`, `_lazy_init_projections`, `forward`
 - `M3StateCache` (line 373) → methods: `__init__`, `_infer_cache_size`, `_infer_phi_trend_window`, `update`, `get_current_panels`, `get_phi_trend`
 - `M3AwareDecoderLayer` (line 484) → methods: `__init__`, `_infer_nhead`, `_infer_dropout`, `forward`
@@ -123,17 +132,20 @@ sequenceDiagram
 - `UnifiedM3Policy` (line 5460) → methods: `__init__`, `set_motor_policy`, `sample_action`, `update_motor`
 - `PlasticBrainPolicy` (line 5487) → methods: `__init__`, `sample`, `_state_vector`, `learn`, `generate`
 
-**함수 목록**
+#### 함수 목록 (`llm_adapter/llm_core.py`)
+
 - `_resolve_torch_device` (line 1562)
 - `_attach_control_compat` (line 5544)
 - `attach_llm_to_core` (line 5617)
 
 ### `llm_adapter/m3_control_bridge.py`
+
 - 모듈명: `llm_adapter.m3_control_bridge`
 - 코드 라인 수: **649**
 - Top-level 클래스 수: **8** / Top-level 함수 수: **2**
 
-**클래스 목록**
+#### 클래스 목록 (`llm_adapter/m3_control_bridge.py`)
+
 - `M3BridgeControls` (line 13)
 - `M3ControlBridge` (line 19) → methods: `__init__`, `_prepare_state`, `forward`, `regularization_loss`, `renorm_parameters`
 - `LayerGateRuntime` (line 148) → methods: `__init__`, `close`, `apply`
@@ -143,40 +155,47 @@ sequenceDiagram
 - `NeuroModulator` (line 329) → methods: `__init__`, `_prepare_state`, `_warmup_factor`, `forward`, `online_loss`, `renorm_parameters`, `maybe_apply_spectral_norm`
 - `NeuroModulatorRuntime` (line 582) → methods: `__init__`, `apply`, `close`
 
-**함수 목록**
+#### 함수 목록 (`llm_adapter/m3_control_bridge.py`)
+
 - `_to_module_list` (line 103)
 - `find_decoder_layers` (line 113)
 
 ### `llm_adapter/m3_plastic_policy.py`
+
 - 모듈명: `llm_adapter.m3_plastic_policy`
 - 코드 라인 수: **270**
 - Top-level 클래스 수: **1** / Top-level 함수 수: **0**
 
-**클래스 목록**
+#### 클래스 목록 (`llm_adapter/m3_plastic_policy.py`)
+
 - `M3PlasticPolicy` (line 15) → methods: `__init__`, `encoder`, `reset_state`, `forward`, `sample`, `sleep`, `learn_from_text`
 
-**함수 목록**: 없음
+#### 함수 목록: 없음 (`llm_adapter/m3_plastic_policy.py`)
 
 ### `llm_adapter/memory.py`
+
 - 모듈명: `llm_adapter.memory`
 - 코드 라인 수: **409**
 - Top-level 클래스 수: **3** / Top-level 함수 수: **0**
 
-**클래스 목록**
+#### 클래스 목록 (`llm_adapter/memory.py`)
+
 - `M3EpisodicMemoryRetriever` (line 15) → methods: `__init__`, `_get_episode_list`, `_current_qualia_vector`, `_episode_embedding`, `_select_query_vector`, `_compute_similarity_scores`, `_infer_top_k`, `retrieve_relevant_episodes`
 - `KNNItem` (line 275)
 - `ConditionalKNNIndex` (line 280) → methods: `__init__`, `_norm`, `_softmax`, `add`, `_downsample`, `query`
 
-**함수 목록**: 없음
+#### 함수 목록: 없음 (`llm_adapter/memory.py`)
 
 ### `llm_adapter/remote.py`
+
 - 모듈명: `llm_adapter.remote`
 - 코드 라인 수: **380**
 - Top-level 클래스 수: **0** / Top-level 함수 수: **6**
 
-**클래스 목록**: 없음
+#### 클래스 목록: 없음 (`llm_adapter/remote.py`)
 
-**함수 목록**
+#### 함수 목록 (`llm_adapter/remote.py`)
+
 - `_get_system_prompt` (line 19)
 - `_system_prompt_mode` (line 26)
 - `_system_prompt_enabled` (line 30)
@@ -185,46 +204,54 @@ sequenceDiagram
 - `get_local_thinking` (line 76)
 
 ### `llm_adapter/tokenization.py`
+
 - 모듈명: `llm_adapter.tokenization`
 - 코드 라인 수: **184**
 - Top-level 클래스 수: **1** / Top-level 함수 수: **0**
 
-**클래스 목록**
+#### 클래스 목록 (`llm_adapter/tokenization.py`)
+
 - `M3Tokenizer` (line 11) → methods: `__init__`, `PAD`, `BOS`, `EOS`, `encode`, `decode`, `vocab_size`, `train`, `save`, `from_config`
 
-**함수 목록**: 없음
+#### 함수 목록: 없음 (`llm_adapter/tokenization.py`)
 
 ### `m3/__init__.py`
+
 - 모듈명: `m3`
 - 코드 라인 수: **76**
 - Top-level 클래스 수: **0** / Top-level 함수 수: **4**
 
-**클래스 목록**: 없음
+#### 클래스 목록: 없음 (`m3/__init__.py`)
 
-**함수 목록**
+#### 함수 목록 (`m3/__init__.py`)
+
 - `get_device` (line 22)
 - `require_cuda_device` (line 31)
 - `_resolve_cached_device` (line 36)
 - `__getattr__` (line 47)
 
 ### `m3/config.py`
+
 - 모듈명: `m3.config`
 - 코드 라인 수: **57**
 - Top-level 클래스 수: **1** / Top-level 함수 수: **0**
 
-**클래스 목록**
+#### 클래스 목록 (`m3/config.py`)
+
 - `_CESConfig` (line 37)
 
-**함수 목록**: 없음
+#### 함수 목록: 없음 (`m3/config.py`)
 
 ### `m3/device.py`
+
 - 모듈명: `m3.device`
 - 코드 라인 수: **126**
 - Top-level 클래스 수: **0** / Top-level 함수 수: **5**
 
-**클래스 목록**: 없음
+#### 클래스 목록: 없음 (`m3/device.py`)
 
-**함수 목록**
+#### 함수 목록 (`m3/device.py`)
+
 - `_as_torch_module` (line 7)
 - `_normalize_device_string` (line 17)
 - `resolve_torch_device` (line 21)
@@ -232,27 +259,32 @@ sequenceDiagram
 - `resolve_torch_device_obj` (line 110)
 
 ### `m3/features.py`
+
 - 모듈명: `m3.features`
 - 코드 라인 수: **364**
 - Top-level 클래스 수: **3** / Top-level 함수 수: **4**
 
-**클래스 목록**
+#### 클래스 목록 (`m3/features.py`)
+
 - `HebbianMemory` (line 13) → methods: `__post_init__`, `update`, `read`, `store_episode`, `replay_episode`, `similarity_score`, `similarity_search`, `retrieve_similar_episodes`
 - `FeatureSpec` (line 143)
 - `Scope` (line 295) → methods: `encode`
 
-**함수 목록**
+#### 함수 목록 (`m3/features.py`)
+
 - `pack_scalar` (line 163)
 - `pack_stats_sample` (line 176)
 - `pack_spatial_pool` (line 195)
 - `pack_learned_proj` (line 256)
 
 ### `m3/m3_core.py`
+
 - 모듈명: `m3.m3_core`
 - 코드 라인 수: **17250**
 - Top-level 클래스 수: **60** / Top-level 함수 수: **6**
 
-**클래스 목록**
+#### 클래스 목록 (`m3/m3_core.py`)
+
 - `Message` (line 90)
 - `SpanMeta` (line 100)
 - `MessageBus` (line 111) → methods: `__init__`, `register_module`, `send`, `receive`, `receive_all`, `get_stats`, `register_span`, `close_span`, `route_credit`
@@ -314,7 +346,8 @@ sequenceDiagram
 - `AutoNamer` (line 9487) → methods: `__init__`, `_slug`, `_hash`, `spec_name`, `token_name_policy`
 - `M3ConsciousnessCore` (line 9750) → methods: `__init__`, `_get_current_world_state`, `_collect_affect_state_for_llm`, `_collect_llm_memory`, `_build_llm_prompt`, `_postprocess_llm_response`, `_is_backend_or_error_response`, `_is_disallowed_llm_response`, `_verifier_tokens`, `_evaluate_dialog_accuracy`, `_apply_dialog_verifier_reward`, `_emit_llm_response`, `_memory_semantic_prefix`, `_semantic_text_for_embedding`, `_current_memory_qualia_vector`, `_current_memory_phi`, `_encode_semantic_memory_trace`, `_record_dialog_trace`, `_llm_fallback_text`, `handle_user_message`, `_generate_utterance`, `_save_checkpoint`, `_load_checkpoint`, `_save_chat_history`, `_load_chat_history`, `run_autonomous`, `_decide_action`, `snapshot`, `export_state_vector`, `_scheduler_update`, `_policy_obs`, `extract_embedding`, `_torch_shared_z`, `_align_z_for_sdm`, `_cda_rollout_advantages`, `grow_feature_bank`, `_action_vector`, `_plan_action_cem`, `_ab_test_rule`, `_policy_signals`, `_safe_eval_expr`, `_synthesize_policy_rule`, `_execute_action`, `_submit_to_workspace`, `_experience_qualia`, `_evaluate_action_outcome`, `_get_structure_snapshot`, `_apply_structure_snapshot`, `_evaluate_structure`, `_snapshot_feature_state`, `_restore_feature_state`, `_sandbox_evaluate_specs`, `run_meta_proposal_cycle`, `set_vision_folder`, `set_vision_loop`, `set_vision_shuffle`, `set_vision_camera`, `push_external_frame`, `clear_vision_source`, `_reflect_and_learn`, `_make_bar`, `_should_terminate`, `_update_visualization`, `_scope_build_pred_err_map`, `_scope_compute_td_error`, `_scope_get_gw_ignition`, `_vision_resize_nn`, `_vision_build_retina`, `_vision_optical_flow`, `_vision_depth_from_flow`, `_vision_compute_error`, `_vision_features`, `describe_current_vision`, `_mix_err_maps`, `set_spatial_goal`, `set_spatial_goal3d`, `_space_step_attention`, `_space_compose_image`, `_log_state`, `_print_summary`, `_flush_logs`, `_recent_policy_avg`, `_save_policy_snapshots`, `policy_report`, `solve_arc_dir`, `_arc_load_problem`, `_arc_cache_path`, `_arc_load_cache`, `_arc_save_cache`, `_arc_update_cache`, `_arc_compile_macros`, `_arc_rot90`, `_arc_rot180`, `_arc_rot270`, `_arc_flip_h`, `_arc_flip_v`, `_arc_transpose`, `_arc_identity`, `_arc_connected_components`, `_arc_bbox_of_largest_region`, `_arc_fill_bbox`, `_arc_mode_color`, `_arc_out_mode_from_train`, `_arc_keep_largest`, `_arc_crop_largest`, `_arc_move_largest_tl`, `_arc_center_largest`, `_arc_paint_largest_outmode`, `_arc_bbox_border_largest`, `_arc_palette_map_from_train`, `_arc_remap_hist`, `_introspect_internal_state`, `_research_m3_state_summary`, `_generate_research_plan`, `_creative_output_path`, `_append_creative_output`, `run_autonomous_creation`, `_detect_research_needs_from_internal_dynamics`, `_formulate_research_question_from_need`, `_generate_cognitive_plan`, `_execute_cognitive_step`, `_conduct_investigation`, `_single_consciousness_step`, `_extract_variable_value`, `_inject_perturbation`, `run_autonomous_research`, `_discover_datasets`, `_learn_text_data`, `_learn_json_data`, `_learn_tsv_data`, `_learn_vector_data`, `_learn_image_data`, `_learn_legal_case`, `_learn_word2vec_model`, `_learn_entity_embedding`, `_feed_features_to_memory`, `learn_from_dataset`, `run_autonomous_learning`, `_arc_ops_library`, `_arc_apply_program`, `_arc_score_program`, `_arc_search`, `_bootstrap_ci`, `run_research`
 
-**함수 목록**
+#### 함수 목록 (`m3/m3_core.py`)
+
 - `_write_jsonl_safe` (line 16)
 - `_default_torch_device` (line 44)
 - `_m3_torch_device` (line 9567)
@@ -323,11 +356,13 @@ sequenceDiagram
 - `_scope_compute_arousal` (line 15573)
 
 ### `m3/reward.py`
+
 - 모듈명: `m3.reward`
 - 코드 라인 수: **622**
 - Top-level 클래스 수: **7** / Top-level 함수 수: **1**
 
-**클래스 목록**
+#### 클래스 목록 (`m3/reward.py`)
+
 - `DriveTier` (line 50)
 - `Drive` (line 58) → methods: `evaluate`
 - `_TorchAffectEncoder` (line 92) → methods: `__init__`, `forward`
@@ -336,15 +371,18 @@ sequenceDiagram
 - `AffectOverrideConfig` (line 366)
 - `RewardSystem` (line 375) → methods: `__init__`, `_register_viability_drive`, `_register_affect_core_drives`, `create_derived_drive`, `deactivate_drive`, `evaluate_all`, `total_cost`
 
-**함수 목록**
+#### 함수 목록 (`m3/reward.py`)
+
 - `_resolve_device` (line 33)
 
 ### `m3/torch_policy.py`
+
 - 모듈명: `m3.torch_policy`
 - 코드 라인 수: **605**
 - Top-level 클래스 수: **12** / Top-level 함수 수: **1**
 
-**클래스 목록**
+#### 클래스 목록 (`m3/torch_policy.py`)
+
 - `_Expert` (line 33) → methods: `__init__`, `forward`
 - `_MoEFFN` (line 42) → methods: `__init__`, `forward`
 - `TorchSharedRepr` (line 67) → methods: `__init__`, `forward`
@@ -358,32 +396,38 @@ sequenceDiagram
 - `BRItem` (line 410)
 - `BRPolicy` (line 419) → methods: `__init__`, `sigma`, `set_active_specs`, `set_gate_bias`, `sample`, `diagnose`, `record`, `end_batch`, `update_from_delayed_reward`
 
-**함수 목록**
+#### 함수 목록 (`m3/torch_policy.py`)
+
 - `_resolve_device` (line 24)
 
 ### `m3/visualization.py`
+
 - 모듈명: `m3.visualization`
 - 코드 라인 수: **346**
 - Top-level 클래스 수: **3** / Top-level 함수 수: **3**
 
-**클래스 목록**
+#### 클래스 목록 (`m3/visualization.py`)
+
 - `Retinizer` (line 91) → methods: `__call__`
 - `FeatureSummarizer` (line 166) → methods: `__post_init__`, `__call__`
 - `GlitchEncoder` (line 288) → methods: `__call__`
 
-**함수 목록**
+#### 함수 목록 (`m3/visualization.py`)
+
 - `get_hilbert_map` (line 19)
 - `hilbert_index_to_xy` (line 47)
 - `vector_to_grid` (line 65)
 
 ### `run_llm_adapter.py`
+
 - 모듈명: `run_llm_adapter`
 - 코드 라인 수: **723**
 - Top-level 클래스 수: **0** / Top-level 함수 수: **18**
 
-**클래스 목록**: 없음
+#### 클래스 목록: 없음 (`run_llm_adapter.py`)
 
-**함수 목록**
+#### 함수 목록 (`run_llm_adapter.py`)
+
 - `_safe_print` (line 171)
 - `_bool_env` (line 180)
 - `_coerce_env_value` (line 187)
@@ -418,7 +462,7 @@ sequenceDiagram
 ### 구성 (`NeuroModulatorConfig`)
 
 | 필드 | 기본값 | 설명 |
-|------|--------|------|
+| ------ | -------- | ------ |
 | `enabled` | `false` | NeuroModulator 활성화 여부 (기본 비활성; `M3_ENABLE_NEURO_MODULATOR=1` 또는 설정으로 활성화) |
 | `state_dim` | `256` | M3 상태 벡터 차원 |
 | `trunk_dim` | `256` | 트렁크 네트워크 차원 |
@@ -436,7 +480,7 @@ sequenceDiagram
 ### 환경 변수 오버라이드
 
 | 환경 변수 | 대응 설정 |
-|-----------|-----------|
+| ----------- | ----------- |
 | `M3_ENABLE_NEURO_MODULATOR` | `enabled` |
 | `M3_NEURO_STATE_DIM` | `state_dim` |
 | `M3_NEURO_TRUNK_DIM` | `trunk_dim` |
@@ -469,14 +513,18 @@ sequenceDiagram
 ## Status Packet Automation
 
 This repository includes a GitHub Actions automation that builds a deterministic "Status Packet" on:
+
 - push to `main`
 - every `pull_request`
 - daily schedule (`UTC 00:00`)
 
 Generated files:
-- `docs/STATUS.md`
-- `docs/ARCHITECTURE_STATE.md`
-- `docs/RUNBOOK.md`
-- `docs/BACKLOG.md`
 
-The generator is `tools/build_status_packet.py` and reads optional runtime artifacts from `artifacts/latest_run` (for example `metrics.json`, `run_summary.json`, and latest `*.jsonl`). If artifacts are missing, docs are still generated with `UNKNOWN` markers.
+- `docs_tests_data/STATUS.md`
+- `docs_tests_data/ARCHITECTURE_STATE.md`
+- `docs_tests_data/RUNBOOK.md`
+- `docs_tests_data/BACKLOG.md`
+- `docs_tests_data/VISUAL_MAP.md`
+- `docs_tests_data/VISUAL_MAP.svg` (single consolidated visual dashboard, no Mermaid renderer required)
+
+The generator is `tools/build_status_packet.py` and reads optional runtime artifacts from `docs_tests_data/artifacts/latest_run` (for example `metrics.json`, `run_summary.json`, and latest `*.jsonl`). If artifacts are missing, docs are still generated with `UNKNOWN` markers.
