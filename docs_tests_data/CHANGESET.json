@@ -1,350 +1,86 @@
 {
-  "base_sha": "f62cbd67bfd7b868bdfba3b693e31250e08384be",
+  "base_sha": "12bf33713188dd51df20b53081ebd3918d664065",
   "changes": [
     {
       "added": 1765,
-      "churn": 1765,
-      "deleted": 0,
+      "churn": 3530,
+      "deleted": 1765,
       "path": "docs_tests_data/CLASS_INDEX.json",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 0,
-      "churn": 1634,
-      "deleted": 1634,
-      "path": "log/logs/architecture_scan.json",
-      "status": "D",
-      "status_raw": "D"
+      "status": "M",
+      "status_raw": "M"
     },
     {
       "added": 1016,
-      "churn": 1016,
-      "deleted": 0,
+      "churn": 2032,
+      "deleted": 1016,
       "path": "docs_tests_data/CLASS_CATALOG.md",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 527,
-      "churn": 1006,
-      "deleted": 479,
-      "path": "README.md",
       "status": "M",
       "status_raw": "M"
     },
     {
-      "added": 0,
-      "churn": 899,
-      "deleted": 899,
-      "path": "log/logs/architecture_functions.csv",
-      "status": "D",
-      "status_raw": "D"
-    },
-    {
-      "added": 695,
-      "churn": 695,
-      "deleted": 0,
-      "path": "docs_tests_data/tests/test_m3_plan_features.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 507,
-      "churn": 576,
-      "deleted": 69,
-      "path": "tools/build_status_packet.py",
+      "added": 350,
+      "churn": 355,
+      "deleted": 5,
+      "path": "docs_tests_data/CHANGESET.json",
       "status": "M",
       "status_raw": "M"
     },
     {
-      "added": 484,
-      "churn": 550,
-      "deleted": 66,
-      "path": "llm_adapter/llm_core.py",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 490,
-      "churn": 490,
-      "deleted": 0,
-      "path": "m3/meaning_pipeline.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 438,
-      "churn": 438,
-      "deleted": 0,
-      "path": "llm_adapter/semantic_scorer.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 300,
-      "churn": 315,
-      "deleted": 15,
-      "path": "m3/m3_core.py",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 0,
-      "churn": 264,
-      "deleted": 264,
-      "path": "docs&tests&data_sets/tests/logs/bus.jsonl",
-      "status": "D",
-      "status_raw": "D"
-    },
-    {
-      "added": 196,
-      "churn": 196,
-      "deleted": 0,
-      "path": "docs_tests_data/tests/test_neuro_modulator.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 0,
-      "churn": 182,
-      "deleted": 182,
-      "path": "docs_pr_plan.md",
-      "status": "D",
-      "status_raw": "D"
-    },
-    {
-      "added": 117,
-      "churn": 117,
-      "deleted": 0,
-      "path": "llm_adapter/config.py",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 0,
-      "churn": 117,
-      "deleted": 117,
-      "path": "log/logs/architecture_classes.csv",
-      "status": "D",
-      "status_raw": "D"
-    },
-    {
-      "added": 0,
-      "churn": 64,
-      "deleted": 64,
-      "path": "docs/ARCHITECTURE_STATE.md",
-      "status": "D",
-      "status_raw": "D"
-    },
-    {
-      "added": 55,
-      "churn": 55,
-      "deleted": 0,
+      "added": 161,
+      "churn": 216,
+      "deleted": 55,
       "path": "docs_tests_data/VISUAL_MAP.svg",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 23,
-      "churn": 46,
-      "deleted": 23,
-      "path": "llm_adapter/tokenization.py",
       "status": "M",
       "status_raw": "M"
-    },
-    {
-      "added": 0,
-      "churn": 45,
-      "deleted": 45,
-      "path": "docs/BACKLOG.md",
-      "status": "D",
-      "status_raw": "D"
     },
     {
       "added": 45,
-      "churn": 45,
-      "deleted": 0,
+      "churn": 90,
+      "deleted": 45,
       "path": "docs_tests_data/ARCHITECTURE_STATE.md",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 0,
-      "churn": 44,
-      "deleted": 44,
-      "path": "docs/STATUS.md",
-      "status": "D",
-      "status_raw": "D"
-    },
-    {
-      "added": 0,
-      "churn": 42,
-      "deleted": 42,
-      "path": "docs/RUNBOOK.md",
-      "status": "D",
-      "status_raw": "D"
-    },
-    {
-      "added": 0,
-      "churn": 41,
-      "deleted": 41,
-      "path": "docs&tests&data_sets/tests/logs/episodic_memory.jsonl",
-      "status": "D",
-      "status_raw": "D"
+      "status": "M",
+      "status_raw": "M"
     },
     {
       "added": 40,
-      "churn": 40,
-      "deleted": 0,
-      "path": "docs_tests_data/STATUS.md",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 0,
-      "churn": 40,
+      "churn": 80,
       "deleted": 40,
-      "path": "path/to/M3AdaptiveSampler.py",
-      "status": "D",
-      "status_raw": "D"
-    },
-    {
-      "added": 27,
-      "churn": 28,
-      "deleted": 1,
-      "path": "llm_adapter/memory.py",
+      "path": "docs_tests_data/STATUS.md",
       "status": "M",
       "status_raw": "M"
     },
     {
-      "added": 27,
-      "churn": 27,
-      "deleted": 0,
-      "path": "llm_adapter/meaning_pipeline.py",
-      "status": "A",
-      "status_raw": "A"
+      "added": 60,
+      "churn": 74,
+      "deleted": 14,
+      "path": "docs_tests_data/CHANGE_REPORT.md",
+      "status": "M",
+      "status_raw": "M"
     },
     {
       "added": 25,
-      "churn": 25,
-      "deleted": 0,
+      "churn": 50,
+      "deleted": 25,
       "path": "docs_tests_data/RUNBOOK.md",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 17,
-      "churn": 24,
-      "deleted": 7,
-      "path": ".github/workflows/status_packet.yml",
       "status": "M",
       "status_raw": "M"
     },
     {
       "added": 17,
-      "churn": 18,
-      "deleted": 1,
-      "path": "tests/test_neuro_modulator.py",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 17,
-      "churn": 17,
-      "deleted": 0,
+      "churn": 34,
+      "deleted": 17,
       "path": "docs_tests_data/BACKLOG.md",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 14,
-      "churn": 14,
-      "deleted": 0,
-      "path": "docs_tests_data/CHANGE_REPORT.md",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 11,
-      "churn": 11,
-      "deleted": 0,
-      "path": "run_llm_adapter.py",
       "status": "M",
       "status_raw": "M"
     },
     {
       "added": 9,
-      "churn": 9,
-      "deleted": 0,
+      "churn": 18,
+      "deleted": 9,
       "path": "docs_tests_data/VISUAL_MAP.md",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 5,
-      "churn": 8,
-      "deleted": 3,
-      "path": ".gitignore",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 5,
-      "churn": 5,
-      "deleted": 0,
-      "path": "docs_tests_data/CHANGESET.json",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 2,
-      "churn": 4,
-      "deleted": 2,
-      "path": "config/m3_config.example.json",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 1,
-      "churn": 2,
-      "deleted": 1,
-      "path": "m3/config.py",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 0,
-      "churn": 0,
-      "deleted": 0,
-      "path": "docs_tests_data/env_profiles/env.balanced",
-      "status": "R",
-      "status_raw": "R100"
-    },
-    {
-      "added": 0,
-      "churn": 0,
-      "deleted": 0,
-      "path": "docs_tests_data/tokenizer.json",
-      "status": "R",
-      "status_raw": "R100"
-    },
-    {
-      "added": 0,
-      "churn": 0,
-      "deleted": 0,
-      "path": "{log/logs => docs_tests_data}/tokenizer.json",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 0,
-      "churn": 0,
-      "deleted": 0,
-      "path": "{logs => docs_tests_data}/env_profiles/env.balanced",
       "status": "M",
       "status_raw": "M"
     }
   ],
-  "head_sha": "12bf33713188dd51df20b53081ebd3918d664065"
+  "head_sha": "d4cb4a61a99be13d7cabdc7a7b20c782c93f531b"
 }
