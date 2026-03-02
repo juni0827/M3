@@ -1,86 +1,78 @@
 {
-  "base_sha": "12bf33713188dd51df20b53081ebd3918d664065",
+  "base_sha": "d4cb4a61a99be13d7cabdc7a7b20c782c93f531b",
   "changes": [
     {
-      "added": 1765,
-      "churn": 3530,
-      "deleted": 1765,
-      "path": "docs_tests_data/CLASS_INDEX.json",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 1016,
-      "churn": 2032,
-      "deleted": 1016,
-      "path": "docs_tests_data/CLASS_CATALOG.md",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 350,
-      "churn": 355,
-      "deleted": 5,
+      "added": 33,
+      "churn": 330,
+      "deleted": 297,
       "path": "docs_tests_data/CHANGESET.json",
       "status": "M",
       "status_raw": "M"
     },
     {
-      "added": 161,
-      "churn": 216,
-      "deleted": 55,
+      "added": 64,
+      "churn": 152,
+      "deleted": 88,
       "path": "docs_tests_data/VISUAL_MAP.svg",
       "status": "M",
       "status_raw": "M"
     },
     {
-      "added": 45,
-      "churn": 90,
-      "deleted": 45,
-      "path": "docs_tests_data/ARCHITECTURE_STATE.md",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 40,
-      "churn": 80,
-      "deleted": 40,
-      "path": "docs_tests_data/STATUS.md",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 60,
-      "churn": 74,
-      "deleted": 14,
+      "added": 15,
+      "churn": 63,
+      "deleted": 48,
       "path": "docs_tests_data/CHANGE_REPORT.md",
       "status": "M",
       "status_raw": "M"
     },
     {
-      "added": 25,
-      "churn": 50,
-      "deleted": 25,
-      "path": "docs_tests_data/RUNBOOK.md",
+      "added": 7,
+      "churn": 14,
+      "deleted": 7,
+      "path": "docs_tests_data/STATUS.md",
       "status": "M",
       "status_raw": "M"
     },
     {
-      "added": 17,
-      "churn": 34,
-      "deleted": 17,
+      "added": 2,
+      "churn": 4,
+      "deleted": 2,
+      "path": "docs_tests_data/ARCHITECTURE_STATE.md",
+      "status": "M",
+      "status_raw": "M"
+    },
+    {
+      "added": 2,
+      "churn": 4,
+      "deleted": 2,
       "path": "docs_tests_data/BACKLOG.md",
       "status": "M",
       "status_raw": "M"
     },
     {
-      "added": 9,
-      "churn": 18,
-      "deleted": 9,
+      "added": 2,
+      "churn": 4,
+      "deleted": 2,
+      "path": "docs_tests_data/CLASS_CATALOG.md",
+      "status": "M",
+      "status_raw": "M"
+    },
+    {
+      "added": 2,
+      "churn": 4,
+      "deleted": 2,
+      "path": "docs_tests_data/RUNBOOK.md",
+      "status": "M",
+      "status_raw": "M"
+    },
+    {
+      "added": 2,
+      "churn": 4,
+      "deleted": 2,
       "path": "docs_tests_data/VISUAL_MAP.md",
       "status": "M",
       "status_raw": "M"
     }
   ],
-  "head_sha": "d4cb4a61a99be13d7cabdc7a7b20c782c93f531b"
+  "head_sha": "8af7761eb62eb7c4cbf8338023afc660c3c8efa5"
 }
