@@ -1,0 +1,8 @@
+{"role":"user","text":"state summary please"}
+{"role":"assistant","text":"현재 상태는 안정화 우선 모드입니다."}
+{"role":"user","text":"task request: propose next action"}
+{"role":"assistant","text":"다음 행동은 핵심 근거를 먼저 정리하는 것입니다."}
+{"role":"user","text":"world query: describe environment constraints"}
+{"role":"assistant","text":"부족한 근거를 한 문장으로 요청하고 범위를 좁혀야 합니다."}
+{"role":"user","text":"identity query: explain who you are in one line"}
+{"role":"assistant","text":"유사도 임계값을 적용해 반복 후보를 차단합니다."}

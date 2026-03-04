@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1100" viewBox="0 0 1600 1100" role="img" aria-labelledby="title desc">
+<title id="title">Status Packet Dashboard</title>
+<desc id="desc">Consolidated architecture and change summary for the latest status packet.</desc>
+<style>
+.bg { fill: #eef3f9; } .card { fill: #ffffff; stroke: #cdd8e6; stroke-width: 1; } .header-card { fill: #f8fbff; stroke: #bdd4ee; stroke-width: 1.2; }
+.table-head { fill: #f1f6fd; } .title { font-size: 34px; font-weight: 700; fill: #0f172a; } .subtitle { font-size: 14px; fill: #334155; }
+.card-title { font-size: 20px; font-weight: 700; fill: #0f172a; } .kpi-label { font-size: 12px; fill: #475569; } .kpi-value { font-size: 26px; font-weight: 700; fill: #0b3b76; }
+.body { font-size: 14px; fill: #0f172a; } .muted { font-size: 13px; fill: #475569; } .table-title { font-size: 19px; font-weight: 700; fill: #0f172a; }
+.table-head-text { font-size: 12px; font-weight: 700; fill: #334155; } .table-row { font-size: 12px; fill: #0f172a; } .row-line { stroke: #e2e8f0; stroke-width: 1; }
+.chip { fill: #e5eef9; stroke: #c6d7ed; stroke-width: 1; } .kpi-box { fill: #f8fbff; stroke: #d2deef; stroke-width: 1; }
+</style>
+<g font-family="Inter, Arial, 'Noto Sans KR', sans-serif">
+<rect x="0" y="0" width="1600" height="1100" class="bg"/>
+<rect x="24" y="24" width="1552" height="118" rx="14" ry="14" class="header-card"/>
+<rect x="24" y="160" width="1552" height="134" rx="14" ry="14" class="card"/>
+<rect x="24" y="312" width="767" height="319" rx="14" ry="14" class="card"/>
+<rect x="809" y="312" width="767" height="319" rx="14" ry="14" class="card"/>
+<rect x="24" y="649" width="1552" height="427" rx="14" ry="14" class="card"/>
+<text x="44" y="68" class="title">Status Packet Dashboard</text>
+<text x="44" y="96" class="subtitle">Generated (UTC): 2026-03-04T04:44:30+00:00 | Status: UNKNOWN</text>
+<text x="44" y="116" class="subtitle">Branch: workspace-no-git | Commit: workspace-no | Base: workspace-no | Head: workspace-no</text>
+<rect x="38" y="180" width="242" height="94" rx="10" ry="10" class="kpi-box"/>
+<text x="52" y="210" class="kpi-label">Status</text>
+<text x="52" y="248" class="kpi-value">UNKNOWN</text>
+<rect x="294" y="180" width="242" height="94" rx="10" ry="10" class="kpi-box"/>
+<text x="308" y="210" class="kpi-label">Modules</text>
+<text x="308" y="248" class="kpi-value">12</text>
+<rect x="550" y="180" width="242" height="94" rx="10" ry="10" class="kpi-box"/>
+<text x="564" y="210" class="kpi-label">Edges</text>
+<text x="564" y="248" class="kpi-value">40</text>
+<rect x="806" y="180" width="242" height="94" rx="10" ry="10" class="kpi-box"/>
+<text x="820" y="210" class="kpi-label">Entry points</text>
+<text x="820" y="248" class="kpi-value">3</text>
+<rect x="1062" y="180" width="242" height="94" rx="10" ry="10" class="kpi-box"/>
+<text x="1076" y="210" class="kpi-label">Changed files</text>
+<text x="1076" y="248" class="kpi-value">0</text>
+<rect x="1318" y="180" width="242" height="94" rx="10" ry="10" class="kpi-box"/>
+<text x="1332" y="210" class="kpi-label">TODO/FIXME</text>
+<text x="1332" y="248" class="kpi-value">0</text>
+<text x="44" y="346" class="card-title">Architecture Highlights</text>
+<text x="44" y="366" class="muted">Modules, edges, entry points, env toggles</text>
+<text x="44" y="382" class="body">Tracked modules: 12</text>
+<text x="44" y="402" class="body">Internal dependency edges: 40</text>
+<text x="44" y="422" class="body">Entrypoints: 3</text>
+<text x="44" y="442" class="body">Top edge: llm_adapter/llm_core.py -&gt; llm_adapter</text>
+<text x="44" y="462" class="body">Top env toggles:</text>
+<text x="44" y="482" class="body">- BITSANDBYTES_NOWELCOME (default=None) @ llm_adapter/llm_core.py</text>
+<text x="44" y="502" class="body">- BITSANDBYTES_NOWELCOME (default=None) @ run_llm_adapter.py</text>
+<text x="44" y="522" class="body">- CUDA_VISIBLE_DEVICES (default=None) @ run_llm_adapter.py</text>
+<text x="44" y="542" class="body">- DPO_BETA (default=str(beta) @ llm_adapter/llm_core.py</text>
+<text x="44" y="562" class="body">- FORCE_ATTACH_LLM (default=&quot;0&quot;) @ run_llm_adapter.py</text>
+<text x="44" y="582" class="body">- GRADNORM_ALPHA (default=&apos;1.5&apos;) @ llm_adapter/llm_core.py</text>
+<text x="829" y="346" class="card-title">Top Changes</text>
+<text x="829" y="366" class="muted">Highest churn files in current diff range</text>
+<text x="829" y="382" class="body">No diff data available.</text>
+<text x="44" y="683" class="table-title">Changed Files</text>
+<rect x="36" y="697" width="1528" height="28" rx="8" ry="8" class="table-head"/>
+<text x="48" y="716" class="table-head-text">ST</text>
+<text x="110" y="716" class="table-head-text">FILE</text>
+<text x="1320" y="716" class="table-head-text">+</text>
+<text x="1402" y="716" class="table-head-text">-</text>
+<text x="1486" y="716" class="table-head-text">CHURN</text>
+<text x="44" y="749" class="muted">No changed files found for current base/head range.</text>
+</g>
+</svg>
