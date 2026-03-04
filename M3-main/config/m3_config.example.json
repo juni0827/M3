@@ -1,0 +1,62 @@
+{
+  "qualia": {
+    "enabled": true,
+    "k_temp_drift": 0.35,
+    "k_temp_stab": 0.25,
+    "k_lr_meta": -0.3,
+    "k_lr_intensity": 0.2,
+    "sigma_min": 0.001,
+    "sigma_max": 10.0,
+    "lr_min": 1e-05,
+    "lr_max": 0.05,
+    "k_replay_valence": 0.5,
+    "k_replay_intensity": 0.5,
+    "replay_bias_min": -1.0,
+    "replay_bias_max": 1.0,
+    "replay_kl_budget": 0.2,
+    "replay_kl_max": 0.8
+  },
+  "ces": {
+    "shard_prefix_bits": 10,
+    "wal_segment_bytes": 16777216,
+    "wal_use_memmap": false,
+    "wal_memmap_dir": "/tmp",
+    "cms_depth": 4,
+    "cms_width": 1048576,
+    "alpha": 0.3,
+    "topk_c": 6.0,
+    "topk_min": 8,
+    "topk_max": 64,
+    "promote_margin_min": 3,
+    "promote_margin_frac": 0.01,
+    "cooldown_updates": 8192,
+    "decay_half_life_updates": 10000,
+    "cms_rehash_window_updates": 20000,
+    "seed": 1337,
+    "row_cache_capacity": 200000
+  },
+  "torch_policy": {
+    "embed_dim": 1024,
+    "hidden_dim": 1024,
+    "num_layers": 6,
+    "nhead": 1,
+    "learning_rate": 0.0003,
+    "dropout": 0.1
+  },
+  "neuro_modulator": {
+    "enabled": false,
+    "state_dim": 256,
+    "trunk_dim": 256,
+    "hidden_rank": 16,
+    "logit_rank": 32,
+    "strength": 1.0,
+    "learning_rate": 1e-4,
+    "weight_decay": 1e-5,
+    "warmup_steps": 100,
+    "max_gain_delta": 0.3,
+    "max_logit_bias": 2.0,
+    "grad_clip_norm": 1.0,
+    "checkpoint_file": "neuro_modulator.pt"
+  },
+  "log_path": "docs_tests_data/bus.jsonl"
+}
