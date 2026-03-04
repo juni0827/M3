@@ -1,3 +1,4 @@
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 import torch
 import torch.nn as nn
 import numpy as np
@@ -33,9 +34,11 @@ class M3PlasticPolicy(nn.Module):
         )
         
         # Tokenizer
-        try:
+        with guard_context(ctx='llm_adapter/m3_plastic_policy.py:38', catch_base=False) as __m3_guard_36_8:
             self.tok = AutoTokenizer.from_config(get_global_config().tokenizer)
-        except Exception as e:
+
+        if __m3_guard_36_8.error is not None:
+            e = __m3_guard_36_8.error
             logger.warning(f"Tokenizer init failed: {e}, using default")
             self.tok = AutoTokenizer()
             

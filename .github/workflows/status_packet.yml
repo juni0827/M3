@@ -38,16 +38,8 @@ jobs:
         with:
           name: status-packet
           path: |
-            docs_tests_data/STATUS.md
-            docs_tests_data/ARCHITECTURE_STATE.md
-            docs_tests_data/RUNBOOK.md
-            docs_tests_data/BACKLOG.md
-            docs_tests_data/VISUAL_MAP.md
+            docs_tests_data/STATUS_PACKET.md
             docs_tests_data/VISUAL_MAP.svg
-            docs_tests_data/CLASS_CATALOG.md
-            docs_tests_data/CHANGE_REPORT.md
-            docs_tests_data/CLASS_INDEX.json
-            docs_tests_data/CHANGESET.json
 
       - name: Comment PR with summary (optional)
         if: github.event_name == 'pull_request'
@@ -55,9 +47,9 @@ jobs:
         with:
           script: |
             const body = [
-              ' Status Packet generated for this PR.',
+              'Status Packet generated for this PR.',
               '',
-              '- Files: `STATUS`, `ARCHITECTURE_STATE`, `RUNBOOK`, `BACKLOG`, `VISUAL_MAP.md`, `VISUAL_MAP.svg`, `CLASS_CATALOG`, `CHANGE_REPORT`',
+              '- Files: `docs_tests_data/STATUS_PACKET.md`, `docs_tests_data/VISUAL_MAP.svg`',
               '- Visuals: `VISUAL_MAP.svg` (single consolidated dashboard)',
               '- Artifact: `status-packet` (download from the workflow run artifacts)',
             ].join('\n');
@@ -73,10 +65,10 @@ jobs:
         run: |
           git config user.name "m3-status-bot"
           git config user.email "m3-status-bot@users.noreply.github.com"
-          git add docs_tests_data/STATUS.md docs_tests_data/ARCHITECTURE_STATE.md docs_tests_data/RUNBOOK.md docs_tests_data/BACKLOG.md docs_tests_data/VISUAL_MAP.md docs_tests_data/VISUAL_MAP.svg docs_tests_data/CLASS_CATALOG.md docs_tests_data/CHANGE_REPORT.md docs_tests_data/CLASS_INDEX.json docs_tests_data/CHANGESET.json
+          git add -A docs_tests_data
           if git diff --cached --quiet; then
             echo "No documentation changes detected."
           else
-            git commit -m "chore(status): update status packet docs [skip ci]"
+            git commit -m "chore(status): update unified status packet [skip ci]"
             git push
           fi

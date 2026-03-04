@@ -1,3 +1,4 @@
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 import os
 import time
 import re
@@ -17,9 +18,10 @@ DEFAULT_SYSTEM_PROMPT = (
 
 
 def _get_system_prompt() -> str:
-    try:
+    with guard_context(ctx='llm_adapter/remote.py:22', catch_base=False) as __m3_guard_20_4:
         return os.getenv('LLM_SYSTEM_PROMPT', DEFAULT_SYSTEM_PROMPT).strip()
-    except Exception:
+
+    if __m3_guard_20_4.error is not None:
         return DEFAULT_SYSTEM_PROMPT
 
 
@@ -101,39 +103,46 @@ def get_local_thinking(
     url = url or os.getenv('OLLAMA_URL', 'http://localhost:11434/api/generate')
     model = model or os.getenv('OLLAMA_MODEL', 'qwen2.5:1.5b')
     if timeout is None:
-        try:
+        with guard_context(ctx='llm_adapter/remote.py:106', catch_base=False) as __m3_guard_104_8:
             timeout = float(os.getenv('OLLAMA_TIMEOUT', '300'))
-        except Exception:
+
+        if __m3_guard_104_8.error is not None:
             timeout = 300.0
     if retries is None:
-        try:
+        with guard_context(ctx='llm_adapter/remote.py:111', catch_base=False) as __m3_guard_109_8:
             retries = int(os.getenv('OLLAMA_RETRIES', '10'))
-        except Exception:
+
+        if __m3_guard_109_8.error is not None:
             retries = 10
     if backoff is None:
-        try:
+        with guard_context(ctx='llm_adapter/remote.py:116', catch_base=False) as __m3_guard_114_8:
             backoff = float(os.getenv('OLLAMA_BACKOFF', '2.0'))
-        except Exception:
+
+        if __m3_guard_114_8.error is not None:
             backoff = 2.0
     if num_ctx is None:
-        try:
+        with guard_context(ctx='llm_adapter/remote.py:121', catch_base=False) as __m3_guard_119_8:
             num_ctx = int(os.getenv('OLLAMA_NUM_CTX', '0'))
-        except Exception:
+
+        if __m3_guard_119_8.error is not None:
             num_ctx = 0
 
     # Output token budgeting: some "thinking" models may consume all tokens in `thinking`
     # and leave `response` empty unless `num_predict` is sufficiently large.
-    try:
+    with guard_context(ctx='llm_adapter/remote.py:128', catch_base=False) as __m3_guard_126_4:
         num_predict_min = int(os.getenv('OLLAMA_NUM_PREDICT_MIN', '4096'))
-    except Exception:
+
+    if __m3_guard_126_4.error is not None:
         num_predict_min = 4096
-    try:
+    with guard_context(ctx='llm_adapter/remote.py:132', catch_base=False) as __m3_guard_130_4:
         num_predict_max = int(os.getenv('OLLAMA_NUM_PREDICT_MAX', '16384'))
-    except Exception:
+
+    if __m3_guard_130_4.error is not None:
         num_predict_max = 16384
-    try:
+    with guard_context(ctx='llm_adapter/remote.py:136', catch_base=False) as __m3_guard_134_4:
         num_predict_escalations = int(os.getenv('OLLAMA_NUM_PREDICT_ESCALATIONS', '4'))
-    except Exception:
+
+    if __m3_guard_134_4.error is not None:
         num_predict_escalations = 4
 
     # Unicode ranges (explicit) to avoid mojibake from source encoding
@@ -146,13 +155,14 @@ def get_local_thinking(
 
     def _sanitize_and_validate(text: str) -> Tuple[bool, str]:
         # Remove common emojis
-        try:
+        with guard_context(ctx='llm_adapter/remote.py:155', catch_base=False) as __m3_guard_149_8:
             emoji_pattern = re.compile(
                 r"[\U0001F300-\U0001FAFF\U00002700-\U000027BF]",
                 flags=re.UNICODE,
             )
             cleaned = emoji_pattern.sub('', text)
-        except Exception:
+
+        if __m3_guard_149_8.error is not None:
             cleaned = text
 
         # Strip common emoticon glyphs
@@ -214,12 +224,12 @@ def get_local_thinking(
                 try:
                     options['top_k'] = int(top_k)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).exception("Swallowed exception")
             if top_p is not None:
                 try:
                     options['top_p'] = float(top_p)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).exception("Swallowed exception")
 
             # Resolve output length budget (Ollama `num_predict`)
             requested_predict = None
@@ -241,12 +251,13 @@ def get_local_thinking(
                 if options_dict:
                     payload['options'] = options_dict
                 resp = requests.post(url, json=payload, timeout=timeout)
-                if 500 <= getattr(resp, 'status_code', 0) < 600:
+                if 500 <= attr_get_optional(resp, 'status_code', 0) < 600:
                     txt = ''
-                    try:
+                    with guard_context(ctx='llm_adapter/remote.py:248', catch_base=False) as __m3_guard_246_20:
                         txt = resp.text[:1000]
-                    except Exception:
-                        pass
+
+                    if __m3_guard_246_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
                     raise requests.exceptions.RequestException(f'Server error {resp.status_code}: {txt}')
                 resp.raise_for_status()
                 return resp.json()
@@ -254,17 +265,20 @@ def get_local_thinking(
             data = _call_ollama(final_prompt, options)
 
             # Adaptive retry: if the model produced only `thinking` and hit length, bump `num_predict`.
-            try:
+            with guard_context(ctx='llm_adapter/remote.py:259', catch_base=False) as __m3_guard_257_12:
                 dr = str(data.get('done_reason', '') or '')
-            except Exception:
+
+            if __m3_guard_257_12.error is not None:
                 dr = ''
-            try:
+            with guard_context(ctx='llm_adapter/remote.py:263', catch_base=False) as __m3_guard_261_12:
                 resp_preview = str(data.get('response', '') or '').strip()
-            except Exception:
+
+            if __m3_guard_261_12.error is not None:
                 resp_preview = ''
-            try:
+            with guard_context(ctx='llm_adapter/remote.py:267', catch_base=False) as __m3_guard_265_12:
                 thinking_preview = str(data.get('thinking', '') or '')
-            except Exception:
+
+            if __m3_guard_265_12.error is not None:
                 thinking_preview = ''
 
             if (not resp_preview) and thinking_preview and dr.lower() == 'length' and num_predict_escalations > 0:
@@ -277,27 +291,31 @@ def get_local_thinking(
                         next_predict = int(num_predict_max)
                     if next_predict <= cur_predict:
                         break
-                    try:
+                    with guard_context(ctx='llm_adapter/remote.py:285', catch_base=False) as __m3_guard_280_20:
                         logger.warning(
                             f"Empty response with thinking (done_reason=length). "
                             f"Escalating num_predict {cur_predict} -> {next_predict}"
                         )
-                    except Exception:
-                        pass
+
+                    if __m3_guard_280_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
                     options['num_predict'] = int(next_predict)
                     cur_predict = int(next_predict)
                     data = _call_ollama(final_prompt, options)
-                    try:
+                    with guard_context(ctx='llm_adapter/remote.py:292', catch_base=False) as __m3_guard_290_20:
                         dr = str(data.get('done_reason', '') or '')
-                    except Exception:
+
+                    if __m3_guard_290_20.error is not None:
                         dr = ''
-                    try:
+                    with guard_context(ctx='llm_adapter/remote.py:296', catch_base=False) as __m3_guard_294_20:
                         resp_preview = str(data.get('response', '') or '').strip()
-                    except Exception:
+
+                    if __m3_guard_294_20.error is not None:
                         resp_preview = ''
-                    try:
+                    with guard_context(ctx='llm_adapter/remote.py:300', catch_base=False) as __m3_guard_298_20:
                         thinking_preview = str(data.get('thinking', '') or '')
-                    except Exception:
+
+                    if __m3_guard_298_20.error is not None:
                         thinking_preview = ''
                     if resp_preview:
                         break
@@ -309,13 +327,14 @@ def get_local_thinking(
                 resp_text = str(resp_text).strip()
                 orig_text = resp_text
                 # If model echoed the system prompt or the full prompt, strip that prefix
-                try:
+                with guard_context(ctx='llm_adapter/remote.py:317', catch_base=False) as __m3_guard_312_16:
                     if prompt_had_system and sys_identity and resp_text.startswith(sys_identity):
                         resp_text = resp_text[len(sys_identity):].strip()
                     if resp_text.startswith(final_prompt):
                         resp_text = resp_text[len(final_prompt):].strip()
-                except Exception:
-                    pass
+
+                if __m3_guard_312_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 if not resp_text and orig_text:
                     # Avoid stripping away entire response
                     resp_text = orig_text
@@ -324,28 +343,30 @@ def get_local_thinking(
                 if valid:
                     return _dedupe_response(cleaned)
                 if attempt < retries:
-                    try:
+                    with guard_context(ctx='llm_adapter/remote.py:331', catch_base=False) as __m3_guard_327_20:
                         logger.warning(
                             f"Response failed validation (attempt {attempt}), retrying. Raw: {resp_text[:400]!r}"
                         )
-                    except Exception:
-                        pass
+
+                    if __m3_guard_327_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
                     if prompt_had_system:
                         strong_sys = _get_system_prompt() + " STRICT: Reply as M3 only. No AI disclaimers."
                         final_prompt = _build_prompt(prompt, strong_sys)
                     else:
                         final_prompt = str(prompt)
-                    try:
+                    with guard_context(ctx='llm_adapter/remote.py:345', catch_base=False) as __m3_guard_338_20:
                         data2 = _call_ollama(final_prompt, options)
                         if 'response' in data2:
                             resp2_text = data2['response'].strip()
                             valid2, cleaned2 = _sanitize_and_validate(resp2_text)
                             if valid2:
                                 return _dedupe_response(cleaned2)
-                    except Exception:
-                        pass
+
+                    if __m3_guard_338_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
                 if not resp_text:
-                    try:
+                    with guard_context(ctx='llm_adapter/remote.py:357', catch_base=False) as __m3_guard_348_20:
                         logger.warning(
                             f"Empty response from Ollama. "
                             f"done_reason={data.get('done_reason')!r} "
@@ -354,24 +375,27 @@ def get_local_thinking(
                             f"thinking_len={len(str(data.get('thinking') or ''))} "
                             f"keys={list(data.keys())}"
                         )
-                    except Exception:
-                        pass
+
+                    if __m3_guard_348_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
                 return ''
             return ''
         except requests.exceptions.RequestException as e:
             if attempt < retries:
                 wait = backoff ** (attempt - 1)
-                try:
+                with guard_context(ctx='llm_adapter/remote.py:366', catch_base=False) as __m3_guard_364_16:
                     logger.warning(f'Ollama request failed (attempt {attempt}/{retries}): {e}. Retrying in {wait}s')
-                except Exception:
-                    pass
+
+                if __m3_guard_364_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 time.sleep(wait)
                 continue
             else:
-                try:
+                with guard_context(ctx='llm_adapter/remote.py:373', catch_base=False) as __m3_guard_371_16:
                     logger.error(f'Ollama request failed after {retries} attempts: {e}')
-                except Exception:
-                    pass
+
+                if __m3_guard_371_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 return ''
         except Exception as e:
             if attempt < retries:

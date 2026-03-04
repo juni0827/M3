@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 import logging
 import os
 import time
@@ -29,10 +30,11 @@ def _resolve_llm_log_path() -> str:
         raw_dir = _DEFAULT_LLM_LOG_DIR
     if not os.path.isabs(raw_dir):
         raw_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', raw_dir))
-    try:
+    with guard_context(ctx='llm_adapter/memory.py:34', catch_base=False) as __m3_guard_32_4:
         os.makedirs(raw_dir, exist_ok=True)
-    except Exception:
-        pass
+
+    if __m3_guard_32_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
     raw_path = str(
         os.getenv("LLM_ADAPTER_LOG")
         or os.getenv("LLM_ADAPTER_LOG_PATH")
@@ -178,12 +180,13 @@ class M3EpisodicMemoryRetriever:
     def _log_ann_event(self, event: str, **kwargs) -> None:
         payload = {"kind": "ann_backend", "event": str(event), "t": int(time.time() * 1000)}
         payload.update(kwargs)
-        try:
+        with guard_context(ctx='llm_adapter/memory.py:185', catch_base=False) as __m3_guard_181_8:
             path = _resolve_llm_log_path()
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
+
+        if __m3_guard_181_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def _resolve_backend_name(self, name: Optional[str]) -> str:
         raw = str(name or "auto").strip().lower()
@@ -196,23 +199,25 @@ class M3EpisodicMemoryRetriever:
         return "auto"
 
     def _supports_module(self, module_name: str) -> bool:
-        cache_enabled = bool(getattr(self.ann_config, "cache_backend_probe", True))
+        cache_enabled = bool(attr_get_optional(self.ann_config, "cache_backend_probe", True))
         if cache_enabled and module_name in self._MODULE_SUPPORT_CACHE:
             return bool(self._MODULE_SUPPORT_CACHE[module_name])
-        try:
+        with guard_context(ctx='llm_adapter/memory.py:207', catch_base=False) as __m3_guard_202_8:
             __import__(module_name)
             if cache_enabled:
                 self._MODULE_SUPPORT_CACHE[module_name] = True
             return True
-        except Exception:
+
+        if __m3_guard_202_8.error is not None:
             if cache_enabled:
                 self._MODULE_SUPPORT_CACHE[module_name] = False
             return False
 
     def _is_backend_blocked(self, name: str) -> bool:
-        try:
+        with guard_context(ctx='llm_adapter/memory.py:215', catch_base=False) as __m3_guard_213_8:
             return float(time.time()) < float(self._ann_failed_until.get(str(name), 0.0))
-        except Exception:
+
+        if __m3_guard_213_8.error is not None:
             return False
 
     def _mark_backend_failed(self, name: str, reason: str = "") -> None:
@@ -220,7 +225,7 @@ class M3EpisodicMemoryRetriever:
         if not key:
             return
         self._ann_failed_until[key] = float(time.time()) + float(self._ann_probe_backoff_sec)
-        if bool(getattr(self.ann_config, "cache_backend_probe", True)):
+        if bool(attr_get_optional(self.ann_config, "cache_backend_probe", True)):
             self._MODULE_SUPPORT_CACHE[key] = False
         self._log_ann_event("probe_fail", backend=key, reason=str(reason))
 
@@ -235,7 +240,7 @@ class M3EpisodicMemoryRetriever:
         resolved = self._resolve_backend_name(name)
         if resolved == "auto":
             resolved = self._resolve_auto_backend()
-        log_select_once = bool(getattr(self.ann_config, "log_select_once", True))
+        log_select_once = bool(attr_get_optional(self.ann_config, "log_select_once", True))
         if (
             resolved == self._ann_backend_name
             and self._ann_selected_once
@@ -283,10 +288,12 @@ class M3EpisodicMemoryRetriever:
             if self._is_backend_blocked("annoy") or not self._supports_module("annoy"):
                 target = "numpy"
             else:
-                try:
-                    trees = int(max(1, getattr(self.ann_config, "annoy_trees", 10)))
+                with guard_context(ctx='llm_adapter/memory.py:289', catch_base=False) as __m3_guard_286_16:
+                    trees = int(max(1, attr_get_optional(self.ann_config, "annoy_trees", 10)))
                     return _AnnoyANNBackend(dim=dim, trees=trees)
-                except Exception as e:
+
+                if __m3_guard_286_16.error is not None:
+                    e = __m3_guard_286_16.error
                     self._mark_backend_failed("annoy", str(e))
                     logger.warning("Annoy unavailable at runtime; falling back to NumPy")
                     target = "numpy"
@@ -296,7 +303,7 @@ class M3EpisodicMemoryRetriever:
         return _NumpyANNBackend()
 
     def _maybe_log_query_event(self, total: int, candidates: int) -> None:
-        backend = str(getattr(self._ann_backend, "name", self._ann_backend_name))
+        backend = str(attr_get_optional(self._ann_backend, "name", self._ann_backend_name))
         sig = (backend, int(total), int(candidates))
         now = float(time.time())
         if (
@@ -357,7 +364,7 @@ class M3EpisodicMemoryRetriever:
             self._ann_last_episode_count = len(episodes)
             return
         vec = np.stack(filtered, axis=0).astype(np.float32)
-        try:
+        with guard_context(ctx='llm_adapter/memory.py:383', catch_base=False) as __m3_guard_360_8:
             self._ann_backend = self._create_backend_for_dim(int(dim))
             self._ann_backend.fit(vec)
             self._ann_vectors = vec
@@ -368,19 +375,21 @@ class M3EpisodicMemoryRetriever:
             self._ann_last_refresh_ts = float(time.time())
             logger.debug(
                 "ann_backend_refresh backend=%s dim=%d items=%d refresh=%d",
-                getattr(self._ann_backend, "name", self._ann_backend_name),
+                attr_get_optional(self._ann_backend, "name", self._ann_backend_name),
                 self._ann_dim,
                 len(self._ann_episodes),
                 self._ann_refresh_count,
             )
             self._log_ann_event(
                 "refresh",
-                backend=str(getattr(self._ann_backend, "name", self._ann_backend_name)),
+                backend=str(attr_get_optional(self._ann_backend, "name", self._ann_backend_name)),
                 dim=int(self._ann_dim),
                 items=int(len(self._ann_episodes)),
                 refresh=int(self._ann_refresh_count),
             )
-        except Exception as e:
+
+        if __m3_guard_360_8.error is not None:
+            e = __m3_guard_360_8.error
             logger.warning("ANN refresh failed (%s); using NumPy fallback", e)
             self._ann_backend = _NumpyANNBackend()
             self._ann_backend.fit(vec)
@@ -402,7 +411,7 @@ class M3EpisodicMemoryRetriever:
             return True
         if self._ann_dim <= 0 or len(self._ann_episodes) == 0:
             return True
-        interval = int(max(1, getattr(self.ann_config, "rebuild_interval", 256)))
+        interval = int(max(1, attr_get_optional(self.ann_config, "rebuild_interval", 256)))
         if self._ann_refresh_count <= 0:
             return True
         return (self._ann_refresh_count % interval) == 0
@@ -417,8 +426,8 @@ class M3EpisodicMemoryRetriever:
             idx = self._ann_backend.query(q, k=max(1, int(k)))
         except Exception as e:
             # Runtime backend mismatch: rebuild with NumPy fallback and retry.
-            try:
-                old_backend = str(getattr(self._ann_backend, "name", self._ann_backend_name))
+            with guard_context(ctx='llm_adapter/memory.py:434', catch_base=False) as __m3_guard_420_12:
+                old_backend = str(attr_get_optional(self._ann_backend, "name", self._ann_backend_name))
                 if old_backend not in {"", "numpy"}:
                     self._mark_backend_failed(old_backend, str(e))
                 self._ann_backend = _NumpyANNBackend()
@@ -431,7 +440,8 @@ class M3EpisodicMemoryRetriever:
                     to_backend="numpy",
                     reason=str(e),
                 )
-            except Exception:
+
+            if __m3_guard_420_12.error is not None:
                 return []
         out: List[Any] = []
         for i in idx.tolist():
@@ -440,15 +450,15 @@ class M3EpisodicMemoryRetriever:
         return out
 
     def _get_episode_list(self, core) -> List:
-        if core is None or not hasattr(core, 'episodic_memory'):
+        if core is None or not attr_has(core, 'episodic_memory'):
             return []
         em = core.episodic_memory
-        if hasattr(em, 'episodes'):
+        if attr_has(em, 'episodes'):
             eps = em.episodes
             if isinstance(eps, dict):
                 return list(eps.values())
             return list(eps)
-        if hasattr(em, 'memories'):
+        if attr_has(em, 'memories'):
             mems = em.memories
             if isinstance(mems, dict):
                 return list(mems.values())
@@ -456,56 +466,59 @@ class M3EpisodicMemoryRetriever:
         return []
 
     def _current_qualia_vector(self, core) -> Optional[np.ndarray]:
-        try:
-            if core is None or not hasattr(core, 'qualia'):
+        with guard_context(ctx='llm_adapter/memory.py:473', catch_base=False) as __m3_guard_459_8:
+            if core is None or not attr_has(core, 'qualia'):
                 return None
             q = core.qualia
             return np.array(
                 [
-                    float(getattr(q, 'arousal', 0.0)),
-                    float(getattr(q, 'valence', 0.0)),
-                    float(getattr(q, 'entropy', 0.0)),
-                    float(getattr(q, 'engagement', 0.0)),
-                    float(getattr(q, 'frustration', 0.0)),
+                    float(attr_get_optional(q, 'arousal', 0.0)),
+                    float(attr_get_optional(q, 'valence', 0.0)),
+                    float(attr_get_optional(q, 'entropy', 0.0)),
+                    float(attr_get_optional(q, 'engagement', 0.0)),
+                    float(attr_get_optional(q, 'frustration', 0.0)),
                 ],
                 dtype=np.float32,
             )
-        except Exception:
+
+        if __m3_guard_459_8.error is not None:
             return None
 
     def _episode_embedding(self, episode) -> Optional[np.ndarray]:
         if episode is None:
             return None
-        try:
-            if hasattr(episode, 'embedding'):
+        with guard_context(ctx='llm_adapter/memory.py:495', catch_base=False) as __m3_guard_479_8:
+            if attr_has(episode, 'embedding'):
                 return np.asarray(episode.embedding, dtype=np.float32).ravel()
-            if hasattr(episode, 'qualia_state'):
+            if attr_has(episode, 'qualia_state'):
                 return np.array(
                     [
-                        getattr(episode.qualia_state, 'arousal', 0.0),
-                        getattr(episode.qualia_state, 'valence', 0.0),
-                        getattr(episode.qualia_state, 'entropy', 0.0),
-                        getattr(episode.qualia_state, 'engagement', 0.0),
-                        getattr(episode.qualia_state, 'frustration', 0.0),
+                        attr_get_optional(episode.qualia_state, 'arousal', 0.0),
+                        attr_get_optional(episode.qualia_state, 'valence', 0.0),
+                        attr_get_optional(episode.qualia_state, 'entropy', 0.0),
+                        attr_get_optional(episode.qualia_state, 'engagement', 0.0),
+                        attr_get_optional(episode.qualia_state, 'frustration', 0.0),
                     ],
                     dtype=np.float32,
                 )
-            if hasattr(episode, 'qualia_vector'):
+            if attr_has(episode, 'qualia_vector'):
                 return np.asarray(episode.qualia_vector, dtype=np.float32).ravel()
-        except Exception:
+
+        if __m3_guard_479_8.error is not None:
             return None
         return None
 
     def _select_query_vector(self, current_embedding: np.ndarray, core, ep_emb: np.ndarray) -> Optional[np.ndarray]:
         if ep_emb is None:
             return None
-        try:
+        with guard_context(ctx='llm_adapter/memory.py:507', catch_base=False) as __m3_guard_502_8:
             if current_embedding is not None:
                 q = np.asarray(current_embedding, dtype=np.float32).ravel()
                 if q.size == ep_emb.size:
                     return q
-        except Exception:
-            pass
+
+        if __m3_guard_502_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         q_qualia = self._current_qualia_vector(core)
         if q_qualia is not None and q_qualia.size == ep_emb.size:
             return q_qualia
@@ -524,7 +537,7 @@ class M3EpisodicMemoryRetriever:
         scored_episodes = []
 
         for episode in episodes:
-            try:
+            with guard_context(ctx='llm_adapter/memory.py:542', catch_base=False) as __m3_guard_527_12:
                 episode_emb = self._episode_embedding(episode)
                 if episode_emb is None:
                     continue
@@ -539,7 +552,9 @@ class M3EpisodicMemoryRetriever:
                 similarity = float(np.dot(current_norm, episode_norm))
 
                 scored_episodes.append((episode, similarity))
-            except Exception as e:
+
+            if __m3_guard_527_12.error is not None:
+                e = __m3_guard_527_12.error
                 logger.debug(f"Exception occurred: {e}")
                 continue
 
@@ -551,7 +566,7 @@ class M3EpisodicMemoryRetriever:
 
         : memory_size / divisor (config.top_k_divisor)
         """
-        try:
+        with guard_context(ctx='llm_adapter/memory.py:562', catch_base=False) as __m3_guard_554_8:
             episodes = self._get_episode_list(core)
             mem_size = len(episodes)
             top_k = max(
@@ -559,7 +574,9 @@ class M3EpisodicMemoryRetriever:
                 min(self.config.top_k_max, mem_size // self.config.memory_size_divisor)
             )
             return top_k
-        except Exception as e:
+
+        if __m3_guard_554_8.error is not None:
+            e = __m3_guard_554_8.error
             logger.debug(f"Exception occurred: {e}")
         return self.config.top_k_default  # Fallback: reasonable default
 
@@ -570,13 +587,13 @@ class M3EpisodicMemoryRetriever:
         Score = (w_c * ContentSim) + (w_a * AffectSim) + (w_d * DriveRelevance)
         Weights are dynamic based on current state intensity.
         """
-        if core is None or not hasattr(core, 'episodic_memory'):
+        if core is None or not attr_has(core, 'episodic_memory'):
             return []
 
         try:
             # 1. Get current internal states
-            affect_state = core.affect_kernel.get_state() if hasattr(core, 'affect_kernel') else {}
-            drive_state = core.drives.get_drive_state() if hasattr(core, 'drives') else {}
+            affect_state = core.affect_kernel.get_state() if attr_has(core, 'affect_kernel') else {}
+            drive_state = core.drives.get_drive_state() if attr_has(core, 'drives') else {}
             
             # Calculate intensities for dynamic weighting
             # Affect intensity: L2 norm of affect values
@@ -598,28 +615,31 @@ class M3EpisodicMemoryRetriever:
             if not episodes:
                 return []
             candidates = episodes
-            min_items_for_ann = int(max(1, getattr(self.ann_config, "min_items_for_ann", 128)))
+            min_items_for_ann = int(max(1, attr_get_optional(self.ann_config, "min_items_for_ann", 128)))
             if len(episodes) >= min_items_for_ann:
-                try:
+                with guard_context(ctx='llm_adapter/memory.py:606', catch_base=False) as __m3_guard_603_16:
                     if self._needs_refresh(core, episodes):
                         self.refresh_index(core)
-                except Exception:
-                    pass
-                candidate_k = int(max(1, getattr(self.ann_config, "candidate_k", 64)))
+
+                if __m3_guard_603_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
+                candidate_k = int(max(1, attr_get_optional(self.ann_config, "candidate_k", 64)))
                 q_for_ann = None
                 if self._ann_dim > 0:
-                    try:
+                    with guard_context(ctx='llm_adapter/memory.py:615', catch_base=False) as __m3_guard_611_20:
                         q = np.asarray(current_context_embedding, dtype=np.float32).ravel()
                         if q.size == self._ann_dim:
                             q_for_ann = q
-                    except Exception:
+
+                    if __m3_guard_611_20.error is not None:
                         q_for_ann = None
                     if q_for_ann is None:
-                        try:
+                        with guard_context(ctx='llm_adapter/memory.py:622', catch_base=False) as __m3_guard_618_24:
                             q_qualia = self._current_qualia_vector(core)
                             if q_qualia is not None and q_qualia.size == self._ann_dim:
                                 q_for_ann = q_qualia
-                        except Exception:
+
+                        if __m3_guard_618_24.error is not None:
                             q_for_ann = None
                 if q_for_ann is not None:
                     ann_candidates = self.query_candidates(q_for_ann, k=candidate_k)
@@ -627,7 +647,7 @@ class M3EpisodicMemoryRetriever:
                         candidates = ann_candidates
                 logger.debug(
                     "ann_backend_query backend=%s total=%d candidates=%d",
-                    getattr(self._ann_backend, "name", self._ann_backend_name),
+                    attr_get_optional(self._ann_backend, "name", self._ann_backend_name),
                     len(episodes),
                     len(candidates),
                 )
@@ -636,8 +656,7 @@ class M3EpisodicMemoryRetriever:
             scored_episodes = []
 
             for episode in candidates:
-                try:
-                    # A. Content Similarity
+                with guard_context(ctx='llm_adapter/memory.py:674', catch_base=False) as __m3_guard_639_16:
                     content_sim = 0.0
                     ep_emb = self._episode_embedding(episode)
                     if ep_emb is not None:
@@ -649,7 +668,7 @@ class M3EpisodicMemoryRetriever:
                     
                     # B. Affect Similarity (Mood Congruency)
                     affect_sim = 0.0
-                    if w_a > 0 and hasattr(episode, 'affect_state') and episode.affect_state:
+                    if w_a > 0 and attr_has(episode, 'affect_state') and episode.affect_state:
                         ep_a_vals = np.array([episode.affect_state.get(k, 0.0) for k in affect_state])
                         if np.linalg.norm(ep_a_vals) > 0:
                             # Cosine similarity of affect
@@ -659,7 +678,7 @@ class M3EpisodicMemoryRetriever:
 
                     # C. Drive Relevance (Did this episode help current drives?)
                     drive_rel = 0.0
-                    if w_d > 0 and hasattr(episode, 'drive_reduction') and episode.drive_reduction:
+                    if w_d > 0 and attr_has(episode, 'drive_reduction') and episode.drive_reduction:
                         # Dot product of current drive urgency and past reduction
                         for d_name, d_val in drive_state.items():
                             reduction = episode.drive_reduction.get(d_name, 0.0)
@@ -671,22 +690,23 @@ class M3EpisodicMemoryRetriever:
                     total_score = (w_c * content_sim) + (w_a * affect_sim) + (w_d * drive_rel)
                     scored_episodes.append((episode, total_score))
 
-                except Exception:
+                if __m3_guard_639_16.error is not None:
                     continue
 
             if not scored_episodes:
                 return []
 
             # 2. Dynamic filtering based on Entropy (Cognitive Load)
-            entropy = getattr(core.qualia, 'entropy', 0.5)
-            engagement = getattr(core.qualia, 'engagement', 0.5)
+            entropy = attr_get_optional(core.qualia, 'entropy', 0.5)
+            engagement = attr_get_optional(core.qualia, 'engagement', 0.5)
             
             min_score = (1.0 - entropy) * engagement * 0.8
-            try:
+            with guard_context(ctx='llm_adapter/memory.py:688', catch_base=False) as __m3_guard_685_12:
                 min_floor = float(os.getenv('M3_EPISODIC_MIN_SCORE', '-0.25'))
                 min_score = max(min_score, min_floor)
-            except Exception:
-                pass
+
+            if __m3_guard_685_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
             filtered = [
                 (ep, score) for ep, score in scored_episodes
@@ -703,17 +723,19 @@ class M3EpisodicMemoryRetriever:
             selected = [ep for ep, _ in filtered[:top_k]]
             if selected:
                 for ep in selected:
-                    try:
-                        if hasattr(ep, 'retrieval_count'):
-                            ep.retrieval_count = int(getattr(ep, 'retrieval_count', 0)) + 1
-                    except Exception:
+                    with guard_context(ctx='llm_adapter/memory.py:709', catch_base=False) as __m3_guard_706_20:
+                        if attr_has(ep, 'retrieval_count'):
+                            ep.retrieval_count = int(attr_get_optional(ep, 'retrieval_count', 0)) + 1
+
+                    if __m3_guard_706_20.error is not None:
                         continue
-                try:
-                    em = getattr(core, 'episodic_memory', None)
-                    if em is not None and hasattr(em, 'total_retrieved'):
-                        em.total_retrieved = int(getattr(em, 'total_retrieved', 0)) + len(selected)
-                except Exception:
-                    pass
+                with guard_context(ctx='llm_adapter/memory.py:715', catch_base=False) as __m3_guard_711_16:
+                    em = attr_get_optional(core, 'episodic_memory', None)
+                    if em is not None and attr_has(em, 'total_retrieved'):
+                        em.total_retrieved = int(attr_get_optional(em, 'total_retrieved', 0)) + len(selected)
+
+                if __m3_guard_711_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
             return selected
 
         except Exception as e:
@@ -792,9 +814,10 @@ class ConditionalKNNIndex:
         n = len(self._keys)
 
         # Keep fraction (default 0.75); override via env KNN_DOWNSAMPLE_KEEP_FRACTION
-        try:
+        with guard_context(ctx='llm_adapter/memory.py:797', catch_base=False) as __m3_guard_795_8:
             keep_frac = float(os.getenv('KNN_DOWNSAMPLE_KEEP_FRACTION', '0.75'))
-        except Exception:
+
+        if __m3_guard_795_8.error is not None:
             keep_frac = 0.75
         keep_frac = min(max(keep_frac, 0.0), 1.0)
         keep_n = max(1, int(n * keep_frac))
@@ -823,9 +846,10 @@ class ConditionalKNNIndex:
         self._access_counts = [self._access_counts[i] for i in sel_idx]
 
         # Move the trigger baseline forward by interval to reduce oscillation
-        try:
+        with guard_context(ctx='llm_adapter/memory.py:828', catch_base=False) as __m3_guard_826_8:
             downsample_interval = int(os.getenv('KNN_DOWNSAMPLE_INTERVAL', '10000'))
-        except Exception:
+
+        if __m3_guard_826_8.error is not None:
             downsample_interval = 10000
         self._last_downsample_size += max(1, downsample_interval)
 

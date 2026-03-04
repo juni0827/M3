@@ -1,4 +1,4 @@
-"""
+﻿"""
 LLM Adapter with proper tokenizer and learnable policy.
 
 Features:
@@ -19,6 +19,7 @@ Usage:
   attach_llm_to_core(core)
 """
 from __future__ import annotations
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 import os
 import sys
 
@@ -36,6 +37,7 @@ import logging
 import re
 import hashlib
 import copy
+from difflib import SequenceMatcher
 from logging.handlers import RotatingFileHandler
 from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
 import threading
@@ -44,6 +46,7 @@ from collections import deque
 import types
 import torch
 from m3.device import resolve_torch_device_string
+from m3.io.jsonl_writer import append_jsonl
 
 # ---------------------------------------------------------------------------
 # Silence noisy external libraries (HuggingFace Hub / Transformers / httpx)
@@ -66,28 +69,89 @@ for _name in (
 # Local adapter chatter (keep console clean)
 logging.getLogger('llm_adapter.tokenization').setLevel(logging.WARNING)
 
-try:
-    from transformers.utils import logging as _tlog
-    _tlog.set_verbosity_error()
-    try:
-        _tlog.disable_progress_bar()
-    except Exception:
-        pass
-except Exception:
-    pass
+def _disable_progress_bars_if_supported(logging_module: Any) -> None:
+    for name in ("disable_progress_bars", "disable_progress_bar"):
+        fn = getattr(logging_module, name, None)
+        if callable(fn):
+            fn()
+            return
 
-try:
-    from huggingface_hub.utils import logging as _hlog
-    try:
-        _hlog.set_verbosity_error()
-    except Exception:
-        pass
-    try:
-        _hlog.disable_progress_bars()
-    except Exception:
-        pass
-except Exception:
-    pass
+
+def _configure_external_library_logging(
+    transformers_logging: Any | None = None,
+    hf_hub_logging: Any | None = None,
+) -> None:
+    if transformers_logging is None:
+        from transformers.utils import logging as transformers_logging
+    if hf_hub_logging is None:
+        from huggingface_hub.utils import logging as hf_hub_logging
+
+    set_t = getattr(transformers_logging, "set_verbosity_error", None)
+    if callable(set_t):
+        set_t()
+    _disable_progress_bars_if_supported(transformers_logging)
+
+    set_h = getattr(hf_hub_logging, "set_verbosity_error", None)
+    if callable(set_h):
+        set_h()
+    _disable_progress_bars_if_supported(hf_hub_logging)
+
+
+_configure_external_library_logging()
+
+_CONTROL_REASON_ENUM: set[str] = {
+    "hf_generate_ok",
+    "hf_circuit_open",
+    "hf_filtered_or_fallback",
+    "hf_unavailable_or_fallback",
+    "hf_runtime_failure",
+    "hf_runtime_cooldown",
+    "hf_cuda_fault",
+    "missing_control_health_window",
+    "none_subscriptable",
+    "quality_rejected",
+    "semantic_rejected",
+    "other",
+}
+
+
+def _normalize_control_reason(reason: str) -> str:
+    raw = str(reason or "").strip().lower()
+    if not raw:
+        return "other"
+    raw = re.sub(r"[^a-z0-9_]+", "_", raw).strip("_")
+    if raw in _CONTROL_REASON_ENUM:
+        return raw
+    if raw.startswith("hf_exception"):
+        return "hf_runtime_failure"
+    if raw.startswith("hf_filtered"):
+        return "hf_filtered_or_fallback"
+    if raw.startswith("hf_unavailable"):
+        return "hf_unavailable_or_fallback"
+    if raw.startswith("hf_circuit"):
+        return "hf_circuit_open"
+    if raw.startswith("none") and "subscriptable" in raw:
+        return "none_subscriptable"
+    if raw.startswith("missing_control_health_window"):
+        return "missing_control_health_window"
+    return "other"
+
+
+class HFRuntimeFailure(RuntimeError):
+    def __init__(
+        self,
+        reason_code: str,
+        phase: str,
+        model_output_shape: str = "unknown",
+        has_logits: bool = False,
+        message: str = "",
+    ) -> None:
+        text = str(message or reason_code or "hf_runtime_failure")
+        super().__init__(text)
+        self.reason_code = _normalize_control_reason(str(reason_code or "hf_runtime_failure"))
+        self.phase = str(phase or "unknown")
+        self.model_output_shape = str(model_output_shape or "unknown")
+        self.has_logits = bool(has_logits)
 
 try:
     from .config import (
@@ -114,6 +178,12 @@ try:
     from .tokenization import M3Tokenizer, AutoTokenizer
     from .semantic_scorer import SemanticScorer
     from .meaning_pipeline import format_plan_fallback_prompt
+    from .control_plane import (
+        M3ControlDecision,
+        build_control_decision,
+        log_control_decision,
+        resolve_control_decision_log_path,
+    )
 except Exception:
     # Support running file directly (script) where package-relative imports fail
     from llm_adapter.config import (
@@ -140,6 +210,12 @@ except Exception:
     from llm_adapter.tokenization import M3Tokenizer, AutoTokenizer
     from llm_adapter.semantic_scorer import SemanticScorer
     from llm_adapter.meaning_pipeline import format_plan_fallback_prompt
+    from llm_adapter.control_plane import (
+        M3ControlDecision,
+        build_control_decision,
+        log_control_decision,
+        resolve_control_decision_log_path,
+    )
 
 try:
     from .m3_control_bridge import (
@@ -254,6 +330,10 @@ class M3StateEncoder:
             return self.config.dropout_medium
         else:
             return self.config.dropout_large
+
+    def __call__(self, panels: List[np.ndarray], affect_state: Optional[np.ndarray] = None, drive_state: Optional[np.ndarray] = None) -> 'torch.Tensor':
+        """Callable compatibility: delegate function-style calls to forward()."""
+        return self.forward(panels, affect_state=affect_state, drive_state=drive_state)
     
     def _lazy_init_projections(self, panel_dim: int, num_panels: int, affect_dim: int = 0, drive_dim: int = 0):
         """
@@ -322,7 +402,7 @@ class M3StateEncoder:
             raise ValueError("panels is None - expected list/array/tensor of panel vectors")
 
         panels_list: List[np.ndarray] = []
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:341', catch_base=False) as __m3_guard_325_8:
             if isinstance(panels, np.ndarray):
                 if panels.ndim == 1:
                     panels_list = [panels.astype(np.float32)]
@@ -338,7 +418,9 @@ class M3StateEncoder:
                 panels_list = [np.asarray(p, dtype=np.float32) for p in panels]
             else:
                 panels_list = [np.asarray(p, dtype=np.float32) for p in list(panels)]
-        except Exception as e:
+
+        if __m3_guard_325_8.error is not None:
+            e = __m3_guard_325_8.error
             raise ValueError(f"Unsupported panels type for M3StateEncoder: {type(panels)}") from e
 
         if not panels_list:
@@ -417,7 +499,7 @@ class M3StateCache:
 
         : phi_calculator.phi_history multiplier (config.phi_history_multiplier)
         """
-        if hasattr(core, 'phi_calculator') and hasattr(core.phi_calculator, 'phi_history'):
+        if attr_has(core, 'phi_calculator') and attr_has(core.phi_calculator, 'phi_history'):
             phi_hist_len = len(core.phi_calculator.phi_history)
             cache_size = max(
                 self.config.cache_size_min,
@@ -459,15 +541,16 @@ class M3StateCache:
             self._phi_cache = deque(maxlen=self._cache_size)
         
         # Store panels
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:465', catch_base=False) as __m3_guard_462_8:
             panels = core.feature_bank.panels(core)
             self._panels_cache.append(panels)
-        except Exception as e:
-            # Graceful degradation: core might not have feature_bank
+
+        if __m3_guard_462_8.error is not None:
+            e = __m3_guard_462_8.error
             self._panels_cache.append(None)
         
         # Store qualia
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:478', catch_base=False) as __m3_guard_470_8:
             self._qualia_cache.append({
                 'arousal': core.qualia.arousal,
                 'valence': core.qualia.valence,
@@ -475,14 +558,16 @@ class M3StateCache:
                 'engagement': core.qualia.engagement,
                 'frustration': core.qualia.frustration
             })
-        except Exception:
+
+        if __m3_guard_470_8.error is not None:
             self._qualia_cache.append(None)
         
         # Store phi
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:485', catch_base=False) as __m3_guard_482_8:
             phi = core.phi_calculator.phi_history[-1] if core.phi_calculator.phi_history else 0.0
             self._phi_cache.append(phi)
-        except Exception:
+
+        if __m3_guard_482_8.error is not None:
             self._phi_cache.append(0.0)
     
     def get_current_panels(self):
@@ -645,11 +730,11 @@ class M3AdaptiveSampler:
         Output order: [arousal, valence, entropy/novelty, engagement, frustration].
         """
         defaults = [
-            float(getattr(qualia, 'arousal', 0.5)) if qualia is not None else 0.5,
-            float(getattr(qualia, 'valence', 0.5)) if qualia is not None else 0.5,
-            float(getattr(qualia, 'entropy', 0.5)) if qualia is not None else 0.5,
-            float(getattr(qualia, 'engagement', 0.5)) if qualia is not None else 0.5,
-            float(getattr(qualia, 'frustration', 0.0)) if qualia is not None else 0.0,
+            float(attr_get_optional(qualia, 'arousal', 0.5)) if qualia is not None else 0.5,
+            float(attr_get_optional(qualia, 'valence', 0.5)) if qualia is not None else 0.5,
+            float(attr_get_optional(qualia, 'entropy', 0.5)) if qualia is not None else 0.5,
+            float(attr_get_optional(qualia, 'engagement', 0.5)) if qualia is not None else 0.5,
+            float(attr_get_optional(qualia, 'frustration', 0.0)) if qualia is not None else 0.0,
         ]
 
         if affect_state is None:
@@ -679,23 +764,26 @@ class M3AdaptiveSampler:
         if core is None:
             return float(default)
         for attr in ('decode_entropy', 'token_entropy'):
-            try:
-                if hasattr(core, attr):
-                    return float(getattr(core, attr))
-            except Exception:
-                pass
-        try:
-            if hasattr(core, 'qualia'):
-                return float(getattr(core.qualia, 'entropy', default))
-        except Exception:
-            pass
+            with guard_context(ctx='llm_adapter/llm_core.py:685', catch_base=False) as __m3_guard_682_12:
+                if attr_has(core, attr):
+                    return float(attr_get_optional(core, attr))
+
+            if __m3_guard_682_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:690', catch_base=False) as __m3_guard_687_8:
+            if attr_has(core, 'qualia'):
+                return float(attr_get_optional(core.qualia, 'entropy', default))
+
+        if __m3_guard_687_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         return float(default)
 
     def _normalize_phi_for_influence(self, core, phi_value: float) -> float:
         """Normalize phi into [0,1] before applying sampler influence."""
-        try:
-            mode = str(getattr(self.config, 'phi_norm_mode', 'dynamic')).lower()
-        except Exception:
+        with guard_context(ctx='llm_adapter/llm_core.py:698', catch_base=False) as __m3_guard_696_8:
+            mode = str(attr_get_optional(self.config, 'phi_norm_mode', 'dynamic')).lower()
+
+        if __m3_guard_696_8.error is not None:
             mode = 'dynamic'
 
         try:
@@ -707,43 +795,49 @@ class M3AdaptiveSampler:
             return float(np.clip(phi, 0.0, 1.0))
 
         if mode == 'static':
-            try:
-                denom = float(getattr(self.config, 'phi_norm_static_max', 1.0))
-                denom = max(float(getattr(self.config, 'phi_norm_min_denominator', 1e-6)), denom)
-            except Exception:
+            with guard_context(ctx='llm_adapter/llm_core.py:713', catch_base=False) as __m3_guard_710_12:
+                denom = float(attr_get_optional(self.config, 'phi_norm_static_max', 1.0))
+                denom = max(float(attr_get_optional(self.config, 'phi_norm_min_denominator', 1e-6)), denom)
+
+            if __m3_guard_710_12.error is not None:
                 denom = 1.0
             return float(np.clip(phi / denom, 0.0, 1.0))
 
         hist = []
-        try:
-            if hasattr(core, 'phi_calculator') and getattr(core.phi_calculator, 'phi_history', None):
+        with guard_context(ctx='llm_adapter/llm_core.py:724', catch_base=False) as __m3_guard_718_8:
+            if attr_has(core, 'phi_calculator') and attr_get_optional(core.phi_calculator, 'phi_history', None):
                 for v in core.phi_calculator.phi_history:
                     fv = float(v)
                     if np.isfinite(fv) and fv >= 0.0:
                         hist.append(fv)
-        except Exception:
+
+        if __m3_guard_718_8.error is not None:
             hist = []
 
-        try:
-            q = float(getattr(self.config, 'phi_norm_quantile', 0.9))
-        except Exception:
+        with guard_context(ctx='llm_adapter/llm_core.py:729', catch_base=False) as __m3_guard_727_8:
+            q = float(attr_get_optional(self.config, 'phi_norm_quantile', 0.9))
+
+        if __m3_guard_727_8.error is not None:
             q = 0.9
         q = float(np.clip(q, 0.01, 0.99))
 
         if hist:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:736', catch_base=False) as __m3_guard_734_12:
                 denom = float(np.quantile(np.asarray(hist, dtype=np.float32), q))
-            except Exception:
+
+            if __m3_guard_734_12.error is not None:
                 denom = 1.0
         else:
-            try:
-                denom = max(float(getattr(self.config, 'phi_norm_min_denominator', 1e-6)), 1.0)
-            except Exception:
+            with guard_context(ctx='llm_adapter/llm_core.py:741', catch_base=False) as __m3_guard_739_12:
+                denom = max(float(attr_get_optional(self.config, 'phi_norm_min_denominator', 1e-6)), 1.0)
+
+            if __m3_guard_739_12.error is not None:
                 denom = 1.0
 
-        try:
-            denom = max(float(getattr(self.config, 'phi_norm_min_denominator', 1e-6)), denom)
-        except Exception:
+        with guard_context(ctx='llm_adapter/llm_core.py:746', catch_base=False) as __m3_guard_744_8:
+            denom = max(float(attr_get_optional(self.config, 'phi_norm_min_denominator', 1e-6)), denom)
+
+        if __m3_guard_744_8.error is not None:
             denom = max(1e-6, denom)
         return float(np.clip(phi / denom, 0.0, 1.0))
 
@@ -761,20 +855,19 @@ class M3AdaptiveSampler:
         if core is None:
             return base_temp
         
-        try:
-            # 1. Affect Kernel adjustment
-            if hasattr(core, 'affect_kernel'):
+        with guard_context(ctx='llm_adapter/llm_core.py:806', catch_base=False) as __m3_guard_764_8:
+            if attr_has(core, 'affect_kernel'):
                 affect_state = core.affect_kernel.get_state()
-                affect_vec = self._normalize_affect_state(affect_state, getattr(core, 'qualia', None))
+                affect_vec = self._normalize_affect_state(affect_state, attr_get_optional(core, 'qualia', None))
                 qualia_vec = self.torch.tensor(affect_vec, dtype=self.torch.float32).to(self.device)
-            elif hasattr(core, 'qualia'):
+            elif attr_has(core, 'qualia'):
                 # Fallback to old qualia
                 qualia_vec = self.torch.tensor([
-                    getattr(core.qualia, 'arousal', 0.5),
-                    getattr(core.qualia, 'valence', 0.5),
+                    attr_get_optional(core.qualia, 'arousal', 0.5),
+                    attr_get_optional(core.qualia, 'valence', 0.5),
                     self._resolve_decode_entropy(core, 0.5),
-                    getattr(core.qualia, 'engagement', 0.5),
-                    getattr(core.qualia, 'frustration', 0.0)
+                    attr_get_optional(core.qualia, 'engagement', 0.5),
+                    attr_get_optional(core.qualia, 'frustration', 0.0)
                 ], dtype=self.torch.float32).to(self.device)
             else:
                 return base_temp
@@ -785,26 +878,25 @@ class M3AdaptiveSampler:
             temp = self.config.temp_min + temp_factor * (self.config.temp_max - self.config.temp_min)
 
             # 2. Phi adjustment (phi * temp)
-            if hasattr(core, 'phi_calculator') and core.phi_calculator.phi_history:
+            if attr_has(core, 'phi_calculator') and core.phi_calculator.phi_history:
                 phi = self._normalize_phi_for_influence(core, core.phi_calculator.phi_history[-1])
                 # phi in [0, 1]; higher integration (phi) reduces temperature for more focused sampling
                 temp = temp * (1.0 - self.config.phi_influence * phi)
 
             # 3. Energy adjustment (energy * temp)
-            if hasattr(core, 'energy_ctrl'):
+            if attr_has(core, 'energy_ctrl'):
                 energy_ratio = core.energy_ctrl.cognitive_energy / max(core.energy_ctrl.energy_capacity, 1.0)
                 temp = temp * (0.8 + 0.4 * (1.0 - energy_ratio) * self.config.energy_influence)
 
             # 4. Meta-awareness adjustment (meta * temp)
-            if hasattr(core, 'self_model') and hasattr(core.self_model, 'meta_awareness'):
+            if attr_has(core, 'self_model') and attr_has(core.self_model, 'meta_awareness'):
                 meta = core.self_model.meta_awareness
                 temp = temp * (1.0 - self.config.meta_influence * meta)
             
             # Clamp to bounds
             return max(self.config.temp_min, min(self.config.temp_max, temp))
-            
-        except Exception:
-            # Graceful degradation
+
+        if __m3_guard_764_8.error is not None:
             return base_temp
     
     def _compute_top_k(self, core, base_top_k: int) -> int:
@@ -821,16 +913,15 @@ class M3AdaptiveSampler:
         if core is None:
             return base_top_k
         
-        try:
-            # Exploration = entropy * engagement (qualia)
-            if hasattr(core, 'affect_kernel'):
-                affect = self._normalize_affect_state(core.affect_kernel.get_state(), getattr(core, 'qualia', None))
+        with guard_context(ctx='llm_adapter/llm_core.py:854', catch_base=False) as __m3_guard_824_8:
+            if attr_has(core, 'affect_kernel'):
+                affect = self._normalize_affect_state(core.affect_kernel.get_state(), attr_get_optional(core, 'qualia', None))
                 novelty_or_entropy = affect[2]
                 arousal = affect[0]
                 exploration = novelty_or_entropy * arousal
-            elif hasattr(core, 'qualia'):
+            elif attr_has(core, 'qualia'):
                 entropy = self._resolve_decode_entropy(core, 0.5)
-                engagement = getattr(core.qualia, 'engagement', 0.5)
+                engagement = attr_get_optional(core.qualia, 'engagement', 0.5)
                 exploration = entropy * engagement
             else:
                 exploration = 0.5
@@ -850,8 +941,8 @@ class M3AdaptiveSampler:
             else:
                 # Low exploration
                 return self.config.top_k_low_exploration
-                
-        except Exception:
+
+        if __m3_guard_824_8.error is not None:
             return base_top_k
     
     def sample(self, logits, core=None, base_temp=0.8, base_top_k=50, base_top_p=0.9):
@@ -902,9 +993,9 @@ class HFBackend:
     """HuggingFace Transformers backend with full M3 parameter control.
 
     Unlike Ollama (text-in/text-out), this gives per-token access to:
-    - Raw logits  → token-critic Q-value injection
-    - Hidden states → cross-attention / projection
-    - Sampling params → M3AdaptiveSampler (phi/qualia/energy → temperature/top_k)
+    - Raw logits  ??token-critic Q-value injection
+    - Hidden states ??cross-attention / projection
+    - Sampling params ??M3AdaptiveSampler (phi/qualia/energy ??temperature/top_k)
 
     Singleton: model is loaded once and reused across calls.
     Set  M3_USE_HF=1  and  M3_HF_MODEL=Qwen/Qwen2.5-1.5B-Instruct  to enable.
@@ -941,6 +1032,15 @@ class HFBackend:
         self._neuro_runtime = None
         self._neuro_mod_opt = None
         self._neuro_mod_state_dim = 0
+        control_window = max(8, int(os.getenv("M3_CONTROL_HEALTH_WINDOW", "24")))
+        self._control_health_window = deque(maxlen=control_window)
+        self._auto_mode_fail_streak = 0
+        self._last_runtime_diag = {
+            "phase": "init",
+            "reason_code": "other",
+            "model_output_shape": "unknown",
+            "has_logits": False,
+        }
 
     def _ensure_loaded(self):
         if self._loaded:
@@ -964,8 +1064,8 @@ class HFBackend:
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        # transformers 최신 버전에서는 `torch_dtype`가 deprecated이고 `dtype`를 권장함.
-        # 다만 구버전 호환을 위해 from_pretrained 호출에서 필요 시 `torch_dtype`로 폴백한다.
+        # transformers 理쒖떊 踰꾩쟾?먯꽌??`torch_dtype`媛 deprecated?닿퀬 `dtype`瑜?沅뚯옣??
+        # ?ㅻ쭔 援щ쾭???명솚???꾪빐 from_pretrained ?몄텧?먯꽌 ?꾩슂 ??`torch_dtype`濡??대갚?쒕떎.
         load_kw = {'trust_remote_code': True, 'dtype': _torch.bfloat16}
 
         if self.quantize == '4bit':
@@ -1011,7 +1111,7 @@ class HFBackend:
                 raise
         self._model.eval()
 
-        # CPU는 bfloat16 비지원 → float32로 강제
+        # CPU??bfloat16 鍮꾩?????float32濡?媛뺤젣
         self.device = next(self._model.parameters()).device
         if self.device.type == 'cpu':
             self._model = self._model.float()
@@ -1032,18 +1132,32 @@ class HFBackend:
         )
 
     def _bridge_enabled_safe(self) -> bool:
-        try:
-            fn = getattr(self, "_bridge_enabled", None)
+        with guard_context(ctx='llm_adapter/llm_core.py:1039', catch_base=False) as __m3_guard_1035_8:
+            fn = attr_get_optional(self, "_bridge_enabled", None)
             if callable(fn):
                 return bool(fn())
-        except Exception:
-            pass
+
+        if __m3_guard_1035_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         return False
 
+    def _ensure_control_health_tracking(self) -> None:
+        if attr_get_optional(self, "_control_health_window", None) is None:
+            with guard_context(ctx='llm_adapter/llm_core.py:1046', catch_base=False) as __m3_guard_1044_8:
+                window = int(os.getenv("M3_CONTROL_HEALTH_WINDOW", "24"))
+                self._control_health_window = deque(maxlen=max(8, window))
+            if __m3_guard_1044_8.error is not None:
+                self._control_health_window = deque(maxlen=24)
+        if attr_get_optional(self, "_auto_mode_fail_streak", None) is None:
+            self._auto_mode_fail_streak = 0
+
     def _note_control_health(self, success: bool, reason: str = "") -> None:
-        try:
-            self._control_health_window.append((time.time(), bool(success), str(reason or "")))
-        except Exception:
+        self._ensure_control_health_tracking()
+        reason_code = _normalize_control_reason(reason)
+        with guard_context(ctx='llm_adapter/llm_core.py:1056', catch_base=False) as __m3_guard_1054_8:
+            self._control_health_window.append((time.time(), bool(success), str(reason_code)))
+
+        if __m3_guard_1054_8.error is not None:
             return
         if success:
             self._auto_mode_fail_streak = 0
@@ -1051,13 +1165,26 @@ class HFBackend:
             self._auto_mode_fail_streak += 1
 
     def _compute_recent_control_stats(self) -> Dict[str, float]:
+        self._ensure_control_health_tracking()
         now = time.time()
         window_sec = float(os.getenv("M3_CONTROL_HEALTH_WINDOW_SEC", "180"))
-        events = [
-            (ts, ok, reason)
-            for ts, ok, reason in list(self._control_health_window)
-            if now - float(ts) <= window_sec
-        ]
+        raw_window = attr_get_optional(self, "_control_health_window", None)
+        if raw_window is None:
+            return {"count": 0.0, "fail_ratio": 0.0, "consecutive_failures": 0.0}
+        events: List[Tuple[float, bool, str]] = []
+        for item in list(raw_window):
+            if not isinstance(item, (tuple, list)) or len(item) < 2:
+                continue
+            ts = item[0]
+            ok = item[1]
+            reason = item[2] if len(item) >= 3 else ""
+            with guard_context(ctx='llm_adapter/llm_core.py:1096', catch_base=False) as __m3_guard_1093_20:
+                tsf = float(ts)
+                if now - tsf <= window_sec:
+                    events.append((tsf, bool(ok), str(reason)))
+
+            if __m3_guard_1093_20.error is not None:
+                continue
         if not events:
             return {"count": 0.0, "fail_ratio": 0.0, "consecutive_failures": 0.0}
         n = len(events)
@@ -1069,7 +1196,7 @@ class HFBackend:
         }
 
     def _auto_control_selection(self) -> str:
-        if getattr(self, "_hf_circuit_open", False):
+        if attr_get_optional(self, "_hf_circuit_open", False):
             return "off"
         stats = self._compute_recent_control_stats()
         fail_ratio = float(stats.get("fail_ratio", 0.0))
@@ -1082,12 +1209,13 @@ class HFBackend:
         if fail_ratio >= 0.15 and count >= 2:
             return "state"
 
-        core = getattr(self, 'core', None)
+        core = attr_get_optional(self, 'core', None)
         if core is not None:
-            em = getattr(core, 'episodic_memory', None)
-            try:
-                retrieved = int(getattr(em, 'total_retrieved', 0))
-            except Exception:
+            em = attr_get_optional(core, 'episodic_memory', None)
+            with guard_context(ctx='llm_adapter/llm_core.py:1090', catch_base=False) as __m3_guard_1088_12:
+                retrieved = int(attr_get_optional(em, 'total_retrieved', 0))
+
+            if __m3_guard_1088_12.error is not None:
                 retrieved = 0
             if retrieved > 0 and os.getenv("M3_CONTROL_AUTO_FULL", "1").lower() not in ('0', 'false', 'no', 'off'):
                 return "full"
@@ -1180,11 +1308,12 @@ class HFBackend:
 
         layers = find_decoder_layers(self._model) if self._model is not None else []
         num_layers = max(1, len(layers))
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1187', catch_base=False) as __m3_guard_1183_8:
             hidden_rank = int(os.getenv('M3_NEURO_HIDDEN_RANK', str(nm_cfg.hidden_rank)))
             logit_rank = int(os.getenv('M3_NEURO_LOGIT_RANK', str(nm_cfg.logit_rank)))
             trunk_dim = int(os.getenv('M3_NEURO_TRUNK_DIM', str(nm_cfg.trunk_dim)))
-        except Exception:
+
+        if __m3_guard_1183_8.error is not None:
             hidden_rank, logit_rank, trunk_dim = nm_cfg.hidden_rank, nm_cfg.logit_rank, nm_cfg.trunk_dim
 
         self._neuro_modulator = NeuroModulator(
@@ -1202,9 +1331,10 @@ class HFBackend:
         self._neuro_modulator.eval()
         self._neuro_mod_state_dim = state_dim
 
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1207', catch_base=False) as __m3_guard_1205_8:
             lr = float(os.getenv('M3_NEUROMOD_LR', str(nm_cfg.learning_rate)))
-        except Exception:
+
+        if __m3_guard_1205_8.error is not None:
             lr = nm_cfg.learning_rate
         weight_decay = nm_cfg.weight_decay
         self._neuro_mod_opt = torch.optim.Adam(
@@ -1222,8 +1352,8 @@ class HFBackend:
         if self._neuro_modulator is None:
             return False
         nm_cfg = get_global_config().neuro_modulator
-        path = nm_cfg.checkpoint_file
-        try:
+        path = _resolve_neuro_checkpoint_path(nm_cfg.checkpoint_file)
+        with guard_context(ctx='llm_adapter/llm_core.py:1238', catch_base=False) as __m3_guard_1226_8:
             os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
             torch.save({
                 'model_state_dict': self._neuro_modulator.state_dict(),
@@ -1235,7 +1365,9 @@ class HFBackend:
                 f'[HFBackend] NeuroModulator checkpoint saved: {path}'
             )
             return True
-        except Exception as e:
+
+        if __m3_guard_1226_8.error is not None:
+            e = __m3_guard_1226_8.error
             logging.getLogger('llm_adapter').debug(
                 f'[HFBackend] NeuroModulator checkpoint save failed: {e}'
             )
@@ -1246,10 +1378,10 @@ class HFBackend:
         if self._neuro_modulator is None:
             return False
         nm_cfg = get_global_config().neuro_modulator
-        path = nm_cfg.checkpoint_file
+        path = _resolve_neuro_checkpoint_path(nm_cfg.checkpoint_file)
         if not os.path.exists(path):
             return False
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1275', catch_base=False) as __m3_guard_1252_8:
             try:
                 # Prefer safe loading when supported (PyTorch >= 2.1 with weights_only)
                 ckpt = torch.load(path, map_location=self.device, weights_only=True)
@@ -1272,7 +1404,9 @@ class HFBackend:
                 f'[HFBackend] NeuroModulator checkpoint loaded: {path} (step={self._neuro_modulator._step})'
             )
             return True
-        except Exception as e:
+
+        if __m3_guard_1252_8.error is not None:
+            e = __m3_guard_1252_8.error
             logging.getLogger('llm_adapter').debug(
                 f'[HFBackend] NeuroModulator checkpoint load failed: {e}'
             )
@@ -1314,9 +1448,10 @@ class HFBackend:
     def _prepare_bridge_state(self, z_m3, state_dim: int, device):
         if z_m3 is None:
             return None
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1319', catch_base=False) as __m3_guard_1317_8:
             z = np.asarray(z_m3, dtype=np.float32).ravel()
-        except Exception:
+
+        if __m3_guard_1317_8.error is not None:
             return None
         if z.size == 0:
             return None
@@ -1339,14 +1474,14 @@ class HFBackend:
         if interval <= 0 or (_step <= 0) or (_step % interval != 0):
             return False
         updated = False
-        try:
-            if hasattr(core, 'energy_ctrl'):
+        with guard_context(ctx='llm_adapter/llm_core.py:1357', catch_base=False) as __m3_guard_1342_8:
+            if attr_has(core, 'energy_ctrl'):
                 ec = core.energy_ctrl
-                before = float(getattr(ec, 'cognitive_energy', 0.0))
+                before = float(attr_get_optional(ec, 'cognitive_energy', 0.0))
                 ec.cognitive_energy = max(0.0, before - 0.05 * interval)
                 if ec.cognitive_energy != before:
                     updated = True
-            before = float(getattr(core, 'decode_entropy', getattr(core, 'token_entropy', 0.0)))
+            before = float(attr_get_optional(core, 'decode_entropy', attr_get_optional(core, 'token_entropy', 0.0)))
             window = generated_ids[-interval:] if generated_ids else []
             n_unique = len(set(window)) if window else 0
             token_diversity = n_unique / max(interval, 1)
@@ -1354,7 +1489,8 @@ class HFBackend:
             if decode_entropy != before:
                 updated = True
             core.decode_entropy = decode_entropy
-        except Exception:
+
+        if __m3_guard_1342_8.error is not None:
             return False
         return updated
 
@@ -1402,29 +1538,31 @@ class HFBackend:
             'M3_HF_ENABLE_M3_SAMPLER', '1'
         ).lower() in ('1', 'true', 'yes', 'on')
         if m3_sampler is not None and core is not None and sampler_enabled:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:1408', catch_base=False) as __m3_guard_1405_12:
                 temperature = float(m3_sampler._compute_temperature(core, temperature))
                 top_k = int(m3_sampler._compute_top_k(core, top_k))
-            except Exception:
-                pass
+
+            if __m3_guard_1405_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         return temperature, top_k, top_p
 
     @staticmethod
     def _apply_bridge_logit_bias(logits, bridge_controls):
         if bridge_controls is None:
             return logits
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1420', catch_base=False) as __m3_guard_1416_8:
             lb = bridge_controls.logit_bias
             if lb is not None and lb.shape[-1] == logits.shape[-1]:
                 return logits + lb.to(device=logits.device, dtype=logits.dtype)
-        except Exception:
-            pass
+
+        if __m3_guard_1416_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         return logits
 
     def _apply_token_value_injection(self, logits, hidden, token_value_head, beta, internal_hidden_dim):
         if not self._token_critic_enabled(token_value_head, internal_hidden_dim):
             return logits
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1440', catch_base=False) as __m3_guard_1427_8:
             import torch as _torch
             if hidden is None:
                 return logits
@@ -1437,7 +1575,8 @@ class HFBackend:
             q = q / (q.std(dim=-1, keepdim=True) + 1e-6)
             q = _torch.clamp(q, -3.0, 3.0)
             return logits + float(beta) * q
-        except Exception:
+
+        if __m3_guard_1427_8.error is not None:
             return logits
 
     def _resolve_forbidden_token_ids(self, decode_control: Optional[Dict[str, Any]]) -> List[int]:
@@ -1467,9 +1606,10 @@ class HFBackend:
             try:
                 token_ids = self._tokenizer(term, add_special_tokens=False).get("input_ids", [])
             except Exception:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:1472', catch_base=False) as __m3_guard_1470_16:
                     token_ids = self._tokenizer.encode(term, add_special_tokens=False)
-                except Exception:
+
+                if __m3_guard_1470_16.error is not None:
                     token_ids = []
             for tid in token_ids:
                 try:
@@ -1486,20 +1626,23 @@ class HFBackend:
     def _apply_decode_control_params(temperature: float, top_k: int, top_p: float, decode_control: Optional[Dict[str, Any]]):
         if not decode_control or decode_control.get("allow_state_terms", True):
             return temperature, top_k, top_p
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1491', catch_base=False) as __m3_guard_1489_8:
             temperature = min(float(temperature), float(decode_control.get("max_temperature", temperature)))
-        except Exception:
-            pass
-        try:
+
+        if __m3_guard_1489_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:1497', catch_base=False) as __m3_guard_1493_8:
             ctrl_k = int(decode_control.get("max_top_k", top_k))
             if ctrl_k > 0 and int(top_k) > 0:
                 top_k = min(int(top_k), ctrl_k)
-        except Exception:
-            pass
-        try:
+
+        if __m3_guard_1493_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:1501', catch_base=False) as __m3_guard_1499_8:
             top_p = min(float(top_p), float(decode_control.get("max_top_p", top_p)))
-        except Exception:
-            pass
+
+        if __m3_guard_1499_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         return temperature, top_k, top_p
 
     @staticmethod
@@ -1545,6 +1688,90 @@ class HFBackend:
             risk = min(1.0, risk + 0.35)
         return float(risk)
 
+    def _set_runtime_diag(
+        self,
+        reason_code: str,
+        phase: str,
+        model_output_shape: str = "unknown",
+        has_logits: bool = False,
+    ) -> None:
+        self._last_runtime_diag = {
+            "reason_code": _normalize_control_reason(reason_code),
+            "phase": str(phase or "unknown"),
+            "model_output_shape": str(model_output_shape or "unknown"),
+            "has_logits": bool(has_logits),
+        }
+
+    @staticmethod
+    def _shape_text(value: Any) -> str:
+        if value is None:
+            return "none"
+        shape = attr_get_optional(value, "shape", None)
+        if shape is None:
+            return type(value).__name__
+        try:
+            dims = [int(x) for x in list(shape)]
+            return "x".join(str(d) for d in dims)
+        except Exception:
+            return str(shape)
+
+    def _raise_runtime_failure(
+        self,
+        reason_code: str,
+        phase: str,
+        out: Any = None,
+        message: str = "",
+    ) -> None:
+        logits = attr_get_optional(out, "logits", None)
+        has_logits = logits is not None
+        model_output_shape = self._shape_text(logits)
+        self._set_runtime_diag(
+            reason_code=reason_code,
+            phase=phase,
+            model_output_shape=model_output_shape,
+            has_logits=has_logits,
+        )
+        raise HFRuntimeFailure(
+            reason_code=reason_code,
+            phase=phase,
+            model_output_shape=model_output_shape,
+            has_logits=has_logits,
+            message=message,
+        )
+
+    def _validate_model_output(self, out: Any, phase: str) -> Any:
+        if out is None:
+            self._raise_runtime_failure(
+                reason_code="hf_runtime_failure",
+                phase=phase,
+                out=out,
+                message="model_output_none",
+            )
+        logits = attr_get_optional(out, "logits", None)
+        if logits is None:
+            self._raise_runtime_failure(
+                reason_code="hf_runtime_failure",
+                phase=phase,
+                out=out,
+                message="missing_logits",
+            )
+        try:
+            shape = self._shape_text(logits)
+            self._set_runtime_diag(
+                reason_code="hf_generate_ok",
+                phase=phase,
+                model_output_shape=shape,
+                has_logits=True,
+            )
+        except Exception:
+            self._set_runtime_diag(
+                reason_code="hf_generate_ok",
+                phase=phase,
+                model_output_shape="unknown",
+                has_logits=True,
+            )
+        return out
+
     # ------------------------------------------------------------------ #
     #  Core generation with M3 control hooks                              #
     # ------------------------------------------------------------------ #
@@ -1584,9 +1811,10 @@ class HFBackend:
         if messages is not None:
             try:
                 safe_messages = [dict(m) for m in messages]
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:1589', catch_base=False) as __m3_guard_1587_16:
                     system_max_tokens = int(os.getenv('M3_SYSTEM_MAX_TOKENS', '320'))
-                except Exception:
+
+                if __m3_guard_1587_16.error is not None:
                     system_max_tokens = 320
                 if max_input > 0:
                     system_max_tokens = min(system_max_tokens, max(64, int(max_input * 0.4)))
@@ -1607,18 +1835,19 @@ class HFBackend:
                                     continue
                                 kept_lines.append(ln)
                             system_content = "\n".join(kept_lines).strip()
-                            try:
+                            with guard_context(ctx='llm_adapter/llm_core.py:1617', catch_base=False) as __m3_guard_1610_28:
                                 ids = self._tokenizer(system_content, add_special_tokens=False).get('input_ids', [])
                                 if len(ids) > system_max_tokens:
                                     system_content = self._tokenizer.decode(
                                         ids[:system_max_tokens],
                                         skip_special_tokens=True,
                                     ).strip()
-                            except Exception:
-                                pass
+
+                            if __m3_guard_1610_28.error is not None:
+                                logging.getLogger(__name__).exception("Swallowed exception")
                         safe_messages[mi]['content'] = system_content
                         break
-                if hasattr(self._tokenizer, 'apply_chat_template'):
+                if attr_has(self._tokenizer, 'apply_chat_template'):
                     prompt_text = self._tokenizer.apply_chat_template(
                         safe_messages,
                         tokenize=False,
@@ -1646,23 +1875,49 @@ class HFBackend:
         inputs = self._tokenizer(
             prompt_text, return_tensors='pt', truncation=False
         )
-        try:
+        if not isinstance(inputs, dict):
+            self._raise_runtime_failure(
+                reason_code="hf_runtime_failure",
+                phase="tokenize",
+                out=None,
+                message="tokenizer_output_not_dict",
+            )
+        if attr_get_optional(inputs, "get", None) is None or inputs.get("input_ids") is None:
+            self._raise_runtime_failure(
+                reason_code="hf_runtime_failure",
+                phase="tokenize",
+                out=None,
+                message="missing_input_ids",
+            )
+        if inputs.get("attention_mask") is None:
+            with guard_context(ctx='llm_adapter/llm_core.py:1665', catch_base=False) as __m3_guard_1661_12:
+                inputs["attention_mask"] = _torch.ones_like(inputs["input_ids"])
+
+            if __m3_guard_1661_12.error is not None:
+                self._raise_runtime_failure(
+                    reason_code="hf_runtime_failure",
+                    phase="tokenize",
+                    out=None,
+                    message="missing_attention_mask",
+                )
+        with guard_context(ctx='llm_adapter/llm_core.py:1657', catch_base=False) as __m3_guard_1649_8:
             if max_input > 0:
                 cur_len = int(inputs['input_ids'].shape[1])
                 if cur_len > max_input:
                     start = cur_len - max_input
                     for k, v in list(inputs.items()):
-                        if hasattr(v, 'shape') and len(v.shape) == 2 and int(v.shape[1]) == cur_len:
+                        if attr_has(v, 'shape') and len(v.shape) == 2 and int(v.shape[1]) == cur_len:
                             inputs[k] = v[:, start:]
-        except Exception:
-            pass
+
+        if __m3_guard_1649_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         input_ids = inputs['input_ids'].to(self.device)
         attention_mask = inputs['attention_mask'].to(self.device)
         inputs_embeds = None
         bridge_controls = None
         bridge_runtime = None
 
-        # Lazy-init projection: HF hidden → internal model hidden
+        # Lazy-init projection: HF hidden ??internal model hidden
         if (
             token_value_head is not None
             and internal_hidden_dim is not None
@@ -1678,9 +1933,10 @@ class HFBackend:
 
         # Optional M3ControlBridge (experimental; off by default)
         if self._bridge_enabled_safe() and z_m3 is not None:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:1683', catch_base=False) as __m3_guard_1681_12:
                 state_dim = int(os.getenv('M3_BRIDGE_STATE_DIM', '256'))
-            except Exception:
+
+            if __m3_guard_1681_12.error is not None:
                 state_dim = 256
             try:
                 bridge = self._ensure_control_bridge(state_dim=state_dim)
@@ -1690,7 +1946,7 @@ class HFBackend:
                     with _torch.no_grad():
                         bridge_controls = bridge(z_t, strength=strength)
                     if bridge_controls.prefix_embeddings is not None:
-                        try:
+                        with guard_context(ctx='llm_adapter/llm_core.py:1708', catch_base=False) as __m3_guard_1693_24:
                             tok_emb = self._model.get_input_embeddings()(input_ids)
                             prefix = bridge_controls.prefix_embeddings.to(
                                 device=tok_emb.device,
@@ -1705,7 +1961,8 @@ class HFBackend:
                                 dtype=attention_mask.dtype,
                             )
                             attention_mask = _torch.cat([prefix_mask, attention_mask], dim=1)
-                        except Exception:
+
+                        if __m3_guard_1693_24.error is not None:
                             inputs_embeds = None
                     if (
                         bridge_controls.layer_gates is not None
@@ -1726,18 +1983,20 @@ class HFBackend:
         if self._neuro_enabled() and z_m3 is not None:
             try:
                 _nm_cfg = get_global_config().neuro_modulator
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:1731', catch_base=False) as __m3_guard_1729_16:
                     neuro_state_dim = int(os.getenv('M3_NEURO_STATE_DIM', str(_nm_cfg.state_dim)))
-                except Exception:
+
+                if __m3_guard_1729_16.error is not None:
                     neuro_state_dim = _nm_cfg.state_dim
                 neuro_mod = self._ensure_neuro_modulator(state_dim=neuro_state_dim)
                 z_neuro = self._prepare_bridge_state(
                     z_m3, state_dim=neuro_state_dim, device=self.device
                 )
                 if neuro_mod is not None and z_neuro is not None:
-                    try:
+                    with guard_context(ctx='llm_adapter/llm_core.py:1740', catch_base=False) as __m3_guard_1738_20:
                         neuro_strength = float(os.getenv('M3_NEURO_STRENGTH', str(_nm_cfg.strength)))
-                    except Exception:
+
+                    if __m3_guard_1738_20.error is not None:
                         neuro_strength = _nm_cfg.strength
                     with _torch.no_grad():
                         neuro_controls = neuro_mod(z_neuro, strength=neuro_strength)
@@ -1755,28 +2014,33 @@ class HFBackend:
         generated_ids: list = []
         past_key_values = None
         forbidden_token_ids = self._resolve_forbidden_token_ids(decode_control)
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1760', catch_base=False) as __m3_guard_1758_8:
             no_repeat_ngram = int(os.getenv("M3_HF_NO_REPEAT_NGRAM", "4"))
-        except Exception:
+
+        if __m3_guard_1758_8.error is not None:
             no_repeat_ngram = 4
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1764', catch_base=False) as __m3_guard_1762_8:
             no_repeat_penalty = float(os.getenv("M3_HF_NO_REPEAT_PENALTY", "1e9"))
-        except Exception:
+
+        if __m3_guard_1762_8.error is not None:
             no_repeat_penalty = 1e9
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1768', catch_base=False) as __m3_guard_1766_8:
             suffix_repeat_stop = int(os.getenv("M3_HF_SUFFIX_REPEAT_STOP", "3"))
-        except Exception:
+
+        if __m3_guard_1766_8.error is not None:
             suffix_repeat_stop = 3
         rep_temp_scale = 1.0
         rep_top_p_scale = 1.0
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1774', catch_base=False) as __m3_guard_1772_8:
             forbidden_penalty = float(decode_control.get("forbidden_penalty", 0.0)) if decode_control else 0.0
-        except Exception:
+
+        if __m3_guard_1772_8.error is not None:
             forbidden_penalty = 0.0
         # How often to micro-update core state during decoding
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1779', catch_base=False) as __m3_guard_1777_8:
             _core_update_interval = int(os.getenv('M3_HF_CORE_UPDATE_INTERVAL', '8'))
-        except Exception:
+
+        if __m3_guard_1777_8.error is not None:
             _core_update_interval = 8
 
         for _step in range(max_new_tokens):
@@ -1801,9 +2065,18 @@ class HFBackend:
                 else:
                     model_kw['input_ids'] = input_ids
                 out = self._model(**model_kw)
+            out = self._validate_model_output(out, phase="decode_forward")
 
             logits = out.logits[:, -1, :].float()          # (1, V)
-            hidden = out.hidden_states[-1][:, -1, :]       # (1, H)
+            hidden_states = attr_get_optional(out, "hidden_states", None)
+            if not hidden_states:
+                self._raise_runtime_failure(
+                    reason_code="hf_runtime_failure",
+                    phase="decode_hidden",
+                    out=out,
+                    message="missing_hidden_states",
+                )
+            hidden = hidden_states[-1][:, -1, :]       # (1, H)
             past_key_values = out.past_key_values
             inputs_embeds = None
 
@@ -1812,14 +2085,15 @@ class HFBackend:
 
             # NeuroModulator logit bias
             if neuro_controls is not None and neuro_controls.logit_bias is not None:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:1821', catch_base=False) as __m3_guard_1815_16:
                     _nlb = neuro_controls.logit_bias
                     if _nlb.shape[-1] == logits.shape[-1]:
                         logits = logits + _nlb.to(
                             device=logits.device, dtype=logits.dtype
                         )
-                except Exception:
-                    pass
+
+                if __m3_guard_1815_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
 
             # === M3 CONTROL 1: Token-Critic Q-value injection ===
             logits = self._apply_token_value_injection(
@@ -1833,14 +2107,14 @@ class HFBackend:
                 try:
                     logits[:, forbidden_token_ids] = logits[:, forbidden_token_ids] - float(forbidden_penalty)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).exception("Swallowed exception")
             if no_repeat_ngram >= 2:
                 blocked_ids = self._repeat_ngram_blocklist(generated_ids, ngram_size=no_repeat_ngram)
                 if blocked_ids:
                     try:
                         logits[:, blocked_ids] = logits[:, blocked_ids] - float(no_repeat_penalty)
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).exception("Swallowed exception")
 
             # === M3 CONTROL 2: Adaptive sampling from core state ===
             temperature, top_k, top_p = self._compute_sample_params(
@@ -1891,15 +2165,17 @@ class HFBackend:
             )
 
         if bridge_runtime is not None:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:1896', catch_base=False) as __m3_guard_1894_12:
                 bridge_runtime.close()
-            except Exception:
-                pass
+
+            if __m3_guard_1894_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         if neuro_runtime is not None:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:1901', catch_base=False) as __m3_guard_1899_12:
                 neuro_runtime.close()
-            except Exception:
-                pass
+
+            if __m3_guard_1899_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
         return self._tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
 
@@ -1908,6 +2184,13 @@ class HFBackend:
 DEFAULT_OUT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'docs_tests_data')
 )
+
+
+def _resolve_neuro_checkpoint_path(raw_path: Optional[str]) -> str:
+    value = str(raw_path or "").strip() or "neuro_modulator.pt"
+    if os.path.isabs(value):
+        return os.path.abspath(value)
+    return os.path.abspath(os.path.join(OUT_DIR, value))
 
 
 def _normalize_log_dir(raw_dir: Optional[str]) -> str:
@@ -1925,10 +2208,11 @@ def _normalize_log_dir(raw_dir: Optional[str]) -> str:
             return fallback
         except Exception:
             fallback = os.path.abspath(os.path.dirname(__file__))
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:1930', catch_base=False) as __m3_guard_1928_12:
                 os.makedirs(fallback, exist_ok=True)
-            except Exception:
-                pass
+
+            if __m3_guard_1928_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             return fallback
 
 
@@ -1937,10 +2221,11 @@ def _normalize_log_file(raw_path: Optional[str], base_dir: str, default_name: st
     if not os.path.isabs(value):
         value = os.path.join(base_dir, value)
     path = os.path.abspath(value)
-    try:
+    with guard_context(ctx='llm_adapter/llm_core.py:1942', catch_base=False) as __m3_guard_1940_4:
         os.makedirs(os.path.dirname(path) or base_dir, exist_ok=True)
-    except Exception:
-        pass
+
+    if __m3_guard_1940_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
     return path
 
 
@@ -1974,24 +2259,30 @@ os.environ.setdefault("M3_DPO_AUTO_COLLECT", "1")
 os.environ.setdefault("M3_TRAIN_EARLY_STOP", "1")
 os.environ.setdefault("M3_BRIDGE_ONLINE_ADAPT", "1")
 os.environ.setdefault("M3_TOKENIZER_AUTO_VOCAB", "1")
+os.environ.setdefault("M3_CONTROL_PLANE_MODE", "enforce")
+os.environ.setdefault("M3_CONTROL_DECISION_LOG", os.path.join(OUT_DIR, "control_decision.jsonl"))
+os.environ.setdefault("M3_RESEARCH_REPEAT_BLOCK_THRESHOLD", "0.90")
+os.environ.setdefault("M3_RESEARCH_REPEAT_BLOCK_STREAK", "2")
 
 if not logger.handlers:
     level = logging.DEBUG if os.environ.get('LLM_ADAPTER_DEBUG', '0') in ('1', 'true', 'TRUE') else logging.WARNING
     handler = None
     log_paths = [LOG_PATH]
-    try:
+    with guard_context(ctx='llm_adapter/llm_core.py:1985', catch_base=False) as __m3_guard_1982_4:
         import tempfile
         log_paths.append(os.path.join(tempfile.gettempdir(), f'llm_adapter_{os.getpid()}.log'))
-    except Exception:
-        pass
+
+    if __m3_guard_1982_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
     for path in log_paths:
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:1994', catch_base=False) as __m3_guard_1988_8:
             handler = RotatingFileHandler(path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding='utf-8')
             LOG_PATH = os.path.abspath(path)
             os.environ['LLM_ADAPTER_LOG_PATH'] = LOG_PATH
             os.environ['LLM_ADAPTER_LOG'] = LOG_PATH
             break
-        except Exception:
+
+        if __m3_guard_1988_8.error is not None:
             handler = None
             continue
     if handler is None:
@@ -2002,10 +2293,11 @@ if not logger.handlers:
         logger.addHandler(handler)
         logger.setLevel(level)
         if isinstance(handler, logging.StreamHandler) and not isinstance(handler, RotatingFileHandler):
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:2007', catch_base=False) as __m3_guard_2005_12:
                 logger.warning(f"Failed to open log file at {LOG_PATH}; falling back to stderr logging")
-            except Exception:
-                pass
+
+            if __m3_guard_2005_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
 __all__ = [
     'M3StateEncoder',
@@ -2060,10 +2352,12 @@ class TorchConversationalPolicy:
         lr = self.config.learning_rate
         
         # Initialize tokenizer
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:2066', catch_base=False) as __m3_guard_2063_8:
             self.tok = AutoTokenizer.from_config(get_global_config().tokenizer)
             logger.info(f"Using {self.tok.__class__.__name__}")
-        except Exception as e:
+
+        if __m3_guard_2063_8.error is not None:
+            e = __m3_guard_2063_8.error
             logger.warning(f"Tokenizer init failed ({e}), falling back to default M3Tokenizer")
             self.tok = AutoTokenizer()
             
@@ -2098,14 +2392,15 @@ class TorchConversationalPolicy:
                 self.q_head = PlasticBitLinear(hidden, 2)
                 self.intensity_head = PlasticBitLinear(hidden, 1)
                 # Encourage speaking early on (avoid always-waiting before training)
-                try:
-                    if hasattr(self.q_head, 'bias') and self.q_head.bias is not None:
+                with guard_context(ctx='llm_adapter/llm_core.py:2107', catch_base=False) as __m3_guard_2101_16:
+                    if attr_has(self.q_head, 'bias') and self.q_head.bias is not None:
                         # bias[0]=Q_wait, bias[1]=Q_speak
                         with torch_module.no_grad():
                             self.q_head.bias[0].fill_(0.0)
                             self.q_head.bias[1].fill_(0.5)
-                except Exception:
-                    pass
+
+                if __m3_guard_2101_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 
                 self.prefix_len = max(1, hidden // embed_dim)
                 self.state2prefix = PlasticBitLinear(hidden, self.prefix_len * embed_dim)
@@ -2150,7 +2445,7 @@ class TorchConversationalPolicy:
                     x = x[:, start_tgt:, :]
                 
                 if self.use_m3_integration and m3_memory is not None:
-                    try:
+                    with guard_context(ctx='llm_adapter/llm_core.py:2168', catch_base=False) as __m3_guard_2153_20:
                         self._ensure_m3_layers()
                         if isinstance(m3_memory, np.ndarray):
                             mem_t = self.torch.tensor(m3_memory, dtype=self.torch.float32, device=self.device)
@@ -2165,8 +2460,9 @@ class TorchConversationalPolicy:
                         if mem_t.ndim == 1:
                             mem_t = mem_t.unsqueeze(0)
                         x, _ = self.m3_decoder_layer(x, mem_t)
-                    except Exception:
-                        pass
+
+                    if __m3_guard_2153_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
                 
                 out = self.head(x)
                 if return_history:
@@ -2195,7 +2491,7 @@ class TorchConversationalPolicy:
                     ctx = att @ mem_v
                     gate = self.torch.sigmoid(self.gate_proj(dec_in))
                     if core_state:
-                        try:
+                        with guard_context(ctx='llm_adapter/llm_core.py:2208', catch_base=False) as __m3_guard_2198_24:
                             stability = float(core_state.get('stability', 0.5))
                             drift = float(core_state.get('drift', 0.0))
                             phi_delta = float(core_state.get('phi_delta', 0.0))
@@ -2205,8 +2501,9 @@ class TorchConversationalPolicy:
                                 + self.config.phi_delta_weight * abs(phi_delta)
                             )
                             gate = self.torch.clamp(gate + bias, 0.0, 1.0)
-                        except Exception:
-                            pass
+
+                        if __m3_guard_2198_24.error is not None:
+                            logging.getLogger(__name__).exception("Swallowed exception")
                     out = self.layer_norm((1.0 - gate) * dec_in + gate * ctx)
                     if dec_t.ndim == 2:
                         return out.squeeze(1)
@@ -2223,7 +2520,7 @@ class TorchConversationalPolicy:
                 self.Wv = nn.Linear(self.hidden, self.hidden, bias=False).to(self.device)
                 self._mem_dim = d
 
-        num_layers = getattr(self.config, 'num_layers', 6)
+        num_layers = attr_get_optional(self.config, 'num_layers', 6)
         self.model = Model(self.vocab_size, embed_dim, hidden, num_layers, self.torch, self.device, self.config.init_gate_value, self.tok.PAD, self.config).to(self.device)
 
         # Load checkpoint if available (safe)
@@ -2243,12 +2540,13 @@ class TorchConversationalPolicy:
                 logger.info(f"Loaded checkpoint from {checkpoint_path}")
             except Exception as e:
                 logger.error(f"Failed to load checkpoint: {e}")
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:2250', catch_base=False) as __m3_guard_2246_16:
                     bad_path = checkpoint_path + ".bad"
                     os.replace(checkpoint_path, bad_path)
                     logger.warning(f"Moved bad checkpoint to {bad_path}")
-                except Exception:
-                    pass
+
+                if __m3_guard_2246_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
 
         # M3 State Cache (M3 integration)
         self.m3_cache = M3StateCache(get_global_config().state_cache)
@@ -2293,12 +2591,12 @@ class TorchConversationalPolicy:
         self._autonomy_last_lambda: float = 0.0
         self._autonomy_state_raw_dim: int = 18
         self._autonomy_state_proj = self.torch.nn.Linear(self._autonomy_state_raw_dim, int(self.model.hidden)).to(self.device)
-        self._tokenizer_rebuilds: int = int(getattr(self.tok, "_rebuild_count", 0))
+        self._tokenizer_rebuilds: int = int(attr_get_optional(self.tok, "_rebuild_count", 0))
         self._stability_nonfinite_streak: Dict[str, int] = {}
         self._stability_step_count: int = 0
         self._stability_token_head_frozen_until: int = 0
         self._stability_skip_steps: int = 0
-        self.set_autonomy_heads("linear" if bool(getattr(self.autonomy_rl_cfg, "use_linear_heads", True)) else "plastic")
+        self.set_autonomy_heads("linear" if bool(attr_get_optional(self.autonomy_rl_cfg, "use_linear_heads", True)) else "plastic")
         self._apply_stability_policies()
         # Lock to serialize learn_pair calls to avoid concurrent in-place modifications
         self._learn_lock = threading.Lock()
@@ -2316,7 +2614,7 @@ class TorchConversationalPolicy:
         self._token_adv_alpha: float = float(os.environ.get('LLM_ADAPTER_TOKEN_ADV_ALPHA', '0.5'))
 
         # === kNN-LM: Key/Value Memory ===
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:2330', catch_base=False) as __m3_guard_2319_8:
             cap_env = os.getenv("LLM_ADAPTER_KNN_CAP")
             if cap_env is not None:
                 knn_cap = int(cap_env)
@@ -2327,7 +2625,8 @@ class TorchConversationalPolicy:
             if hard_max > 0:
                 knn_cap = min(knn_cap, hard_max)
             knn_cap = max(1, knn_cap)
-        except Exception:
+
+        if __m3_guard_2319_8.error is not None:
             knn_cap = 200000
         knn_config = KNNIndexConfig(
             tau=float(os.getenv("LLM_ADAPTER_KNN_TAU", str(get_global_config().knn_index.tau))),
@@ -2356,7 +2655,7 @@ class TorchConversationalPolicy:
         
         # [Optimization] Pure BF16 Training (No Scaler needed for BF16)
         # Scaler is only for FP16 underflow prevention. BF16 has wide dynamic range.
-        # CPU는 bfloat16을 지원 안 함 → float32로 강제
+        # CPU??bfloat16??吏????????float32濡?媛뺤젣
         if self.device.type == 'cpu':
             self.amp_dtype = self.torch.float32
         else:
@@ -2368,6 +2667,9 @@ class TorchConversationalPolicy:
         self._hf_circuit_open = False
         self._hf_circuit_reason = ""
         self._gpu_fault_count = 0
+        os.environ.setdefault("M3_HF_FAILURE_WINDOW_SEC", "30")
+        os.environ.setdefault("M3_HF_FAILURE_THRESHOLD", "3")
+        os.environ.setdefault("M3_HF_FAILURE_COOLDOWN_SEC", "20")
         self._record_scope = str(os.getenv("M3_TRAIN_RECORD_SCOPE", "user_only") or "user_only").strip().lower()
         self._last_record_reject_reason = ""
         self._phi_zero_streak = 0
@@ -2375,6 +2677,11 @@ class TorchConversationalPolicy:
         control_window = max(8, int(os.getenv("M3_CONTROL_HEALTH_WINDOW", "24")))
         self._control_health_window = deque(maxlen=control_window)
         self._auto_mode_fail_streak = 0
+        self._hf_failure_events: deque = deque(maxlen=256)
+        self._hf_runtime_cooldown_until: float = 0.0
+        self._safe_fallback_turn: int = 0
+        self._retrieval_attempts: int = 0
+        self._retrieval_hits: int = 0
         # Semantic scoring pipeline
         self._meaning_cfg = get_global_config().meaning_pipeline
         self._grounding_cfg = get_global_config().grounding
@@ -2397,29 +2704,33 @@ class TorchConversationalPolicy:
         except Exception:
             return
         for module in self.model.modules():
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:2406', catch_base=False) as __m3_guard_2400_12:
                 if not isinstance(module, self.torch.nn.Linear):
                     continue
-                if hasattr(module, "weight_u"):
+                if attr_has(module, "weight_u"):
                     continue
                 spectral_norm(module)
-            except Exception:
+
+            if __m3_guard_2400_12.error is not None:
                 continue
 
     def _autonomy_params(self):
         params = []
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:2413', catch_base=False) as __m3_guard_2411_8:
             params.extend(list(self.model.q_head.parameters()))
-        except Exception:
-            pass
-        try:
+
+        if __m3_guard_2411_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:2417', catch_base=False) as __m3_guard_2415_8:
             params.extend(list(self.model.intensity_head.parameters()))
-        except Exception:
-            pass
-        try:
+
+        if __m3_guard_2415_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:2421', catch_base=False) as __m3_guard_2419_8:
             params.extend(list(self._autonomy_state_proj.parameters()))
-        except Exception:
-            pass
+
+        if __m3_guard_2419_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         return [p for p in params if p is not None]
 
     def _rebuild_autonomy_optimizer(self) -> None:
@@ -2442,28 +2753,29 @@ class TorchConversationalPolicy:
             new_q = self.torch.nn.Linear(hidden, 2).to(self.device)
             new_i = self.torch.nn.Linear(hidden, 1).to(self.device)
 
-        old_q = getattr(self.model, "q_head", None)
-        old_i = getattr(self.model, "intensity_head", None)
-        try:
+        old_q = attr_get_optional(self.model, "q_head", None)
+        old_i = attr_get_optional(self.model, "intensity_head", None)
+        with guard_context(ctx='llm_adapter/llm_core.py:2465', catch_base=False) as __m3_guard_2447_8:
             with self.torch.no_grad():
-                if old_q is not None and hasattr(old_q, "weight") and hasattr(new_q, "weight"):
+                if old_q is not None and attr_has(old_q, "weight") and attr_has(new_q, "weight"):
                     r = min(int(old_q.weight.shape[0]), int(new_q.weight.shape[0]))
                     c = min(int(old_q.weight.shape[1]), int(new_q.weight.shape[1]))
                     if r > 0 and c > 0:
                         new_q.weight[:r, :c].copy_(old_q.weight[:r, :c])
-                if old_i is not None and hasattr(old_i, "weight") and hasattr(new_i, "weight"):
+                if old_i is not None and attr_has(old_i, "weight") and attr_has(new_i, "weight"):
                     r = min(int(old_i.weight.shape[0]), int(new_i.weight.shape[0]))
                     c = min(int(old_i.weight.shape[1]), int(new_i.weight.shape[1]))
                     if r > 0 and c > 0:
                         new_i.weight[:r, :c].copy_(old_i.weight[:r, :c])
-                if hasattr(new_q, "bias") and new_q.bias is not None:
+                if attr_has(new_q, "bias") and new_q.bias is not None:
                     new_q.bias.zero_()
                     if int(new_q.bias.shape[0]) >= 2:
                         new_q.bias[1].fill_(0.5)
-                if hasattr(new_i, "bias") and new_i.bias is not None:
+                if attr_has(new_i, "bias") and new_i.bias is not None:
                     new_i.bias.fill_(0.8)
-        except Exception:
-            pass
+
+        if __m3_guard_2447_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
         self.model.q_head = new_q
         self.model.intensity_head = new_i
@@ -2472,21 +2784,23 @@ class TorchConversationalPolicy:
         return {"ok": True, "mode": mode_norm}
 
     def get_autonomy_diagnostics(self) -> Dict[str, Any]:
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:2477', catch_base=False) as __m3_guard_2475_8:
             speak_rate = float(np.mean(self._autonomy_recent_actions)) if self._autonomy_recent_actions else 0.0
-        except Exception:
+
+        if __m3_guard_2475_8.error is not None:
             speak_rate = 0.0
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:2481', catch_base=False) as __m3_guard_2479_8:
             lam_mean = float(np.mean(self._autonomy_recent_lambda)) if self._autonomy_recent_lambda else 0.0
-        except Exception:
+
+        if __m3_guard_2479_8.error is not None:
             lam_mean = 0.0
         out = {
-            "head_mode": str(getattr(self, "_autonomy_head_mode", "unknown")),
+            "head_mode": str(attr_get_optional(self, "_autonomy_head_mode", "unknown")),
             "speak_rate": float(speak_rate),
             "lambda_mean": float(lam_mean),
-            "credit_ema": float(getattr(self, "_autonomy_credit_ema", 0.0)),
-            "reward_ema": float(getattr(self, "_autonomy_reward_ema", 0.0)),
-            "last_diag": dict(getattr(self, "_autonomy_last_diag", {}) or {}),
+            "credit_ema": float(attr_get_optional(self, "_autonomy_credit_ema", 0.0)),
+            "reward_ema": float(attr_get_optional(self, "_autonomy_reward_ema", 0.0)),
+            "last_diag": dict(attr_get_optional(self, "_autonomy_last_diag", {}) or {}),
         }
         return out
 
@@ -2526,30 +2840,33 @@ class TorchConversationalPolicy:
         try:
             self._log_jsonl(os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"), payload)
         except Exception:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:2531', catch_base=False) as __m3_guard_2529_12:
                 logger.warning(f"stability_guard {kind}: {reason}")
-            except Exception:
-                pass
+
+            if __m3_guard_2529_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
     def _collect_non_finite_issues(self, params) -> List[str]:
         issues: List[str] = []
         for p in params:
             if p is None:
                 continue
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:2543', catch_base=False) as __m3_guard_2539_12:
                 if not self.torch.isfinite(p.data).all():
                     issues.append("param_non_finite")
                     break
-            except Exception:
+
+            if __m3_guard_2539_12.error is not None:
                 continue
         for p in params:
             if p is None:
                 continue
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:2552', catch_base=False) as __m3_guard_2548_12:
                 if p.grad is not None and not self.torch.isfinite(p.grad).all():
                     issues.append("grad_non_finite")
                     break
-            except Exception:
+
+            if __m3_guard_2548_12.error is not None:
                 continue
         return issues
 
@@ -2560,11 +2877,12 @@ class TorchConversationalPolicy:
             for p in params:
                 if p is None or p.ndim <= 1:
                     continue
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:2567', catch_base=False) as __m3_guard_2563_16:
                     n = self.torch.norm(p.data)
                     if self.torch.isfinite(n) and float(n.item()) > lim:
                         p.data.mul_(lim / (n + 1e-8))
-                except Exception:
+
+                if __m3_guard_2563_16.error is not None:
                     continue
 
     def _zero_invalid_gradients(self, params) -> int:
@@ -2572,29 +2890,31 @@ class TorchConversationalPolicy:
         for p in params:
             if p is None or p.grad is None:
                 continue
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:2584', catch_base=False) as __m3_guard_2575_12:
                 g = p.grad
                 bad = ~self.torch.isfinite(g)
-                n_bad = int(bad.sum().item()) if hasattr(bad, "sum") else 0
+                n_bad = int(bad.sum().item()) if attr_has(bad, "sum") else 0
                 if n_bad > 0:
                     g = g.clone()
                     g[bad] = 0.0
                     p.grad = g
                     zeroed += n_bad
-            except Exception:
+
+            if __m3_guard_2575_12.error is not None:
                 continue
         return int(zeroed)
 
     def _set_token_head_frozen(self, frozen: bool) -> None:
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:2596', catch_base=False) as __m3_guard_2589_8:
             for name in ("head", "token_value"):
-                mod = getattr(self.model, name, None)
+                mod = attr_get_optional(self.model, name, None)
                 if mod is None:
                     continue
                 for p in mod.parameters():
                     p.requires_grad_(not frozen)
-        except Exception:
-            pass
+
+        if __m3_guard_2589_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def _guarded_optimizer_step(
         self,
@@ -2603,9 +2923,9 @@ class TorchConversationalPolicy:
         tag: str,
         clip_override: Optional[float] = None,
     ) -> bool:
-        self._stability_step_count = int(getattr(self, "_stability_step_count", 0)) + 1
+        self._stability_step_count = int(attr_get_optional(self, "_stability_step_count", 0)) + 1
         if (
-            int(getattr(self, "_stability_token_head_frozen_until", 0)) > 0
+            int(attr_get_optional(self, "_stability_token_head_frozen_until", 0)) > 0
             and int(self._stability_step_count) >= int(self._stability_token_head_frozen_until)
         ):
             self._set_token_head_frozen(False)
@@ -2623,23 +2943,25 @@ class TorchConversationalPolicy:
             self._stability_nonfinite_streak[tag_key] = int(self._stability_nonfinite_streak.get(tag_key, 0)) + 1
             streak = int(self._stability_nonfinite_streak[tag_key])
             backoff_applied = False
-            if bool(getattr(self.stability_cfg, "lr_backoff_on_nonfinite", True)):
-                max_steps = int(max(0, getattr(self.stability_cfg, "max_backoff_steps", 5)))
+            if bool(attr_get_optional(self.stability_cfg, "lr_backoff_on_nonfinite", True)):
+                max_steps = int(max(0, attr_get_optional(self.stability_cfg, "max_backoff_steps", 5)))
                 if streak <= max_steps:
-                    factor = float(max(1e-4, min(1.0, getattr(self.stability_cfg, "backoff_factor", 0.5))))
-                    try:
+                    factor = float(max(1e-4, min(1.0, attr_get_optional(self.stability_cfg, "backoff_factor", 0.5))))
+                    with guard_context(ctx='llm_adapter/llm_core.py:2634', catch_base=False) as __m3_guard_2630_20:
                         for pg in optimizer.param_groups:
                             pg["lr"] = float(pg.get("lr", 0.0)) * factor
                         backoff_applied = True
-                    except Exception:
+
+                    if __m3_guard_2630_20.error is not None:
                         backoff_applied = False
             if streak >= 3 and str(tag_key) in {"learn_pair", "train_batch", "dpo_batch"}:
                 self._set_token_head_frozen(True)
                 self._stability_token_head_frozen_until = int(self._stability_step_count) + 50
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:2641', catch_base=False) as __m3_guard_2639_12:
                 optimizer.zero_grad(set_to_none=True)
-            except Exception:
-                pass
+
+            if __m3_guard_2639_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             self._stability_skip_steps += 1
             self._log_stability_event(
                 "skip_step",
@@ -2657,15 +2979,15 @@ class TorchConversationalPolicy:
         else:
             self._stability_nonfinite_streak[tag_key] = 0
             # --- LR recovery: gradually restore LR after consecutive successful steps ---
-            if bool(getattr(self.stability_cfg, "lr_recovery_enabled", True)):
+            if bool(attr_get_optional(self.stability_cfg, "lr_recovery_enabled", True)):
                 recovery_key = f"_lr_ok_streak_{tag_key}"
-                streak_ok = int(getattr(self, recovery_key, 0)) + 1
-                setattr(self, recovery_key, streak_ok)
-                recovery_streak_needed = int(max(1, getattr(self.stability_cfg, "lr_recovery_streak", 10)))
+                streak_ok = int(attr_get_optional(self, recovery_key, 0)) + 1
+                attr_set(self, recovery_key, streak_ok)
+                recovery_streak_needed = int(max(1, attr_get_optional(self.stability_cfg, "lr_recovery_streak", 10)))
                 if streak_ok >= recovery_streak_needed:
-                    recovery_factor = float(max(1.0, getattr(self.stability_cfg, "lr_recovery_factor", 1.2)))
-                    initial_lr = float(getattr(self.stability_cfg, "lr_initial", 0.0))
-                    try:
+                    recovery_factor = float(max(1.0, attr_get_optional(self.stability_cfg, "lr_recovery_factor", 1.2)))
+                    initial_lr = float(attr_get_optional(self.stability_cfg, "lr_initial", 0.0))
+                    with guard_context(ctx='llm_adapter/llm_core.py:2679', catch_base=False) as __m3_guard_2668_20:
                         for pg in optimizer.param_groups:
                             old_lr = float(pg.get("lr", 0.0))
                             # Auto-detect initial LR from stored value or first seen
@@ -2676,22 +2998,26 @@ class TorchConversationalPolicy:
                             new_lr = min(pg_initial, old_lr * recovery_factor)
                             if new_lr > old_lr:
                                 pg["lr"] = new_lr
-                    except Exception:
-                        pass
-                    setattr(self, recovery_key, 0)
+
+                    if __m3_guard_2668_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
+                    attr_set(self, recovery_key, 0)
         clip_norm = float(clip_override if clip_override is not None else self.stability_cfg.grad_clip_norm)
         if clip_norm > 0:
-            try:
-                clip_mode = str(getattr(self.stability_cfg, "clip_mode", "norm")).strip().lower()
+            with guard_context(ctx='llm_adapter/llm_core.py:2690', catch_base=False) as __m3_guard_2684_12:
+                clip_mode = str(attr_get_optional(self.stability_cfg, "clip_mode", "norm")).strip().lower()
                 if clip_mode == "value":
                     self.torch.nn.utils.clip_grad_value_(plist, clip_value=clip_norm)
                 else:
                     self.torch.nn.utils.clip_grad_norm_(plist, max_norm=clip_norm)
-            except Exception:
-                pass
-        try:
+
+            if __m3_guard_2684_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:2694', catch_base=False) as __m3_guard_2692_8:
             optimizer.step()
-        except Exception as e:
+
+        if __m3_guard_2692_8.error is not None:
+            e = __m3_guard_2692_8.error
             self._stability_skip_steps += 1
             self._log_stability_event(
                 "optimizer_error",
@@ -2704,9 +3030,10 @@ class TorchConversationalPolicy:
 
     def _is_numeric_dump_response(self, text: str) -> bool:
         """Detect low-quality CSV-like numeric dumps."""
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:2709', catch_base=False) as __m3_guard_2707_8:
             s = str(text).strip()
-        except Exception:
+
+        if __m3_guard_2707_8.error is not None:
             return False
         if not s or "," not in s:
             return False
@@ -2721,13 +3048,14 @@ class TorchConversationalPolicy:
                 float(p)
                 numeric += 1
             except Exception:
-                pass
+                logging.getLogger(__name__).exception("Swallowed exception")
         return numeric >= max(6, int(0.85 * len(parts)))
 
     def _is_backend_status_text(self, text: str) -> bool:
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:2730', catch_base=False) as __m3_guard_2728_8:
             s = str(text or "").strip()
-        except Exception:
+
+        if __m3_guard_2728_8.error is not None:
             return False
         if not s:
             return False
@@ -2741,6 +3069,7 @@ class TorchConversationalPolicy:
             "local error:",
             "generation is in safe mode",
             "현재 생성 경로가 일시적으로 안전 모드입니다.",
+
         )
         if any(sl.startswith(p) for p in prefixes):
             return True
@@ -2755,9 +3084,10 @@ class TorchConversationalPolicy:
         return any(m in sl for m in markers)
 
     def _is_refusal_disclaimer(self, text: str) -> bool:
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:2760', catch_base=False) as __m3_guard_2758_8:
             s = str(text or "").strip().lower()
-        except Exception:
+
+        if __m3_guard_2758_8.error is not None:
             return False
         if not s:
             return False
@@ -2776,11 +3106,11 @@ class TorchConversationalPolicy:
             "developed by alibaba",
             "qwen",
             "alibaba",
-            "인공지능",
-            "언어 모델",
-            "감정을 느끼지 못",
-            "개인적인 감정이나 경험이 없",
-            "훈련 버튼",
+            "artificial intelligence",
+            "language model",
+            "cannot feel emotions",
+            "no personal emotions",
+            "train button",
         )
         if any(p in s for p in markers):
             return True
@@ -2796,9 +3126,10 @@ class TorchConversationalPolicy:
         return any(re.search(p, s) for p in regex_patterns)
 
     def _is_identity_drift_output(self, text: str) -> bool:
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:2801', catch_base=False) as __m3_guard_2799_8:
             s = str(text or "").strip()
-        except Exception:
+
+        if __m3_guard_2799_8.error is not None:
             return False
         if not s:
             return False
@@ -2813,17 +3144,18 @@ class TorchConversationalPolicy:
             "ai assistant",
             "train button",
             "currently untrained",
-            "인공지능",
-            "언어 모델",
-            "알리바바",
-            "퀸웬",
+            "artificial intelligence",
+            "language model",
+            "provider claim",
+            "assistant claim",
         )
         return any(m in sl for m in drift_markers)
 
     def _is_disallowed_generation_output(self, text: str) -> bool:
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:2826', catch_base=False) as __m3_guard_2824_8:
             s = str(text or "").strip()
-        except Exception:
+
+        if __m3_guard_2824_8.error is not None:
             return True
         if not s:
             return True
@@ -2956,9 +3288,10 @@ class TorchConversationalPolicy:
         if not response_text:
             return False, info
 
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:2961', catch_base=False) as __m3_guard_2959_8:
             min_chars = max(2, int(os.getenv("M3_CONTROL_MIN_RESPONSE_CHARS", "8")))
-        except Exception:
+
+        if __m3_guard_2959_8.error is not None:
             min_chars = 24
         if len(response_text) < min_chars:
             return False, info
@@ -2966,9 +3299,9 @@ class TorchConversationalPolicy:
         prompt_text = self._extract_last_user_text(prompt)
 
         # Primary verifier: delegate to the core's existing accuracy metric when available.
-        core = getattr(self, "core", None)
-        if core is not None and hasattr(core, "_evaluate_dialog_accuracy"):
-            try:
+        core = attr_get_optional(self, "core", None)
+        if core is not None and attr_has(core, "_evaluate_dialog_accuracy"):
+            with guard_context(ctx='llm_adapter/llm_core.py:2986', catch_base=False) as __m3_guard_2971_12:
                 metrics = core._evaluate_dialog_accuracy(prompt_text, response_text)
                 if isinstance(metrics, dict):
                     score = float(metrics.get("score", 0.0))
@@ -2983,8 +3316,9 @@ class TorchConversationalPolicy:
                 if source == "autonomy":
                     min_score = float(os.getenv("M3_CONTROL_MIN_AUTONOMY_SCORE", "0.08"))
                 return score >= min_score, info
-            except Exception:
-                pass
+
+            if __m3_guard_2971_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
         prompt_tokens = set(self._verifier_tokens(prompt_text))
         response_tokens = set(self._verifier_tokens(response_text))
@@ -3019,9 +3353,10 @@ class TorchConversationalPolicy:
         score = max(0.0, min(1.0, score - rep_penalty))
         info["score"] = score
 
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3024', catch_base=False) as __m3_guard_3022_8:
             rep_max = float(os.getenv("M3_CONTROL_MAX_REPETITION", "0.45"))
-        except Exception:
+
+        if __m3_guard_3022_8.error is not None:
             rep_max = 0.45
         if loop_hit > 0.0 or rep_score > rep_max:
             return False, info
@@ -3040,11 +3375,12 @@ class TorchConversationalPolicy:
         if isinstance(generation_contract, dict):
             return generation_contract
         if isinstance(generation_contract, str):
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:3047', catch_base=False) as __m3_guard_3043_12:
                 parsed = json.loads(generation_contract)
                 if isinstance(parsed, dict):
                     return parsed
-            except Exception:
+
+            if __m3_guard_3043_12.error is not None:
                 return {"mode": generation_contract}
         return {}
 
@@ -3064,7 +3400,7 @@ class TorchConversationalPolicy:
             forced_mode = str(os.getenv("M3_MEANING_PIPELINE_MODE", "")).strip().lower()
         if forced_mode:
             return forced_mode
-        return str(getattr(cfg, "mode", "off")).strip().lower() if cfg else "off"
+        return str(attr_get_optional(cfg, "mode", "off")).strip().lower() if cfg else "off"
 
     def _meaning_effective_cfg(self, generation_contract: Optional[Any]) -> Dict[str, Any]:
         cfg = self._meaning_cfg
@@ -3072,14 +3408,14 @@ class TorchConversationalPolicy:
         if cfg is not None:
             base.update(
                 {
-                    "enabled": bool(getattr(cfg, "enabled", False)),
-                    "mode": str(getattr(cfg, "mode", "off")).strip().lower(),
-                    "candidate_count": int(getattr(cfg, "candidate_count", 4) or 4),
+                    "enabled": bool(attr_get_optional(cfg, "enabled", False)),
+                    "mode": str(attr_get_optional(cfg, "mode", "off")).strip().lower(),
+                    "candidate_count": int(attr_get_optional(cfg, "candidate_count", 4) or 4),
                     "force_clarify_overall_uncertainty_threshold": float(
-                        getattr(cfg, "force_clarify_overall_uncertainty_threshold", 0.62)
+                        attr_get_optional(cfg, "force_clarify_overall_uncertainty_threshold", 0.62)
                     ),
                     "force_clarify_grounding_uncertainty_threshold": float(
-                        getattr(cfg, "force_clarify_grounding_uncertainty_threshold", 0.50)
+                        attr_get_optional(cfg, "force_clarify_grounding_uncertainty_threshold", 0.50)
                     ),
                 }
             )
@@ -3107,7 +3443,7 @@ class TorchConversationalPolicy:
     ) -> bool:
         if not self._should_gate_meaning(meaning_state, generation_contract):
             return False
-        if not getattr(self, "_semantic_scorer", None):
+        if not attr_get_optional(self, "_semantic_scorer", None):
             return False
         if not self._semantic_scorer_cfg.enabled:
             return False
@@ -3145,7 +3481,7 @@ class TorchConversationalPolicy:
         generation_contract: Optional[Any],
         user_text: str,
     ) -> Tuple[bool, Dict[str, Any], Any]:
-        scorer = getattr(self, "_semantic_scorer", None)
+        scorer = attr_get_optional(self, "_semantic_scorer", None)
         if scorer is None:
             return False, {"enabled": False}, None
         sem = scorer.evaluate(
@@ -3155,38 +3491,40 @@ class TorchConversationalPolicy:
             response_plan=response_plan,
             generation_contract=generation_contract,
         )
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3174', catch_base=False) as __m3_guard_3158_8:
             scorer.save_eval_record(
                 {
                     "user_text": str(user_text or ""),
                     "response_text": str(response or ""),
                     "answer_type": str((response_plan or {}).get("answer_type", "")) if isinstance(response_plan, dict) else "",
                     "plan_contract": self._normalize_generation_contract(generation_contract),
-                    "overall": float(getattr(sem, "overall", 0.0)),
-                    "entailment": float(getattr(sem, "entailment", 0.0)),
-                    "contradiction": float(getattr(sem, "contradiction", 0.0)),
-                    "plan_adherence": float(getattr(sem, "plan_adherence", 0.0)),
-                    "identity_consistency": float(getattr(sem, "identity_consistency", 0.0)),
-                    "reasons": list(getattr(sem, "reasons", [])),
-                    "passed": bool(getattr(sem, "pass_check", False)),
+                    "overall": float(attr_get_optional(sem, "overall", 0.0)),
+                    "entailment": float(attr_get_optional(sem, "entailment", 0.0)),
+                    "contradiction": float(attr_get_optional(sem, "contradiction", 0.0)),
+                    "plan_adherence": float(attr_get_optional(sem, "plan_adherence", 0.0)),
+                    "identity_consistency": float(attr_get_optional(sem, "identity_consistency", 0.0)),
+                    "reasons": list(attr_get_optional(sem, "reasons", [])),
+                    "passed": bool(attr_get_optional(sem, "pass_check", False)),
                 }
             )
-        except Exception:
-            pass
-        return bool(getattr(sem, "pass_check", False)), {
-            "plan_adherence": float(getattr(sem, "plan_adherence", 0.0)),
-            "entailment": float(getattr(sem, "entailment", 0.0)),
-            "identity_consistency": float(getattr(sem, "identity_consistency", 0.0)),
-            "contradiction": float(getattr(sem, "contradiction", 0.0)),
-            "overall": float(getattr(sem, "overall", 0.0)),
-            "reasons": list(getattr(sem, "reasons", [])),
+
+        if __m3_guard_3158_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        return bool(attr_get_optional(sem, "pass_check", False)), {
+            "plan_adherence": float(attr_get_optional(sem, "plan_adherence", 0.0)),
+            "entailment": float(attr_get_optional(sem, "entailment", 0.0)),
+            "identity_consistency": float(attr_get_optional(sem, "identity_consistency", 0.0)),
+            "contradiction": float(attr_get_optional(sem, "contradiction", 0.0)),
+            "overall": float(attr_get_optional(sem, "overall", 0.0)),
+            "reasons": list(attr_get_optional(sem, "reasons", [])),
         }, sem
 
     def _candidate_count(self) -> int:
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3188', catch_base=False) as __m3_guard_3186_8:
             n = int(os.getenv("M3_MEANING_PIPELINE_CANDIDATE_COUNT", str(self._semantic_scorer_cfg.candidate_count)))
-        except Exception:
-            n = int(getattr(self._semantic_scorer_cfg, "candidate_count", 4))
+
+        if __m3_guard_3186_8.error is not None:
+            n = int(attr_get_optional(self._semantic_scorer_cfg, "candidate_count", 4))
         return max(1, int(n))
 
     def _plan_contract_text(
@@ -3213,13 +3551,13 @@ class TorchConversationalPolicy:
         return json.dumps({"generation_contract": "meaning_plan", "plan": safe_plan}, ensure_ascii=False)
 
     def _meaning_should_gate(self, meaning_state: Optional[Dict[str, Any]], generation_contract: Optional[Any]) -> bool:
-        if not getattr(self._meaning_cfg, "enabled", False):
+        if not attr_get_optional(self._meaning_cfg, "enabled", False):
             return False
         mode = self._meaning_mode(generation_contract)
         return mode in {"soft_gate", "full"}
 
     def _meaning_should_log(self, meaning_state: Optional[Dict[str, Any]], generation_contract: Optional[Any]) -> bool:
-        if not getattr(self._meaning_cfg, "enabled", False):
+        if not attr_get_optional(self._meaning_cfg, "enabled", False):
             return False
         mode = self._meaning_mode(generation_contract)
         return mode in {"shadow", "soft_gate", "full"}
@@ -3241,16 +3579,299 @@ class TorchConversationalPolicy:
         return intent in allow or not intent
 
     def _read_float(self, name: str, default: float) -> float:
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3246', catch_base=False) as __m3_guard_3244_8:
             return float(os.getenv(name, str(default)))
-        except Exception:
+
+        if __m3_guard_3244_8.error is not None:
             return float(default)
 
     def _read_int(self, name: str, default: int) -> int:
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3252', catch_base=False) as __m3_guard_3250_8:
             return int(os.getenv(name, str(default)))
-        except Exception:
+
+        if __m3_guard_3250_8.error is not None:
             return int(default)
+
+    def _ensure_control_health_tracking(self) -> None:
+        if attr_get_optional(self, "_control_health_window", None) is None:
+            window = int(os.getenv("M3_CONTROL_HEALTH_WINDOW", "24"))
+            self._control_health_window = deque(maxlen=max(8, window))
+        if attr_get_optional(self, "_auto_mode_fail_streak", None) is None:
+            self._auto_mode_fail_streak = 0
+
+    def _note_control_health(self, success: bool, reason: str = "") -> None:
+        self._ensure_control_health_tracking()
+        reason_code = _normalize_control_reason(reason)
+        with guard_context(ctx='llm_adapter/llm_core.py:3262', catch_base=False) as __m3_guard_3259_8:
+            self._control_health_window.append((time.time(), bool(success), str(reason_code)))
+
+        if __m3_guard_3259_8.error is not None:
+            return
+        if success:
+            self._auto_mode_fail_streak = 0
+        else:
+            self._auto_mode_fail_streak = int(attr_get_optional(self, "_auto_mode_fail_streak", 0)) + 1
+
+    def _control_selection_mode(self) -> str:
+        raw = str(os.getenv("M3_CONTROL_SELECTION_MODE", "state") or "state").strip().lower()
+        if raw in {"0", "off", "none", "disable", "disabled", "no", "false"}:
+            return "off"
+        if raw in {"1", "state", "state_only", "context", "context_only", "low"}:
+            return "state"
+        if raw in {"2", "memory", "mid", "mixed", "medium"}:
+            return "memory"
+        if raw in {"3", "full", "high", "all", "strict"}:
+            return "full"
+        if raw in {"auto", "adaptive", "self", "self_adjust"}:
+            return "state"
+        if raw in {"on", "true", "yes"}:
+            return "full"
+        return "state"
+
+    def _control_allows(self, feature: str) -> bool:
+        mode = self._control_selection_mode()
+        allowed = {
+            "off": set(),
+            "state": {"state_context"},
+            "memory": {"state_context", "memory_retrieval"},
+            "full": {"state_context", "memory_retrieval", "bridge", "decode_control", "adaptive_sampler", "token_value_bias", "quality_gate"},
+        }.get(mode, {"state_context"})
+        return feature in allowed
+
+    def _bridge_enabled(self) -> bool:
+        return (
+            self._control_allows("bridge")
+            and os.getenv("M3_ENABLE_CONTROL_BRIDGE", "0").lower() in ("1", "true", "yes", "on")
+        )
+
+    def _bridge_enabled_safe(self) -> bool:
+        with guard_context(ctx='llm_adapter/llm_core.py:3294', catch_base=False) as __m3_guard_3291_8:
+            fn = attr_get_optional(self, "_bridge_enabled", None)
+            if callable(fn):
+                return bool(fn())
+
+        if __m3_guard_3291_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        return False
+
+    def _control_plane_mode(self) -> str:
+        raw = str(os.getenv("M3_CONTROL_PLANE_MODE", "enforce") or "enforce").strip().lower()
+        if raw in {"shadow", "observe", "dryrun"}:
+            return "shadow"
+        return "enforce"
+
+    def _build_control_decision(
+        self,
+        prompt: str,
+        source: str = "generate",
+    ) -> Optional[M3ControlDecision]:
+        with guard_context(ctx='llm_adapter/llm_core.py:3307', catch_base=False) as __m3_guard_3304_8:
+            decision = build_control_decision(
+                self,
+                prompt=str(prompt or ""),
+                source=str(source or "generate"),
+            )
+            self._last_control_decision = decision
+            log_control_decision(
+                decision,
+                path=resolve_control_decision_log_path(),
+            )
+            return decision
+
+        if __m3_guard_3304_8.error is not None:
+            return None
+
+    def _hf_failure_policy(self) -> Tuple[float, int, float]:
+        window_sec = max(1.0, self._read_float("M3_HF_FAILURE_WINDOW_SEC", 30.0))
+        threshold = max(1, self._read_int("M3_HF_FAILURE_THRESHOLD", 3))
+        cooldown_sec = max(0.0, self._read_float("M3_HF_FAILURE_COOLDOWN_SEC", 20.0))
+        return float(window_sec), int(threshold), float(cooldown_sec)
+
+    def _prune_hf_failure_events(self, now: Optional[float] = None) -> int:
+        if attr_get_optional(self, "_hf_failure_events", None) is None:
+            self._hf_failure_events = deque(maxlen=256)
+        ts_now = float(now if now is not None else time.time())
+        window_sec, _, _ = self._hf_failure_policy()
+        while self._hf_failure_events and (ts_now - float(self._hf_failure_events[0][0])) > window_sec:
+            self._hf_failure_events.popleft()
+        return int(len(self._hf_failure_events))
+
+    def _hf_runtime_cooldown_active(self, now: Optional[float] = None) -> bool:
+        ts_now = float(now if now is not None else time.time())
+        return ts_now < float(attr_get_optional(self, "_hf_runtime_cooldown_until", 0.0) or 0.0)
+
+    def _register_hf_runtime_failure(
+        self,
+        reason_code: str,
+        phase: str,
+        model_output_shape: str,
+        has_logits: bool,
+    ) -> Dict[str, Any]:
+        ts_now = float(time.time())
+        window_sec, threshold, cooldown_sec = self._hf_failure_policy()
+        self._prune_hf_failure_events(ts_now)
+        self._hf_failure_events.append((ts_now, str(reason_code), str(phase)))
+        count = self._prune_hf_failure_events(ts_now)
+        cooldown_until = float(attr_get_optional(self, "_hf_runtime_cooldown_until", 0.0) or 0.0)
+        if count >= threshold and cooldown_sec > 0.0:
+            cooldown_until = float(ts_now + cooldown_sec)
+            self._hf_runtime_cooldown_until = cooldown_until
+        return {
+            "failure_window_sec": float(window_sec),
+            "failure_threshold": int(threshold),
+            "failure_window_count": int(count),
+            "cooldown_until": float(cooldown_until),
+            "reason_code": str(reason_code),
+            "phase": str(phase),
+            "model_output_shape": str(model_output_shape or "unknown"),
+            "has_logits": bool(has_logits),
+        }
+
+    def _extract_hf_failure_details(
+        self,
+        err: Exception,
+        hf: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        reason_code = "hf_runtime_failure"
+        phase = "unknown"
+        model_output_shape = "unknown"
+        has_logits = False
+        if isinstance(err, HFRuntimeFailure):
+            reason_code = str(attr_get_optional(err, "reason_code", reason_code) or reason_code)
+            phase = str(attr_get_optional(err, "phase", phase) or phase)
+            model_output_shape = str(attr_get_optional(err, "model_output_shape", model_output_shape) or model_output_shape)
+            has_logits = bool(attr_get_optional(err, "has_logits", has_logits))
+        else:
+            msg = str(err or "").lower()
+            if "nonetype" in msg and "subscriptable" in msg:
+                reason_code = "none_subscriptable"
+            elif "_control_health_window" in msg and "has no attribute" in msg:
+                reason_code = "missing_control_health_window"
+            if "logits" in msg:
+                phase = "decode_forward"
+        diag = attr_get_optional(hf, "_last_runtime_diag", None)
+        if isinstance(diag, dict):
+            phase = str(diag.get("phase", phase) or phase)
+            model_output_shape = str(diag.get("model_output_shape", model_output_shape) or model_output_shape)
+            has_logits = bool(diag.get("has_logits", has_logits))
+            diag_reason = str(diag.get("reason_code", "") or "")
+            if diag_reason and diag_reason != "hf_generate_ok":
+                reason_code = diag_reason
+        return {
+            "reason_code": _normalize_control_reason(reason_code),
+            "phase": str(phase or "unknown"),
+            "model_output_shape": str(model_output_shape or "unknown"),
+            "has_logits": bool(has_logits),
+        }
+
+    @staticmethod
+    def _normalize_similarity_text(text: str) -> str:
+        s = str(text or "").lower()
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+    def _response_similarity(self, a: str, b: str) -> float:
+        left = self._normalize_similarity_text(a)
+        right = self._normalize_similarity_text(b)
+        if not left or not right:
+            return 0.0
+        char_ratio = float(SequenceMatcher(None, left, right).ratio())
+        toks_a = set(re.findall(r"[a-z0-9\uac00-\ud7a3]+", left))
+        toks_b = set(re.findall(r"[a-z0-9\uac00-\ud7a3]+", right))
+        if not toks_a or not toks_b:
+            token_ratio = 0.0
+        else:
+            token_ratio = float(len(toks_a & toks_b) / max(1, len(toks_a | toks_b)))
+        return float(max(char_ratio, token_ratio))
+
+    def _recent_assistant_texts(self, core: Optional[Any] = None, limit: int = 6) -> List[str]:
+        out: List[str] = []
+        lim = max(1, int(limit))
+        core_ref = core if core is not None else attr_get_optional(self, "core", None)
+        hist = attr_get_optional(core_ref, "_chat_history", None)
+        if hist is not None:
+            for item in list(hist):
+                if not isinstance(item, dict):
+                    continue
+                role = str(item.get("role", "")).strip().lower()
+                if role not in {"assistant", "m3", "bot"}:
+                    continue
+                txt = str(item.get("text") or item.get("content") or "").strip()
+                if txt:
+                    out.append(txt)
+            if out:
+                return out[-lim:]
+        chat_path = os.path.join(os.path.dirname(TRAINING_PATH), "chat_history.jsonl")
+        if not os.path.exists(chat_path):
+            return []
+        try:
+            with open(chat_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    obj = json.loads(line)
+                    if not isinstance(obj, dict):
+                        continue
+                    role = str(obj.get("role", "")).strip().lower()
+                    if role not in {"assistant", "m3", "bot"}:
+                        continue
+                    txt = str(obj.get("text") or obj.get("content") or "").strip()
+                    if txt:
+                        out.append(txt)
+        except Exception:
+            return out[-lim:]
+        return out[-lim:]
+
+    def _is_repeat_candidate_blocked(self, response: str, core: Optional[Any] = None) -> Tuple[bool, Dict[str, float]]:
+        threshold = max(0.0, min(1.0, self._read_float("M3_REPEAT_BLOCK_THRESHOLD", 0.90)))
+        need_hits = max(2, self._read_int("M3_REPEAT_BLOCK_STREAK", 2))
+        recent = self._recent_assistant_texts(core=core, limit=max(need_hits + 1, 4))
+        if len(recent) < need_hits:
+            return False, {"similarity_last": 0.0, "similarity_prev": 0.0}
+        sims = [self._response_similarity(response, prev) for prev in recent[-need_hits:]]
+        min_sim = min(sims) if sims else 0.0
+        blocked = bool(len(sims) >= need_hits and min_sim >= threshold)
+        meta = {
+            "similarity_last": float(sims[-1] if sims else 0.0),
+            "similarity_prev": float(sims[-2] if len(sims) >= 2 else 0.0),
+            "similarity_min": float(min_sim),
+            "threshold": float(threshold),
+        }
+        return blocked, meta
+
+    def _record_retrieval_outcome(
+        self,
+        outcome: str,
+        skip_reason: str = "",
+        selected_count: int = 0,
+        candidate_pool: int = 0,
+    ) -> None:
+        allowed_reasons = {"", "no_query_vector", "below_threshold", "empty_index", "disabled_by_mode"}
+        reason = str(skip_reason or "")
+        if reason not in allowed_reasons:
+            reason = ""
+        out = str(outcome or "skip").strip().lower()
+        if out in {"hit", "miss"}:
+            self._retrieval_attempts = int(attr_get_optional(self, "_retrieval_attempts", 0)) + 1
+            if out == "hit":
+                self._retrieval_hits = int(attr_get_optional(self, "_retrieval_hits", 0)) + 1
+        attempts = int(attr_get_optional(self, "_retrieval_attempts", 0))
+        hits = int(attr_get_optional(self, "_retrieval_hits", 0))
+        hit_rate = float(hits / max(1, attempts))
+        self._log_jsonl(
+            os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+            {
+                "kind": "retrieval_metrics",
+                "outcome": out,
+                "skip_reason": reason,
+                "selected_count": int(max(0, selected_count)),
+                "candidate_pool": int(max(0, candidate_pool)),
+                "retrieval_attempts": attempts,
+                "retrieval_hits": hits,
+                "retrieval_hit_rate": hit_rate,
+            },
+        )
 
     def _resolve_generation_sampling(
         self,
@@ -3315,17 +3936,17 @@ class TorchConversationalPolicy:
 
         state_strict_bonus = 0.0
         if core is not None:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:3337', catch_base=False) as __m3_guard_3318_12:
                 phi = 0.0
-                if hasattr(core, 'phi_calculator') and getattr(core.phi_calculator, 'phi_history', None):
+                if attr_has(core, 'phi_calculator') and attr_get_optional(core.phi_calculator, 'phi_history', None):
                     hist = core.phi_calculator.phi_history
                     if hist:
                         phi = float(hist[-1])
-                q = getattr(core, 'qualia', None)
-                arousal = float(getattr(q, 'arousal', 0.0)) if q is not None else 0.0
-                valence = float(getattr(q, 'valence', 0.0)) if q is not None else 0.0
-                world_state = getattr(core, 'world_state', None)
-                stability = float(getattr(world_state, 'get', lambda k, d: d)('stability', 1.0)) if isinstance(world_state, dict) else float(getattr(world_state, 'stability', 1.0))
+                q = attr_get_optional(core, 'qualia', None)
+                arousal = float(attr_get_optional(q, 'arousal', 0.0)) if q is not None else 0.0
+                valence = float(attr_get_optional(q, 'valence', 0.0)) if q is not None else 0.0
+                world_state = attr_get_optional(core, 'world_state', None)
+                stability = float(attr_get_optional(world_state, 'get', lambda k, d: d)('stability', 1.0)) if isinstance(world_state, dict) else float(attr_get_optional(world_state, 'stability', 1.0))
                 if abs(phi) < 1e-8:
                     state_strict_bonus += 0.06
                 if arousal < 0.2 or arousal > 0.8:
@@ -3334,7 +3955,8 @@ class TorchConversationalPolicy:
                     state_strict_bonus += 0.04
                 if stability < 0.4:
                     state_strict_bonus += 0.08
-            except Exception:
+
+            if __m3_guard_3318_12.error is not None:
                 state_strict_bonus = 0.0
         strictness = min(1.0, strictness + state_strict_bonus)
 
@@ -3397,23 +4019,25 @@ class TorchConversationalPolicy:
         return any(n in msg for n in needles)
 
     def _trip_hf_circuit_breaker(self, err) -> None:
-        self._gpu_fault_count = int(getattr(self, "_gpu_fault_count", 0)) + 1
+        self._gpu_fault_count = int(attr_get_optional(self, "_gpu_fault_count", 0)) + 1
         failover = str(os.getenv("M3_HF_CUDA_FAILOVER", "1")).lower() in ("1", "true", "yes", "on")
         if not failover:
             return
-        if not getattr(self, "_hf_circuit_open", False):
+        if not attr_get_optional(self, "_hf_circuit_open", False):
             self._hf_circuit_open = True
             self._hf_circuit_reason = str(err)
             self.use_hf = False
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:3410', catch_base=False) as __m3_guard_3408_12:
                 os.environ["M3_USE_HF"] = "0"
-            except Exception:
-                pass
-            try:
-                if hasattr(self, "torch") and hasattr(self.torch, "cuda") and self.torch.cuda.is_available():
+
+            if __m3_guard_3408_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
+            with guard_context(ctx='llm_adapter/llm_core.py:3415', catch_base=False) as __m3_guard_3412_12:
+                if attr_has(self, "torch") and attr_has(self.torch, "cuda") and self.torch.cuda.is_available():
                     self.torch.cuda.empty_cache()
-            except Exception:
-                pass
+
+            if __m3_guard_3412_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             logger.error(f"[HFBackend] circuit breaker opened after CUDA fault: {err}")
 
     def _extract_last_user_text(self, prompt: str) -> str:
@@ -3550,25 +4174,30 @@ class TorchConversationalPolicy:
         )
         identity_terms = [t.strip() for t in str(raw_identity_terms).split(",") if t.strip()]
 
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3555', catch_base=False) as __m3_guard_3553_8:
             penalty = float(os.getenv("M3_CONTROL_TERM_PENALTY", "8.0"))
-        except Exception:
+
+        if __m3_guard_3553_8.error is not None:
             penalty = 8.0
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3559', catch_base=False) as __m3_guard_3557_8:
             identity_penalty = float(os.getenv("M3_CONTROL_IDENTITY_PENALTY", "14.0"))
-        except Exception:
+
+        if __m3_guard_3557_8.error is not None:
             identity_penalty = 14.0
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3563', catch_base=False) as __m3_guard_3561_8:
             max_temp = float(os.getenv("M3_CONTROL_MAX_TEMP", "0.65"))
-        except Exception:
+
+        if __m3_guard_3561_8.error is not None:
             max_temp = 0.65
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3567', catch_base=False) as __m3_guard_3565_8:
             max_top_k = int(os.getenv("M3_CONTROL_MAX_TOP_K", "40"))
-        except Exception:
+
+        if __m3_guard_3565_8.error is not None:
             max_top_k = 40
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3571', catch_base=False) as __m3_guard_3569_8:
             max_top_p = float(os.getenv("M3_CONTROL_MAX_TOP_P", "0.92"))
-        except Exception:
+
+        if __m3_guard_3569_8.error is not None:
             max_top_p = 0.92
 
         return {
@@ -3636,12 +4265,13 @@ class TorchConversationalPolicy:
         }
 
         try:
-            core = getattr(self, "core", None)
+            core = attr_get_optional(self, "core", None)
             if core is not None:
                 ph = []
-                try:
-                    ph = list(core.phi_calculator.phi_history) if hasattr(core, "phi_calculator") else []
-                except Exception:
+                with guard_context(ctx='llm_adapter/llm_core.py:3644', catch_base=False) as __m3_guard_3642_16:
+                    ph = list(core.phi_calculator.phi_history) if attr_has(core, "phi_calculator") else []
+
+                if __m3_guard_3642_16.error is not None:
                     ph = []
                 phi = float(ph[-1]) if ph else 0.0
                 phi_mean10 = float(np.mean(ph[-10:])) if len(ph) >= 1 else 0.0
@@ -3649,8 +4279,8 @@ class TorchConversationalPolicy:
                 phi_nonzero_recent = int(any(abs(float(v)) > 1e-8 for v in ph[-10:])) if ph else 0
 
                 if abs(phi) <= 1e-12:
-                    self._phi_zero_streak = int(getattr(self, "_phi_zero_streak", 0)) + 1
-                    if self._phi_zero_streak % int(getattr(self, "_phi_zero_warn_every", 50)) == 0:
+                    self._phi_zero_streak = int(attr_get_optional(self, "_phi_zero_streak", 0)) + 1
+                    if self._phi_zero_streak % int(attr_get_optional(self, "_phi_zero_warn_every", 50)) == 0:
                         logger.warning(f"[TrainingRecord] phi remains zero for {self._phi_zero_streak} samples")
                 else:
                     self._phi_zero_streak = 0
@@ -3660,32 +4290,56 @@ class TorchConversationalPolicy:
                 rec["phi_delta"] = float(phi_delta)
                 rec["phi_nonzero_recent"] = int(phi_nonzero_recent)
 
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:3672', catch_base=False) as __m3_guard_3663_16:
                     q = core.qualia
                     rec["qualia"] = {
-                        "arousal": float(getattr(q, "arousal", 0.0)),
-                        "valence": float(getattr(q, "valence", 0.0)),
-                        "entropy": float(getattr(q, "entropy", 0.0)),
-                        "engagement": float(getattr(q, "engagement", 0.0)),
-                        "frustration": float(getattr(q, "frustration", 0.0)),
+                        "arousal": float(attr_get_optional(q, "arousal", 0.0)),
+                        "valence": float(attr_get_optional(q, "valence", 0.0)),
+                        "entropy": float(attr_get_optional(q, "entropy", 0.0)),
+                        "engagement": float(attr_get_optional(q, "engagement", 0.0)),
+                        "frustration": float(attr_get_optional(q, "frustration", 0.0)),
                     }
-                except Exception:
+
+                if __m3_guard_3663_16.error is not None:
                     rec["qualia"] = {}
 
-                try:
-                    ec = getattr(core, "energy_ctrl", None)
+                with guard_context(ctx='llm_adapter/llm_core.py:3684', catch_base=False) as __m3_guard_3675_16:
+                    ec = attr_get_optional(core, "energy_ctrl", None)
                     if ec is not None:
-                        energy = float(getattr(ec, "cognitive_energy", 0.0))
-                        cap = float(max(getattr(ec, "energy_capacity", 1.0), 1e-6))
+                        energy = float(attr_get_optional(ec, "cognitive_energy", 0.0))
+                        cap = float(max(attr_get_optional(ec, "energy_capacity", 1.0), 1e-6))
                         rec["energy"] = {
                             "value": energy,
                             "ratio": float(energy / cap),
                         }
-                except Exception:
-                    pass
+
+                if __m3_guard_3675_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Swallowed exception")
         return rec
+
+    def _next_stabilization_template(self, lang: str) -> str:
+        idx = int(attr_get_optional(self, "_safe_fallback_turn", 0))
+        self._safe_fallback_turn = idx + 1
+        shared = [
+            "Output is in stabilization mode. Send one short question for an M3-perspective answer.",
+            "Stabilization mode is active. Re-send a single concise question for an M3 answer.",
+            "Generation switched to stabilization mode. Ask one short question and I will answer as M3.",
+        ]
+        templates = {
+            "ko": [
+                "Stabilization mode is active. Send one short question for an M3-perspective answer.",
+                "I am in stabilization mode. Re-send a single concise question for an M3 answer.",
+                "Generation switched to stabilization mode. Ask one short question and I will answer as M3.",
+            ],
+            "zh": list(shared),
+            "ru": list(shared),
+            "en": list(shared),
+            "other": list(shared),
+        }
+        bucket = templates.get(str(lang or "other"), templates["other"])
+        return str(bucket[idx % len(bucket)])
 
     def _generate_safe_fallback(
         self,
@@ -3698,12 +4352,13 @@ class TorchConversationalPolicy:
     ) -> str:
         user_text = self._extract_last_user_text(prompt)
         if not user_text and chat_messages:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:3705', catch_base=False) as __m3_guard_3701_12:
                 user_msgs = [str(m.get("content", "")) for m in chat_messages if str(m.get("role", "")) == "user"]
                 if user_msgs:
                     user_text = user_msgs[-1].strip()
-            except Exception:
-                pass
+
+            if __m3_guard_3701_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         if not user_text:
             user_text = str(prompt or "").strip()
         if isinstance(response_plan, dict):
@@ -3712,28 +4367,30 @@ class TorchConversationalPolicy:
                 try:
                     return format_plan_fallback_prompt(response_plan=response_plan, meaning_state=meaning_state)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).exception("Swallowed exception")
         safe_temp = None
         safe_top_k = None
         safe_top_p = None
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3727', catch_base=False) as __m3_guard_3719_8:
             safe_temp, safe_top_k, safe_top_p = self._resolve_generation_sampling(
                 requested_temperature=None,
                 requested_top_k=None,
                 requested_top_p=None,
                 source='fallback',
-                core=getattr(self, 'core', None),
+                core=attr_get_optional(self, 'core', None),
             )
-        except Exception:
+
+        if __m3_guard_3719_8.error is not None:
             safe_temp = None
             safe_top_k = None
             safe_top_p = None
         use_ollama_fallback = str(os.getenv("M3_DISABLE_OLLAMA", "1")).lower() not in ("1", "true", "yes", "on")
         if use_ollama_fallback:
             try:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:3736', catch_base=False) as __m3_guard_3734_16:
                     fb_timeout = float(os.getenv("M3_SAFE_FALLBACK_TIMEOUT", "12"))
-                except Exception:
+
+                if __m3_guard_3734_16.error is not None:
                     fb_timeout = 12.0
                 remote_resp = get_local_thinking(
                     user_text,
@@ -3749,48 +4406,45 @@ class TorchConversationalPolicy:
                 if remote_resp and not self._is_backend_status_text(remote_resp):
                     return remote_resp.strip()
             except Exception:
-                pass
+                logging.getLogger(__name__).exception("Swallowed exception")
 
         lang = self._detect_language(user_text)
         q = str(user_text or "").strip().lower()
+        if lang == "ko" and "m3" in q:
+            return "I integrate awareness, memory, and goals to choose the next action from the current context."
+        return self._next_stabilization_template(lang)
 
-        if lang == "ko":
-            if any(k in q for k in ("의식", "자아", "감각", "기억", "정체성", "너", "m3")):
-                return "내 관점에서 의식은 감각, 기억, 목표를 통합해 다음 행동을 선택하는 실시간 과정이다."
-            return "출력 안정화 중입니다. 질문을 한 문장으로 다시 보내 주면 M3 관점으로 바로 답하겠습니다."
-        if lang == "zh":
-            return "当前在输出稳定模式。请用一句话重发问题，我会以 M3 视角直接回答。"
-        if lang == "ru":
-            return "Сейчас включен режим стабилизации вывода. Повторите вопрос одной фразой, и я отвечу от лица M3."
-        return "Output is in stabilization mode. Send a single-sentence question and I will answer from the M3 perspective."
 
 
     def save_model(self, path: str):
         """Saves the model state dictionary."""
-        if getattr(self, "_hf_circuit_open", False) and self.device.type == "cuda":
+        if attr_get_optional(self, "_hf_circuit_open", False) and self.device.type == "cuda":
             logger.warning(f"Skipping model save while HF circuit is open: {path}")
             return
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3777', catch_base=False) as __m3_guard_3773_8:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             self.torch.save(self.model.state_dict(), path)
             logger.info(f"Model saved to {path}")
-        except Exception as e:
+
+        if __m3_guard_3773_8.error is not None:
+            e = __m3_guard_3773_8.error
             logger.error(f"Error saving model to {path}: {e}")
             if self._is_cuda_fatal_error(e):
                 self._trip_hf_circuit_breaker(e)
 
     def _record_example(self, prompt: str, response: str, source: str = "generate") -> None:
-        if not getattr(self, "_record_training", False):
+        if not attr_get_optional(self, "_record_training", False):
             return
         try:
             prompt_raw = str(prompt or "")
             response_text = str(response or "")
             rec = self._sanitize_training_record(prompt_raw, response_text, source=source)
-            reject_reason = str(getattr(self, "_last_record_reject_reason", "") or "")
-            try:
+            reject_reason = str(attr_get_optional(self, "_last_record_reject_reason", "") or "")
+            with guard_context(ctx='llm_adapter/llm_core.py:3792', catch_base=False) as __m3_guard_3790_12:
                 os.makedirs(os.path.dirname(TRAINING_PATH), exist_ok=True)
-            except Exception:
-                pass
+
+            if __m3_guard_3790_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             reject_path = os.getenv(
                 "M3_TRAIN_REJECT_PATH",
                 os.path.join(os.path.dirname(TRAINING_PATH), "llm_training_data.rejected.jsonl"),
@@ -3807,17 +4461,19 @@ class TorchConversationalPolicy:
                     with open(TRAINING_PATH, "a", encoding="utf-8") as f:
                         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 else:
-                    try:
+                    with guard_context(ctx='llm_adapter/llm_core.py:3812', catch_base=False) as __m3_guard_3810_20:
                         os.makedirs(os.path.dirname(reject_path), exist_ok=True)
-                    except Exception:
-                        pass
+
+                    if __m3_guard_3810_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
                     with open(reject_path, "a", encoding="utf-8") as f:
                         f.write(json.dumps(reject_rec, ensure_ascii=False) + "\n")
         except Exception as e:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:3819', catch_base=False) as __m3_guard_3817_12:
                 logger.warning(f"Failed to record training example: {e}")
-            except Exception:
-                pass
+
+            if __m3_guard_3817_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
     def _default_tokenizer_corpus_files(self) -> List[str]:
         base = os.path.dirname(TRAINING_PATH)
@@ -3847,8 +4503,8 @@ class TorchConversationalPolicy:
                 dst_weight[new_i].copy_(src_weight[old_i])
 
     def _token_maps_for_copy(self, old_tok, new_tok) -> List[Tuple[int, int]]:
-        try:
-            if getattr(old_tok, "_type", "") == "hf" and getattr(new_tok, "_type", "") == "hf":
+        with guard_context(ctx='llm_adapter/llm_core.py:3859', catch_base=False) as __m3_guard_3850_8:
+            if attr_get_optional(old_tok, "_type", "") == "hf" and attr_get_optional(new_tok, "_type", "") == "hf":
                 old_vocab = old_tok._backend.get_vocab()
                 new_vocab = new_tok._backend.get_vocab()
                 pairs = []
@@ -3856,22 +4512,23 @@ class TorchConversationalPolicy:
                     if token in new_vocab:
                         pairs.append((int(old_id), int(new_vocab[token])))
                 return pairs
-        except Exception:
-            pass
-        n = min(int(getattr(old_tok, "vocab_size", 0)), int(getattr(new_tok, "vocab_size", 0)))
+
+        if __m3_guard_3850_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        n = min(int(attr_get_optional(old_tok, "vocab_size", 0)), int(attr_get_optional(new_tok, "vocab_size", 0)))
         return [(i, i) for i in range(max(0, n))]
 
     def reload_tokenizer_and_resize(self, vocab_path: Optional[str] = None) -> Dict[str, Any]:
         """Reload tokenizer file and resize model vocab-dependent layers with overlap copy."""
         old_tok = self.tok
         old_vocab = int(self.vocab_size)
-        target_path = vocab_path or getattr(old_tok, "_last_rebuild_path", "")
+        target_path = vocab_path or attr_get_optional(old_tok, "_last_rebuild_path", "")
         new_tok = M3Tokenizer(vocab_file=target_path if target_path else None, config=get_global_config().tokenizer)
         new_vocab = int(new_tok.vocab_size)
         if new_vocab <= 0:
             return {"ok": False, "reason": "invalid_vocab"}
         allow_shrink = str(os.getenv("M3_TOKENIZER_ALLOW_SHRINK", "0")).lower() in ("1", "true", "yes", "on")
-        min_keep_ratio = float(max(1e-6, min(1.0, getattr(self.tokenizer_auto_cfg, "min_keep_vocab_ratio", 0.60))))
+        min_keep_ratio = float(max(1e-6, min(1.0, attr_get_optional(self.tokenizer_auto_cfg, "min_keep_vocab_ratio", 0.60))))
         min_allowed = int(max(32, int(old_vocab * min_keep_ratio)))
         # Enforce shrink guard for auto-rebuild paths or when no explicit path given.
         # When user explicitly provides a specific vocab_path, they intend the replacement.
@@ -3928,20 +4585,20 @@ class TorchConversationalPolicy:
 
         row_map = self._token_maps_for_copy(old_tok, new_tok)
         hidden = int(self.model.hidden)
-        trace_decay = float(getattr(self.model.head, "trace_decay", 0.95))
+        trace_decay = float(attr_get_optional(self.model.head, "trace_decay", 0.95))
 
         new_emb = nn.Embedding(new_vocab, hidden, padding_idx=int(new_tok.PAD)).to(self.device)
         self._copy_vocab_rows(new_emb.weight, self.model.emb.weight.data, row_map)
 
         new_head = PlasticBitLinear(hidden, new_vocab, trace_decay=trace_decay).to(self.device)
         self._copy_vocab_rows(new_head.weight.data, self.model.head.weight.data, row_map)
-        if getattr(self.model.head, "bias", None) is not None and getattr(new_head, "bias", None) is not None:
+        if attr_get_optional(self.model.head, "bias", None) is not None and attr_get_optional(new_head, "bias", None) is not None:
             self._copy_vocab_rows(new_head.bias.data.unsqueeze(-1), self.model.head.bias.data.unsqueeze(-1), [(a, b) for a, b in row_map])
             new_head.bias.data = new_head.bias.data.squeeze(-1)
 
         new_token_value = PlasticBitLinear(hidden, new_vocab, trace_decay=trace_decay).to(self.device)
         self._copy_vocab_rows(new_token_value.weight.data, self.model.token_value.weight.data, row_map)
-        if getattr(self.model.token_value, "bias", None) is not None and getattr(new_token_value, "bias", None) is not None:
+        if attr_get_optional(self.model.token_value, "bias", None) is not None and attr_get_optional(new_token_value, "bias", None) is not None:
             self._copy_vocab_rows(new_token_value.bias.data.unsqueeze(-1), self.model.token_value.bias.data.unsqueeze(-1), [(a, b) for a, b in row_map])
             new_token_value.bias.data = new_token_value.bias.data.squeeze(-1)
 
@@ -3969,16 +4626,18 @@ class TorchConversationalPolicy:
         return {"ok": True, "old_vocab": old_vocab, "new_vocab": new_vocab, "resized": True, "copied_rows": len(row_map)}
 
     def _maybe_auto_rebuild_tokenizer(self) -> None:
-        if not hasattr(self.tok, "should_rebuild_vocab"):
+        if not attr_has(self.tok, "should_rebuild_vocab"):
             return
         now = float(time.time())
-        try:
-            min_interval = int(max(0, getattr(self.tokenizer_auto_cfg, "rebuild_min_interval_sec", 0)))
-        except Exception:
+        with guard_context(ctx='llm_adapter/llm_core.py:3977', catch_base=False) as __m3_guard_3975_8:
+            min_interval = int(max(0, attr_get_optional(self.tokenizer_auto_cfg, "rebuild_min_interval_sec", 0)))
+
+        if __m3_guard_3975_8.error is not None:
             min_interval = 0
-        try:
-            last_rebuild = float(getattr(self.tok, "_last_rebuild_unix", 0.0))
-        except Exception:
+        with guard_context(ctx='llm_adapter/llm_core.py:3981', catch_base=False) as __m3_guard_3979_8:
+            last_rebuild = float(attr_get_optional(self.tok, "_last_rebuild_unix", 0.0))
+
+        if __m3_guard_3979_8.error is not None:
             last_rebuild = 0.0
         if min_interval > 0 and (now - last_rebuild) < float(min_interval):
             self._log_jsonl(
@@ -3991,22 +4650,24 @@ class TorchConversationalPolicy:
                 },
             )
             return
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:3997', catch_base=False) as __m3_guard_3994_8:
             if not self.tok.should_rebuild_vocab():
                 return
-        except Exception:
+
+        if __m3_guard_3994_8.error is not None:
             return
         files = self._default_tokenizer_corpus_files()
         if not files:
             return
         # Deterministic corpus fingerprint to avoid rebuilding the same corpus every cycle.
-        try:
-            max_chars = int(max(1_000, getattr(self.tokenizer_auto_cfg, "corpus_max_chars", 1_500_000)))
-        except Exception:
+        with guard_context(ctx='llm_adapter/llm_core.py:4005', catch_base=False) as __m3_guard_4003_8:
+            max_chars = int(max(1_000, attr_get_optional(self.tokenizer_auto_cfg, "corpus_max_chars", 1_500_000)))
+
+        if __m3_guard_4003_8.error is not None:
             max_chars = 1_500_000
         corpus_fp = ""
-        try:
-            if hasattr(self.tok, "_collect_corpus_stats"):
+        with guard_context(ctx='llm_adapter/llm_core.py:4033', catch_base=False) as __m3_guard_4008_8:
+            if attr_has(self.tok, "_collect_corpus_stats"):
                 stats = self.tok._collect_corpus_stats(files, max_chars=max_chars)
             else:
                 stats = {}
@@ -4018,7 +4679,7 @@ class TorchConversationalPolicy:
             corpus_fp = hashlib.sha1(
                 json.dumps(fp_payload, sort_keys=True, ensure_ascii=False).encode("utf-8", errors="ignore")
             ).hexdigest()[:16]
-            prev_fp = str(getattr(self.tok, "_last_rebuild_corpus_fingerprint", "") or "")
+            prev_fp = str(attr_get_optional(self.tok, "_last_rebuild_corpus_fingerprint", "") or "")
             if corpus_fp and prev_fp and corpus_fp == prev_fp:
                 self._log_jsonl(
                     os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
@@ -4030,10 +4691,11 @@ class TorchConversationalPolicy:
                     },
                 )
                 return
-        except Exception:
+
+        if __m3_guard_4008_8.error is not None:
             corpus_fp = ""
         target_path = os.path.join(os.path.dirname(TRAINING_PATH), "llm_training_data.tokenizer.auto.json")
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4067', catch_base=False) as __m3_guard_4036_8:
             ok = self.tok.rebuild_vocab_from_corpus(
                 files=files,
                 out_path=target_path,
@@ -4064,20 +4726,23 @@ class TorchConversationalPolicy:
                             "new_vocab": int(res.get("new_vocab", 0)),
                         },
                     )
-        except Exception as e:
+
+        if __m3_guard_4036_8.error is not None:
+            e = __m3_guard_4036_8.error
             logger.warning(f"Tokenizer auto rebuild failed: {e}")
 
     def _ensure_bridge_adapt_optimizer(self, hf: HFBackend):
-        bridge = getattr(hf, "_control_bridge", None)
+        bridge = attr_get_optional(hf, "_control_bridge", None)
         if bridge is None:
             return None
         if self._bridge_adapt_opt is not None:
             return self._bridge_adapt_opt
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4079', catch_base=False) as __m3_guard_4076_8:
             for p in hf._model.parameters():
                 p.requires_grad_(False)
-        except Exception:
-            pass
+
+        if __m3_guard_4076_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         wd = float(os.getenv("M3_STABILITY_WEIGHT_DECAY", str(self.stability_cfg.weight_decay)))
         self._bridge_adapt_opt = self.torch.optim.AdamW(
             bridge.parameters(),
@@ -4101,8 +4766,8 @@ class TorchConversationalPolicy:
             return
         if z_m3 is None:
             return
-        bridge = getattr(hf, "_control_bridge", None)
-        if bridge is None or getattr(hf, "_model", None) is None or getattr(hf, "_tokenizer", None) is None:
+        bridge = attr_get_optional(hf, "_control_bridge", None)
+        if bridge is None or attr_get_optional(hf, "_model", None) is None or attr_get_optional(hf, "_tokenizer", None) is None:
             return
         ok, qinfo = self._evaluate_generation_quality(prompt, response, source="generate")
         reward = float((qinfo or {}).get("score", 0.0)) * float(self.bridge_adapt_cfg.reward_scale)
@@ -4176,10 +4841,11 @@ class TorchConversationalPolicy:
                 params=list(bridge.parameters()),
                 tag="bridge_adapt",
             )
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:4181', catch_base=False) as __m3_guard_4179_12:
                 bridge.renorm_parameters(float(self.stability_cfg.max_weight_norm))
-            except Exception:
-                pass
+
+            if __m3_guard_4179_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             self._bridge_adapt_step += 1
             self._log_jsonl(
                 os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
@@ -4205,17 +4871,19 @@ class TorchConversationalPolicy:
                 },
             )
         finally:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:4210', catch_base=False) as __m3_guard_4208_12:
                 bridge.eval()
-            except Exception:
-                pass
+
+            if __m3_guard_4208_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
     def enable_m3_integration(self) -> bool:
-        if hasattr(self, 'model') and hasattr(self.model, 'enable_m3_integration'):
-            try:
+        if attr_has(self, 'model') and attr_has(self.model, 'enable_m3_integration'):
+            with guard_context(ctx='llm_adapter/llm_core.py:4218', catch_base=False) as __m3_guard_4215_12:
                 self.model.enable_m3_integration()
                 return True
-            except Exception:
+
+            if __m3_guard_4215_12.error is not None:
                 return False
         return False
 
@@ -4233,9 +4901,10 @@ class TorchConversationalPolicy:
             secondary_keys = ['arousal', 'valence', 'entropy', 'engagement', 'frustration']
             if any(k in affect_state for k in secondary_keys):
                 return np.array([float(affect_state.get(k, 0.0)) for k in secondary_keys], dtype=np.float32)
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:4238', catch_base=False) as __m3_guard_4236_12:
                 return np.array([float(affect_state[k]) for k in sorted(affect_state.keys())], dtype=np.float32)
-            except Exception:
+
+            if __m3_guard_4236_12.error is not None:
                 return None
         return None
 
@@ -4244,64 +4913,71 @@ class TorchConversationalPolicy:
             return self._normalize_affect_state(affect_state)
         if core is None:
             return None
-        try:
-            if hasattr(core, 'rewards') and getattr(core.rewards, 'last_affect', None) is not None:
+        with guard_context(ctx='llm_adapter/llm_core.py:4250', catch_base=False) as __m3_guard_4247_8:
+            if attr_has(core, 'rewards') and attr_get_optional(core.rewards, 'last_affect', None) is not None:
                 return np.asarray(core.rewards.last_affect, dtype=np.float32)
-        except Exception:
-            pass
-        if hasattr(core, 'affect_kernel'):
+
+        if __m3_guard_4247_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        if attr_has(core, 'affect_kernel'):
             for name in ('get_state', 'get_state_vector'):
-                try:
-                    fn = getattr(core.affect_kernel, name, None)
+                with guard_context(ctx='llm_adapter/llm_core.py:4258', catch_base=False) as __m3_guard_4254_16:
+                    fn = attr_get_optional(core.affect_kernel, name, None)
                     if callable(fn):
                         return self._normalize_affect_state(fn())
-                except Exception:
-                    pass
-        if hasattr(core, 'qualia'):
-            try:
+
+                if __m3_guard_4254_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
+        if attr_has(core, 'qualia'):
+            with guard_context(ctx='llm_adapter/llm_core.py:4269', catch_base=False) as __m3_guard_4261_12:
                 return np.array([
-                    float(getattr(core.qualia, 'valence', 0.0)),
-                    float(getattr(core.qualia, 'arousal', 0.0)),
-                    float(getattr(core.qualia, 'entropy', 0.0)),
-                    float(getattr(core.qualia, 'engagement', 0.0)),
-                    float(getattr(core.qualia, 'frustration', 0.0)),
+                    float(attr_get_optional(core.qualia, 'valence', 0.0)),
+                    float(attr_get_optional(core.qualia, 'arousal', 0.0)),
+                    float(attr_get_optional(core.qualia, 'entropy', 0.0)),
+                    float(attr_get_optional(core.qualia, 'engagement', 0.0)),
+                    float(attr_get_optional(core.qualia, 'frustration', 0.0)),
                 ], dtype=np.float32)
-            except Exception:
-                pass
+
+            if __m3_guard_4261_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         return None
 
     def _update_m3_cache(self, core):
         panels = None
         if core is None:
             return panels
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4280', catch_base=False) as __m3_guard_4277_8:
             self.m3_cache.update(core)
             panels = self.m3_cache.get_current_panels()
-        except Exception:
+
+        if __m3_guard_4277_8.error is not None:
             panels = None
         return panels
 
     def _build_m3_memory(self, core=None, panels=None, affect_state=None, drive_state=None):
         if panels is None and core is not None:
-            try:
-                if hasattr(core, 'feature_bank') and hasattr(core.feature_bank, 'panels'):
+            with guard_context(ctx='llm_adapter/llm_core.py:4289', catch_base=False) as __m3_guard_4286_12:
+                if attr_has(core, 'feature_bank') and attr_has(core.feature_bank, 'panels'):
                     panels = core.feature_bank.panels(core)
-            except Exception:
+
+            if __m3_guard_4286_12.error is not None:
                 panels = None
         if panels is None:
             return None
         if affect_state is not None:
             affect_state = self._normalize_affect_state(affect_state)
-        if not hasattr(self, 'model'):
+        if not attr_has(self, 'model'):
             return None
-        if not hasattr(self.model, 'm3_encoder') or self.model.m3_encoder is None:
-            try:
+        if not attr_has(self.model, 'm3_encoder') or self.model.m3_encoder is None:
+            with guard_context(ctx='llm_adapter/llm_core.py:4300', catch_base=False) as __m3_guard_4298_12:
                 self.model.enable_m3_integration()
-            except Exception:
+
+            if __m3_guard_4298_12.error is not None:
                 return None
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4304', catch_base=False) as __m3_guard_4302_8:
             return self.model.m3_encoder(panels, affect_state=affect_state, drive_state=drive_state)
-        except Exception:
+
+        if __m3_guard_4302_8.error is not None:
             return None
 
     def build_m3_memory(self, core=None, panels=None, affect_state=None, drive_state=None):
@@ -4310,9 +4986,10 @@ class TorchConversationalPolicy:
     def _vectorize_panels(self, panels):
         if panels is None:
             return None
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4315', catch_base=False) as __m3_guard_4313_8:
             arr = np.asarray(panels, dtype=np.float32)
-        except Exception:
+
+        if __m3_guard_4313_8.error is not None:
             return None
         if arr.ndim == 1:
             vec = arr
@@ -4324,9 +5001,10 @@ class TorchConversationalPolicy:
                 vec = arr.mean(axis=0)
         else:
             vec = arr.reshape(-1)
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4329', catch_base=False) as __m3_guard_4327_8:
             max_len = int(os.getenv('M3_VEC_MAX_LEN', '256'))
-        except Exception:
+
+        if __m3_guard_4327_8.error is not None:
             max_len = 256
         if max_len > 0:
             vec = vec[:max_len]
@@ -4336,50 +5014,55 @@ class TorchConversationalPolicy:
         if core is None:
             return None
         vecs = []
-        try:
-            snap = core.snapshot() if hasattr(core, 'snapshot') and callable(core.snapshot) else None
-        except Exception:
+        with guard_context(ctx='llm_adapter/llm_core.py:4341', catch_base=False) as __m3_guard_4339_8:
+            snap = core.snapshot() if attr_has(core, 'snapshot') and callable(core.snapshot) else None
+
+        if __m3_guard_4339_8.error is not None:
             snap = None
         if isinstance(snap, dict):
             for key in ('phi', 'energy', 'activation', 'unity', 'policy_lr', 'steps'):
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:4349', catch_base=False) as __m3_guard_4345_16:
                     val = snap.get(key, None)
                     if isinstance(val, (int, float, np.floating, np.integer)):
                         vecs.append(np.array([float(val)], dtype=np.float32))
-                except Exception:
-                    pass
-            try:
+
+                if __m3_guard_4345_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
+            with guard_context(ctx='llm_adapter/llm_core.py:4357', catch_base=False) as __m3_guard_4351_12:
                 emb = snap.get('embeddings', None)
                 if emb is None:
                     emb = snap.get('embedding', None)
                 if emb is not None:
                     vecs.append(np.asarray(emb, dtype=np.float32).ravel())
-            except Exception:
-                pass
-        try:
-            q = getattr(core, 'qualia', None)
+
+            if __m3_guard_4351_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:4373', catch_base=False) as __m3_guard_4359_8:
+            q = attr_get_optional(core, 'qualia', None)
             if q is not None:
                 qv = np.array(
                     [
-                        float(getattr(q, 'arousal', 0.0)),
-                        float(getattr(q, 'valence', 0.0)),
-                        float(getattr(q, 'entropy', 0.0)),
-                        float(getattr(q, 'engagement', 0.0)),
-                        float(getattr(q, 'frustration', 0.0)),
+                        float(attr_get_optional(q, 'arousal', 0.0)),
+                        float(attr_get_optional(q, 'valence', 0.0)),
+                        float(attr_get_optional(q, 'entropy', 0.0)),
+                        float(attr_get_optional(q, 'engagement', 0.0)),
+                        float(attr_get_optional(q, 'frustration', 0.0)),
                     ],
                     dtype=np.float32,
                 )
                 vecs.append(qv)
-        except Exception:
-            pass
-        try:
-            if hasattr(core, 'energy_ctrl'):
+
+        if __m3_guard_4359_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:4379', catch_base=False) as __m3_guard_4375_8:
+            if attr_has(core, 'energy_ctrl'):
                 energy_ratio = core.energy_ctrl.cognitive_energy / max(core.energy_ctrl.energy_capacity, 1.0)
                 vecs.append(np.array([float(energy_ratio)], dtype=np.float32))
-        except Exception:
-            pass
-        try:
-            if hasattr(core, 'episodic_memory'):
+
+        if __m3_guard_4375_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:4391', catch_base=False) as __m3_guard_4381_8:
+            if attr_has(core, 'episodic_memory'):
                 stats = core.episodic_memory.get_statistics()
                 mem_vals = [
                     float(stats.get('total_memories', 0.0)),
@@ -4388,18 +5071,21 @@ class TorchConversationalPolicy:
                     float(stats.get('avg_retrieval_count', 0.0)),
                 ]
                 vecs.append(np.asarray(mem_vals, dtype=np.float32))
-        except Exception:
-            pass
+
+        if __m3_guard_4381_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         if affect_state is not None:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:4396', catch_base=False) as __m3_guard_4394_12:
                 vecs.append(np.asarray(affect_state, dtype=np.float32).ravel())
-            except Exception:
-                pass
+
+            if __m3_guard_4394_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         if not vecs:
             return None
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4402', catch_base=False) as __m3_guard_4400_8:
             vec = np.concatenate(vecs).astype(np.float32)
-        except Exception:
+
+        if __m3_guard_4400_8.error is not None:
             return None
         return vec
 
@@ -4413,17 +5099,20 @@ class TorchConversationalPolicy:
             vecs.append(panel_vec.astype(np.float32, copy=False))
         if not vecs:
             return None
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4418', catch_base=False) as __m3_guard_4416_8:
             vec = np.concatenate(vecs).astype(np.float32)
-        except Exception:
+
+        if __m3_guard_4416_8.error is not None:
             return None
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4422', catch_base=False) as __m3_guard_4420_8:
             max_len = int(os.getenv('M3_VEC_MAX_LEN', '256'))
-        except Exception:
+
+        if __m3_guard_4420_8.error is not None:
             max_len = 256
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4426', catch_base=False) as __m3_guard_4424_8:
             hard_max = int(os.getenv('M3_VEC_HARD_MAX', '2048'))
-        except Exception:
+
+        if __m3_guard_4424_8.error is not None:
             hard_max = 2048
         cap = max_len if max_len > 0 else hard_max
         if hard_max > 0:
@@ -4436,58 +5125,65 @@ class TorchConversationalPolicy:
         if core is None:
             return ""
         lines = ["M3_STATE:"]
-        try:
-            phi_hist = core.phi_calculator.phi_history if hasattr(core, 'phi_calculator') else []
+        with guard_context(ctx='llm_adapter/llm_core.py:4442', catch_base=False) as __m3_guard_4439_8:
+            phi_hist = core.phi_calculator.phi_history if attr_has(core, 'phi_calculator') else []
             phi = phi_hist[-1] if phi_hist else 0.0
-        except Exception:
+
+        if __m3_guard_4439_8.error is not None:
             phi = 0.0
         lines.append(f"phi={float(phi):.4f}")
         if phi_trend:
             lines.append(f"phi_trend={phi_trend}")
-        try:
-            qualia = getattr(core, 'qualia', None)
+        with guard_context(ctx='llm_adapter/llm_core.py:4458', catch_base=False) as __m3_guard_4447_8:
+            qualia = attr_get_optional(core, 'qualia', None)
             if qualia is not None:
                 lines.append(
                     "qualia="
-                    f"arousal:{float(getattr(qualia, 'arousal', 0.0)):.3f},"
-                    f"valence:{float(getattr(qualia, 'valence', 0.0)):.3f},"
-                    f"entropy:{float(getattr(qualia, 'entropy', 0.0)):.3f},"
-                    f"engagement:{float(getattr(qualia, 'engagement', 0.0)):.3f},"
-                    f"frustration:{float(getattr(qualia, 'frustration', 0.0)):.3f}"
+                    f"arousal:{float(attr_get_optional(qualia, 'arousal', 0.0)):.3f},"
+                    f"valence:{float(attr_get_optional(qualia, 'valence', 0.0)):.3f},"
+                    f"entropy:{float(attr_get_optional(qualia, 'entropy', 0.0)):.3f},"
+                    f"engagement:{float(attr_get_optional(qualia, 'engagement', 0.0)):.3f},"
+                    f"frustration:{float(attr_get_optional(qualia, 'frustration', 0.0)):.3f}"
                 )
-        except Exception:
-            pass
+
+        if __m3_guard_4447_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         if affect_state is not None:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:4465', catch_base=False) as __m3_guard_4461_12:
                 a = np.asarray(affect_state, dtype=np.float32).ravel()
                 a_vals = ",".join(f"{v:.3f}" for v in a[:8])
                 lines.append(f"affect=[{a_vals}]")
-            except Exception:
-                pass
-        try:
-            if hasattr(core, 'energy_ctrl'):
+
+            if __m3_guard_4461_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:4471', catch_base=False) as __m3_guard_4467_8:
+            if attr_has(core, 'energy_ctrl'):
                 energy_ratio = core.energy_ctrl.cognitive_energy / max(core.energy_ctrl.energy_capacity, 1.0)
                 lines.append(f"energy_ratio={float(energy_ratio):.3f}")
-        except Exception:
-            pass
-        try:
-            stability = float(getattr(core, 'world_state', {}).get('stability', 0.0))
-            drift = float(getattr(core, 'world_state', {}).get('delta_hat', 0.0))
+
+        if __m3_guard_4467_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:4477', catch_base=False) as __m3_guard_4473_8:
+            stability = float(attr_get_optional(core, 'world_state', {}).get('stability', 0.0))
+            drift = float(attr_get_optional(core, 'world_state', {}).get('delta_hat', 0.0))
             lines.append(f"stability={stability:.3f},drift={drift:.3f}")
-        except Exception:
-            pass
-        try:
-            if hasattr(core, 'episodic_memory'):
+
+        if __m3_guard_4473_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:4484', catch_base=False) as __m3_guard_4479_8:
+            if attr_has(core, 'episodic_memory'):
                 stats = core.episodic_memory.get_statistics()
                 lines.append(f"memories={int(stats.get('total_memories', 0))}")
                 lines.append(f"memory_consolidation={float(stats.get('avg_consolidation', 0.0)):.3f}")
-        except Exception:
-            pass
+
+        if __m3_guard_4479_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         vec = None
-        try:
-            if hasattr(core, 'export_state_vector'):
+        with guard_context(ctx='llm_adapter/llm_core.py:4490', catch_base=False) as __m3_guard_4487_8:
+            if attr_has(core, 'export_state_vector'):
                 vec = core.export_state_vector()
-        except Exception:
+
+        if __m3_guard_4487_8.error is not None:
             vec = None
         if vec is None:
             vec_source = os.getenv('M3_VEC_SOURCE', 'full').strip().lower()
@@ -4503,19 +5199,21 @@ class TorchConversationalPolicy:
                 lines.append(f"vector_dim={int(vec_arr.size)}")
                 include_vec = os.getenv('M3_STATE_INCLUDE_VECTOR', '0').lower() in ('1', 'true', 'yes', 'on')
                 if include_vec and vec_arr.size > 0:
-                    try:
+                    with guard_context(ctx='llm_adapter/llm_core.py:4508', catch_base=False) as __m3_guard_4506_20:
                         head_elems = int(os.getenv('M3_STATE_VECTOR_MAX_ELEMS', '32'))
-                    except Exception:
+
+                    if __m3_guard_4506_20.error is not None:
                         head_elems = 32
                     head = vec_arr[:head_elems] if head_elems > 0 else vec_arr
                     vec_str = ",".join(f"{v:.4f}" for v in head.tolist())
                     suffix = ",..." if head_elems > 0 and vec_arr.size > head_elems else ""
                     lines.append(f"vector_head=[{vec_str}{suffix}]")
             except Exception:
-                pass
-        try:
+                logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:4518', catch_base=False) as __m3_guard_4516_8:
             max_chars = int(os.getenv('M3_STATE_MAX_CHARS', '4000'))
-        except Exception:
+
+        if __m3_guard_4516_8.error is not None:
             max_chars = 4000
         joined = "\n".join(lines)
         if max_chars > 0 and len(joined) > max_chars:
@@ -4552,55 +5250,61 @@ class TorchConversationalPolicy:
         if core is None:
             return None
         feats: List[float] = []
-        try:
-            ph = list(getattr(core.phi_calculator, "phi_history", []) or [])
+        with guard_context(ctx='llm_adapter/llm_core.py:4561', catch_base=False) as __m3_guard_4555_8:
+            ph = list(attr_get_optional(core.phi_calculator, "phi_history", []) or [])
             last_phi = float(ph[-1]) if ph else 0.0
             mean_phi = float(np.mean(ph[-8:])) if ph else 0.0
             d_phi = float(ph[-1] - ph[-2]) if len(ph) >= 2 else 0.0
             feats.extend([last_phi, mean_phi, d_phi])
-        except Exception:
+
+        if __m3_guard_4555_8.error is not None:
             feats.extend([0.0, 0.0, 0.0])
-        try:
-            q = getattr(core, "qualia", None)
+        with guard_context(ctx='llm_adapter/llm_core.py:4574', catch_base=False) as __m3_guard_4563_8:
+            q = attr_get_optional(core, "qualia", None)
             feats.extend(
                 [
-                    float(getattr(q, "arousal", 0.0)),
-                    float(getattr(q, "valence", 0.0)),
-                    float(getattr(q, "entropy", 0.0)),
-                    float(getattr(q, "engagement", 0.0)),
-                    float(getattr(q, "frustration", 0.0)),
+                    float(attr_get_optional(q, "arousal", 0.0)),
+                    float(attr_get_optional(q, "valence", 0.0)),
+                    float(attr_get_optional(q, "entropy", 0.0)),
+                    float(attr_get_optional(q, "engagement", 0.0)),
+                    float(attr_get_optional(q, "frustration", 0.0)),
                 ]
             )
-        except Exception:
+
+        if __m3_guard_4563_8.error is not None:
             feats.extend([0.0, 0.0, 0.0, 0.0, 0.0])
-        try:
-            ec = getattr(core, "energy_ctrl", None)
+        with guard_context(ctx='llm_adapter/llm_core.py:4584', catch_base=False) as __m3_guard_4576_8:
+            ec = attr_get_optional(core, "energy_ctrl", None)
             if ec is not None:
-                ev = float(getattr(ec, "cognitive_energy", 0.0))
-                cap = float(max(getattr(ec, "energy_capacity", 1.0), 1e-6))
+                ev = float(attr_get_optional(ec, "cognitive_energy", 0.0))
+                cap = float(max(attr_get_optional(ec, "energy_capacity", 1.0), 1e-6))
                 feats.append(float(ev / cap))
             else:
                 feats.append(0.5)
-        except Exception:
+
+        if __m3_guard_4576_8.error is not None:
             feats.append(0.5)
-        try:
-            ws = getattr(core, "world_state", {}) or {}
+        with guard_context(ctx='llm_adapter/llm_core.py:4590', catch_base=False) as __m3_guard_4586_8:
+            ws = attr_get_optional(core, "world_state", {}) or {}
             feats.append(float(ws.get("stability", 0.5)))
             feats.append(float(ws.get("delta_hat", 0.0)))
-        except Exception:
+
+        if __m3_guard_4586_8.error is not None:
             feats.extend([0.5, 0.0])
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4597', catch_base=False) as __m3_guard_4592_8:
             mem_n = 0.0
-            if hasattr(core, "episodic_memory") and hasattr(core.episodic_memory, "get_statistics"):
+            if attr_has(core, "episodic_memory") and attr_has(core.episodic_memory, "get_statistics"):
                 mem_n = float((core.episodic_memory.get_statistics() or {}).get("total_memories", 0))
             feats.append(float(np.tanh(mem_n / 1000.0)))
-        except Exception:
+
+        if __m3_guard_4592_8.error is not None:
             feats.append(0.0)
 
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4603', catch_base=False) as __m3_guard_4600_8:
             speak_rate = float(np.mean(self._autonomy_recent_actions)) if self._autonomy_recent_actions else 0.0
             lam_mean = float(np.mean(self._autonomy_recent_lambda)) if self._autonomy_recent_lambda else 0.0
-        except Exception:
+
+        if __m3_guard_4600_8.error is not None:
             speak_rate, lam_mean = 0.0, 0.0
         feats.extend(
             [
@@ -4623,29 +5327,31 @@ class TorchConversationalPolicy:
         """Build autonomy state using core dynamics + BOS latent fallback."""
         torch = self.torch
         t = self.tok
-        source = str(getattr(self.autonomy_rl_cfg, "state_source", "core")).strip().lower()
+        source = str(attr_get_optional(self.autonomy_rl_cfg, "state_source", "core")).strip().lower()
         base_state = None
 
         use_bos = source in {"bos", "hybrid", "core", "auto"}
         if use_bos:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:4637', catch_base=False) as __m3_guard_4631_12:
                 with torch.no_grad():
                     src_ids = torch.tensor([[t.BOS]], dtype=torch.long, device=self.device)
                     e_src = self.model.emb(src_ids)
                     _, h = self.model.encoder(e_src)
                     base_state = h[-1, :, :].float()
-            except Exception:
+
+            if __m3_guard_4631_12.error is not None:
                 base_state = None
 
         core_state = None
         if source in {"core", "hybrid", "auto"}:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:4648', catch_base=False) as __m3_guard_4642_12:
                 core_vec = self._autonomy_core_features(core)
                 if core_vec is not None:
                     with torch.no_grad():
                         cv = torch.tensor(core_vec, dtype=torch.float32, device=self.device).unsqueeze(0)
                         core_state = torch.tanh(self._autonomy_state_proj(cv)).float()
-            except Exception:
+
+            if __m3_guard_4642_12.error is not None:
                 core_state = None
 
         if source == "bos":
@@ -4668,13 +5374,14 @@ class TorchConversationalPolicy:
     def _build_autonomy_prefix(self, s):
         """From state vector s, build continuous prefix embeddings with learned gating."""
         torch = self.torch
-        try:
-            if hasattr(s, 'dtype') and s.dtype == torch.bfloat16 and self.device.type == 'cpu':
+        with guard_context(ctx='llm_adapter/llm_core.py:4674', catch_base=False) as __m3_guard_4671_8:
+            if attr_has(s, 'dtype') and s.dtype == torch.bfloat16 and self.device.type == 'cpu':
                 s = s.float()
-        except Exception:
-            pass
+
+        if __m3_guard_4671_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         with torch.no_grad():
-            P = int(getattr(self.model, 'prefix_len', 1))
+            P = int(attr_get_optional(self.model, 'prefix_len', 1))
             raw = self.model.state2prefix(s).view(1, -1)
             flat = int(raw.size(-1))
             E = max(1, flat // max(1, P))
@@ -4683,30 +5390,32 @@ class TorchConversationalPolicy:
                 raw = raw[:, :usable]
             pref = raw.view(1, P, E)
             gate = torch.sigmoid(self.model.prefix_gate(s)).view(1, P, 1)
-            # numpy는 bfloat16을 지원하지 않음 → float32로 변환
+            # numpy??bfloat16??吏?먰븯吏 ?딆쓬 ??float32濡?蹂??
             return (gate * pref).float().detach().cpu().numpy()
 
     def _run_core_steps(self, core, count: int = 0):
         if core is None:
             return
         for _ in range(max(0, int(count))):
-            try:
-                if hasattr(core, '_single_consciousness_step'):
+            with guard_context(ctx='llm_adapter/llm_core.py:4696', catch_base=False) as __m3_guard_4693_12:
+                if attr_has(core, '_single_consciousness_step'):
                     core._single_consciousness_step()
-            except Exception:
-                pass
+
+            if __m3_guard_4693_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
     def _run_checkpoint_if_enabled(self, core):
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4704', catch_base=False) as __m3_guard_4700_8:
             if os.getenv('M3_SAVE_EVERY_TURN', '0') in ('1', 'true', 'yes', 'on'):
-                if core is not None and hasattr(core, '_save_checkpoint'):
+                if core is not None and attr_has(core, '_save_checkpoint'):
                     core._save_checkpoint()
-        except Exception:
-            pass
+
+        if __m3_guard_4700_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def _drain_user_message(self):
         import queue
-        if not hasattr(self, '_user_queue') or self._user_queue is None:
+        if not attr_has(self, '_user_queue') or self._user_queue is None:
             return None
         try:
             return self._user_queue.get_nowait()
@@ -4716,28 +5425,30 @@ class TorchConversationalPolicy:
             return None
 
     def _handle_user_turn(self, user_msg: str, steps_per_cycle: int) -> str:
-        core = getattr(self, 'core', None)
+        core = attr_get_optional(self, 'core', None)
         response = ''
         if core is not None:
             self._run_core_steps(core, steps_per_cycle)
         try:
-            if core is not None and hasattr(core, 'handle_user_message'):
+            if core is not None and attr_has(core, 'handle_user_message'):
                 response = core.handle_user_message(user_msg)
             else:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:4729', catch_base=False) as __m3_guard_4727_16:
                     user_max_len = int(os.getenv('M3_USER_MAX_LEN', '320'))
-                except Exception:
+
+                if __m3_guard_4727_16.error is not None:
                     user_max_len = 320
                 response = self.generate(user_msg, max_len=max(32, user_max_len))
         except Exception as e:
             response = f'[Error: {e}]'
 
-        try:
-            cb = getattr(self, '_on_response', None)
+        with guard_context(ctx='llm_adapter/llm_core.py:4739', catch_base=False) as __m3_guard_4735_8:
+            cb = attr_get_optional(self, '_on_response', None)
             if cb is not None:
                 cb(response)
-        except Exception:
-            pass
+
+        if __m3_guard_4735_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
         if core is not None:
             self._run_core_steps(core, min(3, steps_per_cycle))
@@ -4763,22 +5474,24 @@ class TorchConversationalPolicy:
         s = str(text or "").strip()
         if not s:
             return None
-        try:
-            if core is not None and hasattr(core, "feature_bank") and hasattr(core.feature_bank, "_hash_embed"):
-                dim = int(getattr(core.feature_bank, "embed_dim", 64))
+        with guard_context(ctx='llm_adapter/llm_core.py:4771', catch_base=False) as __m3_guard_4766_8:
+            if core is not None and attr_has(core, "feature_bank") and attr_has(core.feature_bank, "_hash_embed"):
+                dim = int(attr_get_optional(core.feature_bank, "embed_dim", 64))
                 emb = core.feature_bank._hash_embed(s, dim)
                 return np.asarray(emb, dtype=np.float32).reshape(-1)
-        except Exception:
-            pass
-        try:
+
+        if __m3_guard_4766_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:4775', catch_base=False) as __m3_guard_4773_8:
             return np.asarray(self.embed_text(s), dtype=np.float32).reshape(-1)
-        except Exception:
+
+        if __m3_guard_4773_8.error is not None:
             return None
 
     def _autonomy_novelty(self, emb: Optional[np.ndarray]) -> float:
         if emb is None:
             return 0.0
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4799', catch_base=False) as __m3_guard_4781_8:
             if not self._autonomy_recent_embeddings:
                 self._autonomy_recent_embeddings.append(np.asarray(emb, dtype=np.float32).reshape(-1))
                 return 1.0
@@ -4796,11 +5509,12 @@ class TorchConversationalPolicy:
                 return 0.0
             md = float(np.mean(dists))
             return float(np.tanh(md))
-        except Exception:
+
+        if __m3_guard_4781_8.error is not None:
             return 0.0
 
     def _repetition_penalty(self, text: str) -> float:
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4815', catch_base=False) as __m3_guard_4803_8:
             toks = [t for t in re.split(r"\s+", str(text or "").strip()) if t]
             if len(toks) < 4:
                 return 0.0
@@ -4812,7 +5526,8 @@ class TorchConversationalPolicy:
             rep = max(float(token_rep), float(phrase_rep), float(sem_dup))
             rep = float(rep + 0.50 * loop_hit)
             return float(max(0.0, min(1.0, rep)))
-        except Exception:
+
+        if __m3_guard_4803_8.error is not None:
             return 0.0
 
     def _compute_autonomy_reward(self, prompt: str, response: str, core=None) -> Tuple[float, Dict[str, float]]:
@@ -4825,19 +5540,21 @@ class TorchConversationalPolicy:
         safety_penalty = 0.0
         repetition_penalty = 0.0
         response_text = str(response or "").strip()
-        try:
-            if core is not None and hasattr(core, "_evaluate_dialog_accuracy"):
+        with guard_context(ctx='llm_adapter/llm_core.py:4833', catch_base=False) as __m3_guard_4828_8:
+            if core is not None and attr_has(core, "_evaluate_dialog_accuracy"):
                 m = core._evaluate_dialog_accuracy(str(prompt or ""), response_text)
                 if isinstance(m, dict):
                     dialog_score = float(m.get("score", 0.0))
-        except Exception:
+
+        if __m3_guard_4828_8.error is not None:
             dialog_score = 0.0
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4840', catch_base=False) as __m3_guard_4835_8:
             ok, qinfo = self._evaluate_generation_quality(prompt, response_text, source="autonomy")
             quality_score = float((qinfo or {}).get("score", 0.0))
             if not ok:
                 safety_penalty += float(self.autonomy_rl_cfg.safety_penalty)
-        except Exception:
+
+        if __m3_guard_4835_8.error is not None:
             quality_score = 0.0
         if self._is_disallowed_generation_output(response_text):
             safety_penalty += float(self.autonomy_rl_cfg.safety_penalty)
@@ -4898,7 +5615,7 @@ class TorchConversationalPolicy:
             next_states = next_states.view(next_states.size(0), -1)
         dones = torch.tensor([1.0 if bool(x[4]) else 0.0 for x in samples], dtype=torch.float32, device=self.device)
         # Reward normalization (advantage-like) to avoid frozen Q under skewed rewards.
-        norm_alpha = float(max(0.0, min(0.999, getattr(self.autonomy_rl_cfg, "reward_norm_ema", 0.95))))
+        norm_alpha = float(max(0.0, min(0.999, attr_get_optional(self.autonomy_rl_cfg, "reward_norm_ema", 0.95))))
         if norm_alpha > 0.0:
             rewards_norm = rewards - float(self._autonomy_reward_ema)
             rewards = (1.0 - norm_alpha) * rewards + norm_alpha * rewards_norm
@@ -4920,7 +5637,7 @@ class TorchConversationalPolicy:
         target_intensity = torch.clamp(torch.abs(rewards), 0.0, 2.0)
         inten_loss = torch.mean((intensity - target_intensity) ** 2)
         # Encourage lambda/intensity to match desired speak ratio.
-        speak_target = float(max(0.01, min(0.99, getattr(self.autonomy_rl_cfg, "target_speak_rate", 0.35))))
+        speak_target = float(max(0.01, min(0.99, attr_get_optional(self.autonomy_rl_cfg, "target_speak_rate", 0.35))))
         speak_prob = torch.sigmoid((q[:, 1] - q[:, 0]) * torch.clamp(intensity.detach(), 0.1, 5.0))
         rate_loss = torch.mean((speak_prob - speak_target) ** 2)
         loss = td_loss + 0.05 * inten_loss + 0.15 * rate_loss
@@ -4932,17 +5649,19 @@ class TorchConversationalPolicy:
         for p in params:
             if p.grad is None:
                 continue
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:4938', catch_base=False) as __m3_guard_4935_12:
                 gnorm = torch.norm(p.grad.detach()).item()
                 grad_sq += float(gnorm) * float(gnorm)
-            except Exception:
+
+            if __m3_guard_4935_12.error is not None:
                 continue
         pre_vec = []
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4945', catch_base=False) as __m3_guard_4941_8:
             with torch.no_grad():
                 for p in params:
                     pre_vec.append(p.detach().view(-1).float().cpu())
-        except Exception:
+
+        if __m3_guard_4941_8.error is not None:
             pre_vec = []
 
         self._guarded_optimizer_step(
@@ -4952,7 +5671,7 @@ class TorchConversationalPolicy:
             clip_override=float(self.stability_cfg.grad_clip_norm),
         )
         param_delta = 0.0
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:4970', catch_base=False) as __m3_guard_4955_8:
             if pre_vec:
                 with torch.no_grad():
                     i0 = 0
@@ -4967,7 +5686,8 @@ class TorchConversationalPolicy:
                         d = torch.norm(cur - old).item()
                         delta_sq += float(d) * float(d)
                     param_delta = float(np.sqrt(max(0.0, delta_sq)))
-        except Exception:
+
+        if __m3_guard_4955_8.error is not None:
             param_delta = 0.0
         self._autonomy_last_diag = {
             "q_grad_norm": float(np.sqrt(max(0.0, grad_sq))),
@@ -4979,35 +5699,37 @@ class TorchConversationalPolicy:
     def _run_autonomy_turn(self, cycle_count: int, autonomy_check_every: int):
         if autonomy_check_every <= 0 or cycle_count % autonomy_check_every != 0:
             return
-        if getattr(self, "_hf_circuit_open", False):
+        if attr_get_optional(self, "_hf_circuit_open", False):
             # CUDA fault detected: skip GPU-dependent autonomy policy path.
             return
-        core = getattr(self, 'core', None)
+        core = attr_get_optional(self, 'core', None)
         try:
             s = self._state_vector(core)
             torch = self.torch
-            try:
-                if hasattr(s, 'dtype') and s.dtype == torch.bfloat16 and self.device.type == 'cpu':
+            with guard_context(ctx='llm_adapter/llm_core.py:4992', catch_base=False) as __m3_guard_4989_12:
+                if attr_has(s, 'dtype') and s.dtype == torch.bfloat16 and self.device.type == 'cpu':
                     s = s.float()
-            except Exception:
-                pass
+
+            if __m3_guard_4989_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             with torch.no_grad():
                 q = self.model.q_head(s.float())  # (1, 2): [Q_wait, Q_speak]
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:4998', catch_base=False) as __m3_guard_4996_16:
                     min_prob = float(os.getenv('M3_MIN_SPEAK_PROB', '0.2'))
-                except Exception:
+
+                if __m3_guard_4996_16.error is not None:
                     min_prob = 0.2
                 diff = float(q[0, 1].item() - q[0, 0].item())
                 lam_raw = torch.nn.functional.softplus(self.model.intensity_head(s.float())).item() + 1e-8
-                lam_min = float(max(1e-4, getattr(self.autonomy_rl_cfg, "lambda_min", 0.2)))
-                lam_max = float(max(lam_min + 1e-6, getattr(self.autonomy_rl_cfg, "lambda_max", 3.0)))
+                lam_min = float(max(1e-4, attr_get_optional(self.autonomy_rl_cfg, "lambda_min", 0.2)))
+                lam_max = float(max(lam_min + 1e-6, attr_get_optional(self.autonomy_rl_cfg, "lambda_max", 3.0)))
                 lam = float(np.clip(lam_raw, lam_min, lam_max))
                 prob = 1.0 / (1.0 + np.exp(-(diff * lam)))
                 prob = max(min_prob, prob)
                 speak = bool(np.random.rand() < prob)
 
             action_idx = 1 if speak else 0
-            prev_lam = float(getattr(self, "_autonomy_last_lambda", 0.0))
+            prev_lam = float(attr_get_optional(self, "_autonomy_last_lambda", 0.0))
             lam_delta = float(lam - prev_lam) if prev_lam != 0.0 else 0.0
             self._autonomy_last_lambda = float(lam)
             self._autonomy_recent_lambda.append(float(lam))
@@ -5016,26 +5738,28 @@ class TorchConversationalPolicy:
             reward_info: Dict[str, float] = {}
             td_loss = 0.0
             if not speak:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:5023', catch_base=False) as __m3_guard_5019_16:
                     dt = float(np.random.exponential(1.0 / max(lam, 1e-12)))
                     dt = min(dt, 5.0)
                     self._wait_for_user_interrupt(dt)
-                except Exception:
-                    pass
+
+                if __m3_guard_5019_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 # --- Wait reward with speak-rate homeostasis ---
                 speak_rate = float(np.mean(self._autonomy_recent_actions)) if self._autonomy_recent_actions else 0.5
-                target_rate = float(max(0.01, min(0.99, getattr(self.autonomy_rl_cfg, "target_speak_rate", 0.35))))
+                target_rate = float(max(0.01, min(0.99, attr_get_optional(self.autonomy_rl_cfg, "target_speak_rate", 0.35))))
                 # Positive bonus for waiting when already speaking too much
                 rate_bonus = max(0.0, (speak_rate - target_rate)) * 0.5
                 # Energy conservation bonus: reward waiting when energy is low
                 energy_bonus = 0.0
-                try:
-                    if core is not None and hasattr(core, 'energy_ctrl'):
+                with guard_context(ctx='llm_adapter/llm_core.py:5037', catch_base=False) as __m3_guard_5032_16:
+                    if core is not None and attr_has(core, 'energy_ctrl'):
                         e_ratio = float(core.energy_ctrl.cognitive_energy / max(1.0, core.energy_ctrl.energy_capacity))
                         if e_ratio < 0.3:
                             energy_bonus = 0.15 * (0.3 - e_ratio) / 0.3
-                except Exception:
-                    pass
+
+                if __m3_guard_5032_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 reward = -0.01 + 0.10 * float(self._autonomy_credit_ema) + rate_bonus + energy_bonus
                 reward_info = {
                     "dialog_score": 0.0,
@@ -5052,7 +5776,7 @@ class TorchConversationalPolicy:
                 if self._autonomy_running:
                     next_s = self._state_vector(core)
                     td_loss = self._update_autonomy_q(s.float(), action_idx, reward, next_s.float(), done=False)
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:5071', catch_base=False) as __m3_guard_5055_16:
                     self._log_jsonl(
                         os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
                         {
@@ -5064,26 +5788,28 @@ class TorchConversationalPolicy:
                             "lambda_delta": float(lam_delta),
                             "reward": float(reward),
                             "td_loss": float(td_loss),
-                            **dict(getattr(self, "_autonomy_last_diag", {}) or {}),
+                            **dict(attr_get_optional(self, "_autonomy_last_diag", {}) or {}),
                             **reward_info,
                         },
                     )
-                except Exception:
-                    pass
+
+                if __m3_guard_5055_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 return
 
             prefix = self._build_autonomy_prefix(s)
             seed = self._autonomy_seed_prompt(core)
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:5079', catch_base=False) as __m3_guard_5077_12:
                 auto_max_len = int(os.getenv('M3_AUTONOMY_MAX_LEN', '160'))
-            except Exception:
+
+            if __m3_guard_5077_12.error is not None:
                 auto_max_len = 160
             text = self.generate(seed, max_len=max(32, auto_max_len), prefix_embed=prefix, source="autonomy")
 
             # --- Semantic dedup gate: suppress utterances too similar to recent ones ---
-            if text and text.strip() and bool(getattr(self.autonomy_rl_cfg, "semantic_dedup_enabled", True)):
-                dedup_threshold = float(getattr(self.autonomy_rl_cfg, "semantic_dedup_threshold", 0.25))
-                dedup_max_retries = int(max(0, getattr(self.autonomy_rl_cfg, "semantic_dedup_max_retries", 2)))
+            if text and text.strip() and bool(attr_get_optional(self.autonomy_rl_cfg, "semantic_dedup_enabled", True)):
+                dedup_threshold = float(attr_get_optional(self.autonomy_rl_cfg, "semantic_dedup_threshold", 0.25))
+                dedup_max_retries = int(max(0, attr_get_optional(self.autonomy_rl_cfg, "semantic_dedup_max_retries", 2)))
                 for _dedup_attempt in range(dedup_max_retries + 1):
                     emb = self._autonomy_text_embedding(text.strip(), core=core)
                     novelty = self._autonomy_novelty(emb) if emb is not None else 1.0
@@ -5095,12 +5821,12 @@ class TorchConversationalPolicy:
                         if not text or not text.strip():
                             break
                     else:
-                        # All retries exhausted — suppress and penalize
-                        suppress_penalty = -float(getattr(self.autonomy_rl_cfg, "repetition_penalty", 0.35))
+                        # All retries exhausted ??suppress and penalize
+                        suppress_penalty = -float(attr_get_optional(self.autonomy_rl_cfg, "repetition_penalty", 0.35))
                         if self._autonomy_running:
                             next_s = self._state_vector(core)
                             self._update_autonomy_q(s.float(), action_idx, suppress_penalty, next_s.float(), done=False)
-                        try:
+                        with guard_context(ctx='llm_adapter/llm_core.py:5115', catch_base=False) as __m3_guard_5103_24:
                             self._log_jsonl(
                                 os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
                                 {
@@ -5112,8 +5838,9 @@ class TorchConversationalPolicy:
                                     "reward": float(suppress_penalty),
                                 },
                             )
-                        except Exception:
-                            pass
+
+                        if __m3_guard_5103_24.error is not None:
+                            logging.getLogger(__name__).exception("Swallowed exception")
                         return  # suppress this utterance entirely
 
             if not text or not text.strip():
@@ -5121,7 +5848,7 @@ class TorchConversationalPolicy:
                 if self._autonomy_running:
                     next_s = self._state_vector(core)
                     td_loss = self._update_autonomy_q(s.float(), action_idx, reward, next_s.float(), done=False)
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:5145', catch_base=False) as __m3_guard_5124_16:
                     self._log_jsonl(
                         os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
                         {
@@ -5133,7 +5860,7 @@ class TorchConversationalPolicy:
                             "lambda_delta": float(lam_delta),
                             "reward": float(reward),
                             "td_loss": float(td_loss),
-                            **dict(getattr(self, "_autonomy_last_diag", {}) or {}),
+                            **dict(attr_get_optional(self, "_autonomy_last_diag", {}) or {}),
                             "dialog_score": 0.0,
                             "quality_score": 0.0,
                             "bus_credit": float(self._autonomy_credit_ema),
@@ -5142,8 +5869,9 @@ class TorchConversationalPolicy:
                             "repetition_penalty": 0.0,
                         },
                     )
-                except Exception:
-                    pass
+
+                if __m3_guard_5124_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 return
             text = text.strip()
             if self._is_disallowed_generation_output(text):
@@ -5152,7 +5880,7 @@ class TorchConversationalPolicy:
                 if self._autonomy_running:
                     next_s = self._state_vector(core)
                     td_loss = self._update_autonomy_q(s.float(), action_idx, reward, next_s.float(), done=False)
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:5176', catch_base=False) as __m3_guard_5155_16:
                     self._log_jsonl(
                         os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
                         {
@@ -5164,7 +5892,7 @@ class TorchConversationalPolicy:
                             "lambda_delta": float(lam_delta),
                             "reward": float(reward),
                             "td_loss": float(td_loss),
-                            **dict(getattr(self, "_autonomy_last_diag", {}) or {}),
+                            **dict(attr_get_optional(self, "_autonomy_last_diag", {}) or {}),
                             "dialog_score": 0.0,
                             "quality_score": 0.0,
                             "bus_credit": float(self._autonomy_credit_ema),
@@ -5173,36 +5901,40 @@ class TorchConversationalPolicy:
                             "repetition_penalty": 0.0,
                         },
                     )
-                except Exception:
-                    pass
+
+                if __m3_guard_5155_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 return
             numeric_dump = self._is_numeric_dump_response(text)
             if (
                 os.getenv('M3_AUTONOMY_LEARN_FROM_SELF', '0').lower() in ('1', 'true', 'yes', 'on')
                 and not numeric_dump
             ):
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:5186', catch_base=False) as __m3_guard_5184_16:
                     self.learn_pair(seed, text, max_len=max(32, auto_max_len))
-                except Exception:
-                    pass
 
-            if core is not None and hasattr(core, 'bus') and core.bus is not None:
-                try:
+                if __m3_guard_5184_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
+
+            if core is not None and attr_has(core, 'bus') and core.bus is not None:
+                with guard_context(ctx='llm_adapter/llm_core.py:5197', catch_base=False) as __m3_guard_5190_16:
                     vec = np.zeros((32,), dtype=np.float32)
-                    if hasattr(core, 'feature_bank') and hasattr(core.feature_bank, '_hash_embed'):
+                    if attr_has(core, 'feature_bank') and attr_has(core.feature_bank, '_hash_embed'):
                         vec = core.feature_bank._hash_embed(
                             text, core.feature_bank.embed_dim
                         ).astype(np.float32)
                     core.bus.push('system', 'utter.self', vec, salience=0.8, confidence=1.0, ttl=10)
-                except Exception:
-                    pass
 
-            scb = getattr(self, '_on_spontaneous', None)
+                if __m3_guard_5190_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
+
+            scb = attr_get_optional(self, '_on_spontaneous', None)
             if scb is not None:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:5204', catch_base=False) as __m3_guard_5202_16:
                     scb(text, float(q[0, 1].item()), lam)
-                except Exception:
-                    pass
+
+                if __m3_guard_5202_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
 
             reward, reward_info = self._compute_autonomy_reward(seed, text, core=core)
             if self._autonomy_running:
@@ -5220,8 +5952,8 @@ class TorchConversationalPolicy:
                     and _nm_active
                 ):
                     _hf = HFBackend.get_instance()
-                    _nm = getattr(_hf, '_neuro_modulator', None)
-                    _nm_opt = getattr(_hf, '_neuro_mod_opt', None)
+                    _nm = attr_get_optional(_hf, '_neuro_modulator', None)
+                    _nm_opt = attr_get_optional(_hf, '_neuro_mod_opt', None)
                     if _nm is not None and _nm_opt is not None:
                         _z_nm = self._build_full_state_vector(core=core)
                         if _z_nm is not None:
@@ -5229,11 +5961,12 @@ class TorchConversationalPolicy:
                                 _z_nm, _hf._neuro_mod_state_dim, _hf.device
                             )
                             if _z_t is not None:
-                                try:
+                                with guard_context(ctx='llm_adapter/llm_core.py:5236', catch_base=False) as __m3_guard_5232_32:
                                     _neuro_str = float(
                                         os.getenv('M3_NEURO_STRENGTH', str(_nm_cfg.strength))
                                     )
-                                except Exception:
+
+                                if __m3_guard_5232_32.error is not None:
                                     _neuro_str = _nm_cfg.strength
                                 _nm.train()
                                 _nm_opt.zero_grad(set_to_none=True)
@@ -5248,21 +5981,23 @@ class TorchConversationalPolicy:
                                 )
                                 _nm_opt.step()
                                 # Track online-learning steps separately from _nm._step (which is tied to forward())
-                                _online_step = getattr(_hf, "_neuro_mod_online_step", 0) + 1
+                                _online_step = attr_get_optional(_hf, "_neuro_mod_online_step", 0) + 1
                                 _hf._neuro_mod_online_step = _online_step
                                 _nm.eval()
                                 # Persist checkpoint every 100 online-learning steps
                                 if _online_step % 100 == 0:
-                                    try:
+                                    with guard_context(ctx='llm_adapter/llm_core.py:5258', catch_base=False) as __m3_guard_5256_36:
                                         _hf._save_neuro_checkpoint()
-                                    except Exception as _ckpt_err:
+
+                                    if __m3_guard_5256_36.error is not None:
+                                        _ckpt_err = __m3_guard_5256_36.error
                                         logging.getLogger('llm_adapter').debug(
                                             f'[NeuroMod] periodic checkpoint failed: {_ckpt_err}'
                                         )
             except Exception:
-                pass
+                logging.getLogger(__name__).exception("Swallowed exception")
 
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:5293', catch_base=False) as __m3_guard_5265_12:
                 self._log_jsonl(
                     os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
                     {
@@ -5271,7 +6006,7 @@ class TorchConversationalPolicy:
                         "lambda_delta": float(lam_delta),
                         "q_wait": float(q[0, 0].item()),
                         "q_speak": float(q[0, 1].item()),
-                        **dict(getattr(self, "_autonomy_last_diag", {}) or {}),
+                        **dict(attr_get_optional(self, "_autonomy_last_diag", {}) or {}),
                         "text": text,
                     },
                 )
@@ -5286,29 +6021,32 @@ class TorchConversationalPolicy:
                         "lambda_delta": float(lam_delta),
                         "reward": float(reward),
                         "td_loss": float(td_loss),
-                        **dict(getattr(self, "_autonomy_last_diag", {}) or {}),
+                        **dict(attr_get_optional(self, "_autonomy_last_diag", {}) or {}),
                         **reward_info,
                     },
                 )
-            except Exception:
-                pass
+
+            if __m3_guard_5265_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         except Exception as e:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:5298', catch_base=False) as __m3_guard_5296_12:
                 logger.error(f'Autonomy decision error: {e}')
-            except Exception:
-                pass
-            try:
-                note = getattr(self, "_note_control_health", None)
+
+            if __m3_guard_5296_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
+            with guard_context(ctx='llm_adapter/llm_core.py:5304', catch_base=False) as __m3_guard_5300_12:
+                note = attr_get_optional(self, "_note_control_health", None)
                 if callable(note):
                     note(False, f"autonomy_error:{e}")
-            except Exception:
-                pass
+
+            if __m3_guard_5300_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
     def start_autonomy_loop(self):
-        if getattr(self, '_auto_running', False):
+        if attr_get_optional(self, '_auto_running', False):
             return
         self._auto_running = True
-        self._user_queue = getattr(self, '_user_queue', None)
+        self._user_queue = attr_get_optional(self, '_user_queue', None)
         if self._user_queue is None:
             import queue
             self._user_queue = queue.Queue()
@@ -5317,14 +6055,14 @@ class TorchConversationalPolicy:
 
     def stop_autonomy_loop(self):
         self._auto_running = False
-        th = getattr(self, '_auto_thread', None)
+        th = attr_get_optional(self, '_auto_thread', None)
         if th is not None:
             th.join(timeout=2.0)
 
     def submit_user_message(self, text: str):
-        """사용자 메시지를 자율사고 루프에 비동기 전달 (논블로킹)"""
+        """?ъ슜??硫붿떆吏瑜??먯쑉?ш퀬 猷⑦봽??鍮꾨룞湲??꾨떖 (?쇰툝濡쒗궧)"""
         import queue
-        if not hasattr(self, '_user_queue') or self._user_queue is None:
+        if not attr_has(self, '_user_queue') or self._user_queue is None:
             self._user_queue = queue.Queue()
         self._user_queue.put(text)
 
@@ -5337,9 +6075,10 @@ class TorchConversationalPolicy:
         When NeuroModulator is active, the seed omits numeric state values
         because consciousness is already injected at the weight level.
         """
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:5342', catch_base=False) as __m3_guard_5340_8:
             lang = os.getenv('M3_AUTONOMY_LANGUAGE', 'ko').lower()
-        except Exception:
+
+        if __m3_guard_5340_8.error is not None:
             lang = 'ko'
 
         # When neuro modulation is active, use a clean seed without state dumps.
@@ -5350,35 +6089,38 @@ class TorchConversationalPolicy:
 
         if neuro_active:
             if lang.startswith('ko'):
-                return "[자율 모드] 지금 떠오르는 생각을 자유롭게 짧게 말해줘."
+                return "[?먯쑉 紐⑤뱶] 吏湲??좎삤瑜대뒗 ?앷컖???먯쑀濡?쾶 吏㏐쾶 留먰빐以?"
             return "[Autonomy] Speak your mind freely in one short sentence."
 
-        # Light state summary (best-effort) — legacy prompt-based path
+        # Light state summary (best-effort) ??legacy prompt-based path
         bits = []
-        try:
-            if core is not None and hasattr(core, 'energy_ctrl'):
+        with guard_context(ctx='llm_adapter/llm_core.py:5363', catch_base=False) as __m3_guard_5358_8:
+            if core is not None and attr_has(core, 'energy_ctrl'):
                 ec = core.energy_ctrl
                 ratio = float(ec.cognitive_energy / max(ec.energy_capacity, 1.0))
                 bits.append(f"energy={ratio:.2f}")
-        except Exception:
-            pass
-        try:
-            if core is not None and hasattr(core, 'qualia'):
+
+        if __m3_guard_5358_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:5370', catch_base=False) as __m3_guard_5365_8:
+            if core is not None and attr_has(core, 'qualia'):
                 q = core.qualia
-                bits.append(f"arousal={float(getattr(q, 'arousal', 0.0)):.2f}")
-                bits.append(f"valence={float(getattr(q, 'valence', 0.0)):.2f}")
-        except Exception:
-            pass
-        try:
-            if core is not None and hasattr(core, 'phi_calculator') and core.phi_calculator.phi_history:
+                bits.append(f"arousal={float(attr_get_optional(q, 'arousal', 0.0)):.2f}")
+                bits.append(f"valence={float(attr_get_optional(q, 'valence', 0.0)):.2f}")
+
+        if __m3_guard_5365_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:5375', catch_base=False) as __m3_guard_5372_8:
+            if core is not None and attr_has(core, 'phi_calculator') and core.phi_calculator.phi_history:
                 bits.append(f"phi={float(core.phi_calculator.phi_history[-1]):.3f}")
-        except Exception:
-            pass
+
+        if __m3_guard_5372_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         state_line = (" (" + ", ".join(bits) + ")") if bits else ""
 
         if lang.startswith('ko'):
             return (
-                "[자율 모드] 현재 M3_STATE를 바탕으로, 지금 해야 할 한 가지를 짧게 말해줘." + state_line
+                "[?먯쑉 紐⑤뱶] ?꾩옱 M3_STATE瑜?諛뷀깢?쇰줈, 吏湲??댁빞 ????媛吏瑜?吏㏐쾶 留먰빐以?" + state_line
             )
         return (
             "[Autonomy] Based on the current M3_STATE, say one short next action." + state_line
@@ -5447,13 +6189,13 @@ class TorchConversationalPolicy:
 
     def _unified_loop(self):
         import time
-        core = getattr(self, 'core', None)
+        core = attr_get_optional(self, 'core', None)
         consciousness_interval = float(os.getenv('M3_CONSCIOUSNESS_INTERVAL', '0.1'))
         steps_per_cycle = int(os.getenv('M3_STEPS_PER_CYCLE', '5'))
         autonomy_check_every = int(os.getenv('M3_AUTONOMY_CHECK_EVERY', '10'))
         cycle_count = 0
 
-        while getattr(self, '_auto_running', False):
+        while attr_get_optional(self, '_auto_running', False):
             try:
                 user_msg = self._drain_user_message()
                 if user_msg is not None:
@@ -5466,10 +6208,11 @@ class TorchConversationalPolicy:
                 self._run_autonomy_turn(cycle_count, autonomy_check_every)
                 time.sleep(consciousness_interval)
             except Exception as e:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:5471', catch_base=False) as __m3_guard_5469_16:
                     logger.error(f'Unified loop error: {e}')
-                except Exception:
-                    pass
+
+                if __m3_guard_5469_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 time.sleep(1.0)
     def _consume_credits(self):
         """Background thread consuming credit messages from MessageBus."""
@@ -5481,22 +6224,23 @@ class TorchConversationalPolicy:
                     continue
                 
                 # Non-blocking get
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:5486', catch_base=True) as __m3_guard_5484_16:
                     msg = self._bus_inbox.get_nowait()
-                except:
+
+                if __m3_guard_5484_16.error is not None:
                     time.sleep(0.05)
                     continue
                 
                 # Process credit message
-                if hasattr(msg, "type") and msg.type == "credit":
+                if attr_has(msg, "type") and msg.type == "credit":
                     self._process_credit_message(msg)
             except Exception:
                 time.sleep(0.1)
 
     def _process_credit_message(self, msg):
         """Process a single credit message from MessageBus."""
-        try:
-            payload = getattr(msg, "payload", {})
+        with guard_context(ctx='llm_adapter/llm_core.py:5529', catch_base=False) as __m3_guard_5498_8:
+            payload = attr_get_optional(msg, "payload", {})
             credit = float(payload.get("credit", 0.0))
             signal = payload.get("signal", {})
             
@@ -5520,25 +6264,25 @@ class TorchConversationalPolicy:
                 ema_alpha * tool_success
             )
             self._autonomy_credit_ema = (
-                (1.0 - ema_alpha) * float(getattr(self, "_autonomy_credit_ema", 0.0))
+                (1.0 - ema_alpha) * float(attr_get_optional(self, "_autonomy_credit_ema", 0.0))
                 + ema_alpha * float(credit)
             )
-            
-            # Optional: micro-update token value head with credit signal
-            # (requires span_id token mapping, skipped for now)
-        except Exception:
-            pass
+
+        if __m3_guard_5498_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def load_model(self, path: str):
         """Loads the model state dictionary."""
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:5541', catch_base=False) as __m3_guard_5534_8:
             if not os.path.exists(path):
                 logger.warning(f"Model file not found at {path}, skipping load.")
                 return
             self.model.load_state_dict(self.torch.load(path, map_location=self.device))
             self.model.eval()  # Set to evaluation mode after loading
             logger.info(f"Model loaded from {path}")
-        except Exception as e:
+
+        if __m3_guard_5534_8.error is not None:
+            e = __m3_guard_5534_8.error
             logger.error(f"Error loading model from {path}: {e}")
 
     def _beta_schedule(self) -> float:
@@ -5548,7 +6292,7 @@ class TorchConversationalPolicy:
         Returns:
              [beta_min, beta_max]
         """
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:5567', catch_base=False) as __m3_guard_5551_8:
             phi_delta = float(self._last_value_estimates.get('phi_delta', 0.0))
             stability = float(self._last_value_estimates.get('stability', 0.5))
             tool_success = float(self._last_value_estimates.get('tool_success', 0.0))
@@ -5564,7 +6308,8 @@ class TorchConversationalPolicy:
             self._beta_ema = 0.9 * self._beta_ema + 0.1 * beta_target
             
             return float(np.clip(self._beta_ema, self._beta_min, self._beta_max))
-        except Exception:
+
+        if __m3_guard_5551_8.error is not None:
             return float(self._token_q_alpha)  # fallback
     
     def _update_task_weights_gradnorm(
@@ -5593,8 +6338,7 @@ class TorchConversationalPolicy:
         if all(len(self._task_losses_history[t]) < 2 for t in ['phi', 'stab', 'tool']):
             return  # Not enough data
 
-        try:
-            # r_i(t) = L_i(t) / L_i(0)
+        with guard_context(ctx='llm_adapter/llm_core.py:5623', catch_base=False) as __m3_guard_5596_8:
             rel_rates = {}
             for task in ['phi', 'stab', 'tool']:
                 hist = self._task_losses_history[task]
@@ -5619,9 +6363,9 @@ class TorchConversationalPolicy:
                 if task in self._task_weights:
                     delta = 0.1 * (targets[task] - 1.0)
                     self._task_weights[task] = float(np.clip(self._task_weights[task] * (1 + delta), 0.1, 5.0))
-        
-        except Exception:
-            pass  # Log error if needed
+
+        if __m3_guard_5596_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def _normalize_targets(
         self,
@@ -5665,7 +6409,7 @@ class TorchConversationalPolicy:
         torch = self.torch
 
         # 1) Compute uncertainty: H(p) / log(V)
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:5676', catch_base=False) as __m3_guard_5668_8:
             with torch.no_grad():
                 logits = self.model.head(h_final)  # (1, V)
                 p = torch.softmax(logits, dim=-1)
@@ -5673,7 +6417,8 @@ class TorchConversationalPolicy:
                 # Normalize
                 H_norm = float(H / (np.log(self.vocab_size) + 1e-8))
                 uncertainty = float(np.clip(H_norm, 0.0, 1.0))
-        except Exception:
+
+        if __m3_guard_5668_8.error is not None:
             uncertainty = 0.5
         
         # 2) Instability: 1 - stability
@@ -5699,13 +6444,18 @@ class TorchConversationalPolicy:
 
     def _log_jsonl(self, path: str, obj: dict):
         """Helper to append JSONL log entries."""
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:5707', catch_base=False) as __m3_guard_5702_8:
             resolved_path = _normalize_log_file(path, OUT_DIR, 'llm_adapter.log')
-            with open(resolved_path, 'a', encoding='utf-8') as f:
-                import json as _json
-                f.write(_json.dumps(obj, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
+            payload = dict(obj or {})
+            decision = attr_get_optional(self, "_last_control_decision", None)
+            if decision is not None:
+                payload.setdefault("control_decision_id", str(attr_get_optional(decision, "control_decision_id", "")))
+                payload.setdefault("decision_mode", str(attr_get_optional(decision, "decision_mode", "")))
+                payload.setdefault("reason_codes", list(attr_get_optional(decision, "reason_codes", []) or []))
+            append_jsonl(resolved_path, payload)
+
+        if __m3_guard_5702_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def _adv_headroom(self, vocab_size: int):
         """Build advantage correction vector from token-level credit buffer."""
@@ -5767,18 +6517,19 @@ class TorchConversationalPolicy:
 
     def _quick_eval_proxy(self, core, candidate: str) -> float:
         """Cheap proxy using core.sdm / safety / rules if available; else 0."""
-        try:
-            if core is not None and hasattr(core, "sdm") and hasattr(core.sdm, "quick_eval"):
+        with guard_context(ctx='llm_adapter/llm_core.py:5773', catch_base=False) as __m3_guard_5770_8:
+            if core is not None and attr_has(core, "sdm") and attr_has(core.sdm, "quick_eval"):
                 return float(core.sdm.quick_eval(candidate))
-        except Exception:
-            pass
+
+        if __m3_guard_5770_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         return 0.0
 
     def _predict_value_scalar(self, prompt: str, candidate: str) -> float:
         """Get last hidden and run value head for quick value estimate."""
         torch = self.torch
         t = self.tok
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:5798', catch_base=False) as __m3_guard_5781_8:
             with torch.no_grad():
                 encoded = t.encode(prompt)
                 if not encoded:
@@ -5795,7 +6546,8 @@ class TorchConversationalPolicy:
                 o, _ = self.model.decoder(self.model.emb(tok_ids), h)
                 v = self.model.value(o[:, -1, :]).squeeze(-1)
                 return float(v.item())
-        except Exception:
+
+        if __m3_guard_5781_8.error is not None:
             return 0.0
 
     def _build_cond_key(self, prompt: str, core=None, extra: dict | None = None) -> np.ndarray:
@@ -5817,25 +6569,26 @@ class TorchConversationalPolicy:
 
         # 2) tags from core: last tool name, success, phi tranche, bus event type
         tag = np.zeros(32, dtype=np.float32)
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:5837', catch_base=False) as __m3_guard_5820_8:
             if core is not None:
-                last_tool = getattr(core, "last_tool", "none")
-                tool_ok   = float(getattr(core, "last_tool_ok", 0.0))
-                phi_hist  = np.asarray(getattr(core, "phi_calculator", None).phi_history[-8:], dtype=np.float32) \
-                            if hasattr(getattr(core,"phi_calculator", None), "phi_history") else np.zeros(0, np.float32)
+                last_tool = attr_get_optional(core, "last_tool", "none")
+                tool_ok   = float(attr_get_optional(core, "last_tool_ok", 0.0))
+                phi_hist  = np.asarray(attr_get_optional(core, "phi_calculator", None).phi_history[-8:], dtype=np.float32) \
+                            if attr_has(attr_get_optional(core,"phi_calculator", None), "phi_history") else np.zeros(0, np.float32)
                 tag[0] = float(hash(str(last_tool)) % 997) / 997.0
                 tag[1] = tool_ok
                 if phi_hist.size:
                     tag[2] = float(phi_hist[-1])
                     tag[3] = float(np.mean(phi_hist))
                 # bus depth/latency if present
-                bus = getattr(core, "bus", None)
-                if bus is not None and hasattr(bus, "depth"):
-                    tag[4] = float(getattr(bus, "depth", 0))
-                if bus is not None and hasattr(bus, "latency_ms"):
-                    tag[5] = float(getattr(bus, "latency_ms", 0.0))
-        except Exception:
-            pass
+                bus = attr_get_optional(core, "bus", None)
+                if bus is not None and attr_has(bus, "depth"):
+                    tag[4] = float(attr_get_optional(bus, "depth", 0))
+                if bus is not None and attr_has(bus, "latency_ms"):
+                    tag[5] = float(attr_get_optional(bus, "latency_ms", 0.0))
+
+        if __m3_guard_5820_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
         # 3) extra dict (event_tag etc.)
         if extra:
@@ -5876,17 +6629,18 @@ class TorchConversationalPolicy:
         tv_head = None
         internal_h = None
         beta_val = 0.0
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:5888', catch_base=False) as __m3_guard_5879_8:
             enable_tv = (
                 self._control_allows('token_value_bias')
                 and os.getenv('LLM_ADAPTER_ENABLE_TOKEN_VALUE_BIAS', '0').lower() in ('1', 'true', 'yes', 'on')
             )
-            if enable_tv and hasattr(self, 'model') and hasattr(self.model, 'token_value'):
+            if enable_tv and attr_has(self, 'model') and attr_has(self.model, 'token_value'):
                 tv_head = self.model.token_value
-                internal_h = getattr(self.model, 'hidden', 1024)
+                internal_h = attr_get_optional(self.model, 'hidden', 1024)
                 beta_val = float(self._beta_schedule())
-        except Exception:
-            pass
+
+        if __m3_guard_5879_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
         return {
             'token_value_head': tv_head,
@@ -5935,15 +6689,16 @@ class TorchConversationalPolicy:
         if gate is None or not response:
             return response
 
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:5940', catch_base=False) as __m3_guard_5938_8:
             q0 = gate.evaluate(response)
-        except Exception:
+
+        if __m3_guard_5938_8.error is not None:
             return response
 
-        if not getattr(q0, 'reject', False):
+        if not attr_get_optional(q0, 'reject', False):
             return response
 
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:5968', catch_base=False) as __m3_guard_5946_8:
             retry = self._generate_with_hf(
                 hf=gate_payload['hf'],
                 prompt=gate_payload['prompt'],
@@ -5965,29 +6720,32 @@ class TorchConversationalPolicy:
             q1 = gate.evaluate(retry)
             if (not q1.reject) or (q1.score > q0.score):
                 return retry
-        except Exception:
+
+        if __m3_guard_5946_8.error is not None:
             return response
         return response
 
     def _semantic_perspective_prefix(self, core=None) -> str:
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:5975', catch_base=False) as __m3_guard_5973_8:
             enabled = os.getenv('M3_EMBED_PERSPECTIVE', '0').lower() in ('1', 'true', 'yes', 'on')
-        except Exception:
+
+        if __m3_guard_5973_8.error is not None:
             enabled = False
         if not enabled:
             return ""
-        try:
-            core_ref = core if core is not None else getattr(self, 'core', None)
+        with guard_context(ctx='llm_adapter/llm_core.py:5990', catch_base=False) as __m3_guard_5979_8:
+            core_ref = core if core is not None else attr_get_optional(self, 'core', None)
             if core_ref is None:
                 return ""
-            subj = getattr(core_ref, 'unified_subject', None)
-            if subj is None or not hasattr(subj, 'reflect_on_self'):
+            subj = attr_get_optional(core_ref, 'unified_subject', None)
+            if subj is None or not attr_has(subj, 'reflect_on_self'):
                 return ""
             summary = str(subj.reflect_on_self()).strip()
             if not summary:
                 return ""
             return f"Perspective: {summary}\n\n"
-        except Exception:
+
+        if __m3_guard_5979_8.error is not None:
             return ""
 
     def embed_text(self, text: str, sys_identity: str = "", max_src_len: int = 512) -> np.ndarray:
@@ -6026,15 +6784,46 @@ class TorchConversationalPolicy:
         generation_contract: Optional[Any] = None,
     ) -> str:
         t = self.tok
-        core = getattr(self, 'core', None)
+        core = attr_get_optional(self, 'core', None)
         raw_prompt = prompt
-        try:
-            if hasattr(self.tok, "observe_unknown_rate"):
+        control_decision = self._build_control_decision(prompt=str(raw_prompt), source=str(source or "generate"))
+        control_mode = str(
+            attr_get_optional(control_decision, "decision_mode", self._control_plane_mode()) or self._control_plane_mode()
+        ).strip().lower()
+        enforce_control_plane = control_mode == "enforce"
+        with guard_context(ctx='llm_adapter/llm_core.py:6034', catch_base=False) as __m3_guard_6031_8:
+            if attr_has(self.tok, "observe_unknown_rate"):
                 self.tok.observe_unknown_rate(str(raw_prompt or ""))
-        except Exception:
-            pass
-        if getattr(self, "_hf_circuit_open", False):
+
+        if __m3_guard_6031_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        if attr_get_optional(self, "_hf_circuit_open", False):
             self._note_control_health(False, "hf_circuit_open")
+            return self._generate_safe_fallback(
+                str(raw_prompt),
+                chat_messages=None,
+                max_len=max_len,
+                meaning_state=meaning_state,
+                response_plan=response_plan,
+                generation_contract=generation_contract,
+            )
+        if self._hf_runtime_cooldown_active():
+            self._note_control_health(False, "hf_runtime_cooldown")
+            with guard_context(ctx='llm_adapter/llm_core.py:6049', catch_base=False) as __m3_guard_6044_16:
+                self._log_jsonl(
+                    os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                    {
+                        "kind": "hf_runtime_failure",
+                        "reason_code": "hf_runtime_cooldown",
+                        "phase": "precheck",
+                        "model_output_shape": "n/a",
+                        "has_logits": False,
+                        "failure_window_count": int(self._prune_hf_failure_events()),
+                    },
+                )
+
+            if __m3_guard_6044_16.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             return self._generate_safe_fallback(
                 str(raw_prompt),
                 chat_messages=None,
@@ -6050,64 +6839,127 @@ class TorchConversationalPolicy:
         phi_trend = None
         if core is not None:
             panels = self._update_m3_cache(core)
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:6055', catch_base=False) as __m3_guard_6053_12:
                 phi_trend = self.m3_cache.get_phi_trend(core)
-            except Exception:
+
+            if __m3_guard_6053_12.error is not None:
                 phi_trend = None
         
         affect_state = self._get_affect_state(core, affect_state)
         main_prompt = raw_prompt
         # === Phase 4: Episodic Memory Retrieval (NO THRESHOLD) ===
-        if core is not None and self._control_allows('memory_retrieval'):
+        retrieval_allowed = bool(attr_get_optional(control_decision, "allow_memory_retrieval", True))
+        retrieval_enabled = bool(
+            core is not None
+            and (
+                retrieval_allowed
+                if enforce_control_plane
+                else self._control_allows('memory_retrieval')
+            )
+        )
+        if core is not None and not retrieval_enabled:
+            self._record_retrieval_outcome(
+                outcome="skip",
+                skip_reason="disabled_by_mode",
+                selected_count=0,
+                candidate_pool=0,
+            )
+        if retrieval_enabled:
             try:
                 semantic_query = self._semantic_perspective_prefix(core) + str(raw_prompt)
                 context_embedding = self.embed_text(semantic_query, sys_identity="")
-                if context_embedding is not None:
+                if context_embedding is None or int(np.asarray(context_embedding).size) <= 0:
+                    self._record_retrieval_outcome(
+                        outcome="skip",
+                        skip_reason="no_query_vector",
+                        selected_count=0,
+                        candidate_pool=0,
+                    )
+                else:
                     relevant_episodes = self.m3_memory_retriever.retrieve_relevant_episodes(core, context_embedding)
-                    if relevant_episodes:
-                        episode_texts = []
-                        try:
-                            max_chars = int(os.getenv('M3_EPISODIC_MAX_CHARS', '800'))
-                        except Exception:
-                            max_chars = 800
-                        try:
-                            item_chars = int(os.getenv('M3_EPISODIC_ITEM_CHARS', '200'))
-                        except Exception:
-                            item_chars = 200
-                        total_chars = 0
-                        for ep in relevant_episodes:
-                            if getattr(ep, 'kind', 'internal_state') not in {'dialog', 'research', 'knowledge'}:
-                                continue
-                            if hasattr(ep, 'content'):
-                                txt = str(ep.content)
-                            elif hasattr(ep, 'text'):
-                                txt = str(ep.text)
-                            elif hasattr(ep, 'description'):
-                                txt = str(ep.description)
-                            elif hasattr(ep, 'narrative'):
-                                txt = str(ep.narrative)
-                            elif hasattr(ep, 'context'):
-                                txt = str(ep.context)
-                            else:
-                                txt = ""
-                            if not txt:
-                                continue
-                            if self._is_disallowed_generation_output(txt):
-                                continue
-                            if item_chars > 0 and len(txt) > item_chars:
-                                txt = txt[:item_chars] + "..."
-                            if max_chars > 0 and (total_chars + len(txt)) > max_chars:
-                                break
-                            total_chars += len(txt) + 2
-                            episode_texts.append(txt)
-                        if episode_texts:
-                            context_prefix = "Similar past context:\n" + "\n".join(f"- {txt}" for txt in episode_texts) + "\n\nCurrent context:\n"
-                            main_prompt = context_prefix + raw_prompt
-            except Exception:
-                pass
+                    episode_texts = []
+                    with guard_context(ctx='llm_adapter/llm_core.py:6071', catch_base=False) as __m3_guard_6069_24:
+                        max_chars = int(os.getenv('M3_EPISODIC_MAX_CHARS', '800'))
 
-        include_m3_state = self._should_include_m3_state(raw_prompt)
-        decode_control = self._build_decode_control(raw_prompt)
+                    if __m3_guard_6069_24.error is not None:
+                        max_chars = 800
+                    with guard_context(ctx='llm_adapter/llm_core.py:6075', catch_base=False) as __m3_guard_6073_24:
+                        item_chars = int(os.getenv('M3_EPISODIC_ITEM_CHARS', '200'))
+
+                    if __m3_guard_6073_24.error is not None:
+                        item_chars = 200
+                    total_chars = 0
+                    for ep in list(relevant_episodes or []):
+                        if attr_get_optional(ep, 'kind', 'internal_state') not in {'dialog', 'research', 'knowledge'}:
+                            continue
+                        if attr_has(ep, 'content'):
+                            txt = str(ep.content)
+                        elif attr_has(ep, 'text'):
+                            txt = str(ep.text)
+                        elif attr_has(ep, 'description'):
+                            txt = str(ep.description)
+                        elif attr_has(ep, 'narrative'):
+                            txt = str(ep.narrative)
+                        elif attr_has(ep, 'context'):
+                            txt = str(ep.context)
+                        else:
+                            txt = ""
+                        if not txt:
+                            continue
+                        if self._is_disallowed_generation_output(txt):
+                            continue
+                        if item_chars > 0 and len(txt) > item_chars:
+                            txt = txt[:item_chars] + "..."
+                        if max_chars > 0 and (total_chars + len(txt)) > max_chars:
+                            break
+                        total_chars += len(txt) + 2
+                        episode_texts.append(txt)
+                    episode_pool = 0
+                    with guard_context(ctx='llm_adapter/llm_core.py:6115', catch_base=False) as __m3_guard_6111_16:
+                        em = attr_get_optional(core, "episodic_memory", None)
+                        pool = attr_get_optional(em, "episodes", []) if em is not None else []
+                        episode_pool = int(len(pool)) if pool is not None else 0
+
+                    if __m3_guard_6111_16.error is not None:
+                        episode_pool = 0
+                    if episode_texts:
+                        context_prefix = "Similar past context:\n" + "\n".join(f"- {txt}" for txt in episode_texts) + "\n\nCurrent context:\n"
+                        main_prompt = context_prefix + raw_prompt
+                    if relevant_episodes:
+                        self._record_retrieval_outcome(
+                            outcome="hit",
+                            skip_reason="",
+                            selected_count=len(list(relevant_episodes)),
+                            candidate_pool=episode_pool,
+                        )
+                    else:
+                        miss_reason = "empty_index" if episode_pool <= 0 else "below_threshold"
+                        self._record_retrieval_outcome(
+                            outcome="miss",
+                            skip_reason=miss_reason,
+                            selected_count=0,
+                            candidate_pool=episode_pool,
+                        )
+            except Exception:
+                self._record_retrieval_outcome(
+                    outcome="skip",
+                    skip_reason="no_query_vector",
+                    selected_count=0,
+                    candidate_pool=0,
+                )
+                logging.getLogger(__name__).exception("Swallowed exception")
+
+        include_m3_state = bool(
+            (
+                bool(attr_get_optional(control_decision, "allow_state_context", True))
+                if enforce_control_plane
+                else self._should_include_m3_state(raw_prompt)
+            )
+            and self._should_include_m3_state(raw_prompt)
+        )
+        decode_control = None
+        if not enforce_control_plane or bool(attr_get_optional(control_decision, "allow_decode_control", True)):
+            decode_control = self._build_decode_control(raw_prompt)
         m3_context = (
             self._build_m3_context(core, affect_state=affect_state, phi_trend=phi_trend, panels=panels)
             if include_m3_state else ""
@@ -6148,14 +7000,18 @@ class TorchConversationalPolicy:
         if (
             m3_memory is None
             and core is not None
-            and self._control_allows('state_context')
-            and getattr(self.model, 'use_m3_integration', False)
+            and (
+                bool(attr_get_optional(control_decision, "allow_state_context", True))
+                if enforce_control_plane
+                else self._control_allows('state_context')
+            )
+            and attr_get_optional(self.model, 'use_m3_integration', False)
         ):
             m3_memory = self._build_m3_memory(core=core, panels=panels, affect_state=affect_state)
 
         m3_memory_t = None
         if m3_memory is not None:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:6167', catch_base=False) as __m3_guard_6158_12:
                 if self.torch.is_tensor(m3_memory):
                     m3_memory_t = m3_memory.to(self.device)
                 else:
@@ -6164,26 +7020,30 @@ class TorchConversationalPolicy:
                     m3_memory_t = m3_memory_t.squeeze(0)
                 if m3_memory_t.ndim == 1:
                     m3_memory_t = m3_memory_t.unsqueeze(0)
-            except Exception:
+
+            if __m3_guard_6158_12.error is not None:
                 m3_memory_t = None
 
         bridge_state = None
-        if self._bridge_enabled_safe():
-            try:
+        bridge_allowed = bool(attr_get_optional(control_decision, "allow_bridge", True))
+        if self._bridge_enabled_safe() and (bridge_allowed if enforce_control_plane else True):
+            with guard_context(ctx='llm_adapter/llm_core.py:6178', catch_base=False) as __m3_guard_6172_12:
                 bridge_state = self._build_full_state_vector(
                     core=core,
                     panels=panels,
                     affect_state=affect_state,
                 )
-            except Exception:
+
+            if __m3_guard_6172_12.error is not None:
                 bridge_state = None
             if bridge_state is None and m3_memory_t is not None:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:6183', catch_base=False) as __m3_guard_6181_16:
                     bridge_state = m3_memory_t.detach().float().cpu().numpy().reshape(-1)
-                except Exception:
+
+                if __m3_guard_6181_16.error is not None:
                     bridge_state = None
             # Optional ablation for evaluation: none|shuffle|zero
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:6197', catch_base=False) as __m3_guard_6186_12:
                 ablation = os.getenv('M3_BRIDGE_ABLATION', 'none').strip().lower()
                 if bridge_state is not None and ablation in ('shuffle', 'permute', 'zero', 'zeros'):
                     v = np.asarray(bridge_state, dtype=np.float32).reshape(-1)
@@ -6194,8 +7054,9 @@ class TorchConversationalPolicy:
                     else:
                         v = np.zeros_like(v, dtype=np.float32)
                     bridge_state = v
-            except Exception:
-                pass
+
+            if __m3_guard_6186_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
         # === HuggingFace backend: unified generation + scoring loop ===
         used_hf = False
@@ -6220,7 +7081,9 @@ class TorchConversationalPolicy:
                 )
                 gate_payload['decode_control'] = decode_control
 
-                gate = getattr(self, '_quality_gate', None)
+                gate = attr_get_optional(self, '_quality_gate', None)
+                if enforce_control_plane and not bool(attr_get_optional(control_decision, "quality_gate_on", True)):
+                    gate = None
                 use_semantic_scoring = self._should_use_semantic_scoring(
                     meaning_state=meaning_state,
                     response_plan=response_plan,
@@ -6283,20 +7146,48 @@ class TorchConversationalPolicy:
                     )
                     if not response or not str(response).strip():
                         if attempt < candidate_budget - 1:
-                            try:
+                            with guard_context(ctx='llm_adapter/llm_core.py:6292', catch_base=False) as __m3_guard_6286_28:
                                 cur_temp, cur_top_k, cur_top_p = self._retry_generation_sampling(
                                     temperature=cur_temp,
                                     top_k=cur_top_k,
                                     top_p=cur_top_p,
                                 )
-                            except Exception:
+
+                            if __m3_guard_6286_28.error is not None:
+                                cur_temp = max(0.15, float(cur_temp) * 0.8)
+                                cur_top_k = max(5, int(cur_top_k) if int(cur_top_k) < 24 else int(cur_top_k * 0.8))
+                                cur_top_p = max(0.70, float(cur_top_p) * 0.95)
+                        continue
+                    repeat_blocked, repeat_meta = self._is_repeat_candidate_blocked(str(response), core=core)
+                    if repeat_blocked:
+                        self._log_jsonl(
+                            os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                            {
+                                "kind": "response_repeat_block",
+                                "attempt": int(attempt + 1),
+                                "candidate_budget": int(candidate_budget),
+                                "similarity_last": float(repeat_meta.get("similarity_last", 0.0)),
+                                "similarity_prev": float(repeat_meta.get("similarity_prev", 0.0)),
+                                "similarity_min": float(repeat_meta.get("similarity_min", 0.0)),
+                                "threshold": float(repeat_meta.get("threshold", 0.90)),
+                            },
+                        )
+                        if attempt < candidate_budget - 1:
+                            with guard_context(ctx='llm_adapter/llm_core.py:6314', catch_base=False) as __m3_guard_6310_28:
+                                cur_temp, cur_top_k, cur_top_p = self._retry_generation_sampling(
+                                    temperature=cur_temp,
+                                    top_k=cur_top_k,
+                                    top_p=cur_top_p,
+                                )
+
+                            if __m3_guard_6310_28.error is not None:
                                 cur_temp = max(0.15, float(cur_temp) * 0.8)
                                 cur_top_k = max(5, int(cur_top_k) if int(cur_top_k) < 24 else int(cur_top_k * 0.8))
                                 cur_top_p = max(0.70, float(cur_top_p) * 0.95)
                         continue
 
                     if gate is not None:
-                        try:
+                        with guard_context(ctx='llm_adapter/llm_core.py:6324', catch_base=False) as __m3_guard_6299_24:
                             gate_payload.update({
                                 'hf': hf,
                                 'prompt': prompt,
@@ -6321,21 +7212,23 @@ class TorchConversationalPolicy:
                                 top_k=cur_top_k,
                                 top_p=cur_top_p,
                             )
-                        except Exception:
-                            pass
+
+                        if __m3_guard_6299_24.error is not None:
+                            logging.getLogger(__name__).exception("Swallowed exception")
 
                     if not response or not str(response).strip():
                         if attempt < candidate_budget - 1:
                             logger.warning(
                                 f'[HFBackend] quality gate returned empty on attempt {attempt+1}/{candidate_budget}; re-sampling with stricter params'
                             )
-                            try:
+                            with guard_context(ctx='llm_adapter/llm_core.py:6338', catch_base=False) as __m3_guard_6332_28:
                                 cur_temp, cur_top_k, cur_top_p = self._retry_generation_sampling(
                                     temperature=cur_temp,
                                     top_k=cur_top_k,
                                     top_p=cur_top_p,
                                 )
-                            except Exception:
+
+                            if __m3_guard_6332_28.error is not None:
                                 cur_temp = max(0.15, float(cur_temp) * 0.8)
                                 cur_top_k = max(5, int(cur_top_k) if int(cur_top_k) < 24 else int(cur_top_k * 0.8))
                                 cur_top_p = max(0.70, float(cur_top_p) * 0.95)
@@ -6380,13 +7273,14 @@ class TorchConversationalPolicy:
                             f'[HFBackend] semantic candidate rejected on attempt {attempt+1}/{candidate_budget}: '
                             f'{", ".join(sem_info.get("reasons", []))}'
                         )
-                        try:
+                        with guard_context(ctx='llm_adapter/llm_core.py:6389', catch_base=False) as __m3_guard_6383_24:
                             cur_temp, cur_top_k, cur_top_p = self._retry_generation_sampling(
                                 temperature=cur_temp,
                                 top_k=cur_top_k,
                                 top_p=cur_top_p,
                             )
-                        except Exception:
+
+                        if __m3_guard_6383_24.error is not None:
                             cur_temp = max(0.15, float(cur_temp) * 0.8)
                             cur_top_k = max(5, int(cur_top_k) if int(cur_top_k) < 24 else int(cur_top_k * 0.8))
                             cur_top_p = max(0.70, float(cur_top_p) * 0.95)
@@ -6394,36 +7288,40 @@ class TorchConversationalPolicy:
                         logger.warning(
                             f'[HFBackend] quality rejected on attempt {attempt+1}/{candidate_budget}; re-sampling with stricter params'
                         )
-                        try:
+                        with guard_context(ctx='llm_adapter/llm_core.py:6403', catch_base=False) as __m3_guard_6397_24:
                             cur_temp, cur_top_k, cur_top_p = self._retry_generation_sampling(
                                 temperature=cur_temp,
                                 top_k=cur_top_k,
                                 top_p=cur_top_p,
                             )
-                        except Exception:
+
+                        if __m3_guard_6397_24.error is not None:
                             cur_temp = max(0.15, float(cur_temp) * 0.8)
                             cur_top_k = max(5, int(cur_top_k) if int(cur_top_k) < 24 else int(cur_top_k * 0.8))
                             cur_top_p = max(0.70, float(cur_top_p) * 0.95)
 
                 if best_response is not None and not self._is_disallowed_generation_output(best_response):
                     if (not use_semantic_scoring and best_passed_quality) or (use_semantic_scoring and best_passed_semantic):
-                        try:
+                        with guard_context(ctx='llm_adapter/llm_core.py:6412', catch_base=False) as __m3_guard_6410_24:
                             self._record_example(prompt, best_response, source='generate_hf')
-                        except Exception:
-                            pass
-                        try:
+
+                        if __m3_guard_6410_24.error is not None:
+                            logging.getLogger(__name__).exception("Swallowed exception")
+                        with guard_context(ctx='llm_adapter/llm_core.py:6421', catch_base=False) as __m3_guard_6414_24:
                             self._adapt_bridge_online(
                                 hf=hf,
                                 prompt=prompt,
                                 response=best_response,
                                 z_m3=bridge_state,
                             )
-                        except Exception:
-                            pass
-                        try:
+
+                        if __m3_guard_6414_24.error is not None:
+                            logging.getLogger(__name__).exception("Swallowed exception")
+                        with guard_context(ctx='llm_adapter/llm_core.py:6425', catch_base=False) as __m3_guard_6423_24:
                             self._maybe_auto_rebuild_tokenizer()
-                        except Exception:
-                            pass
+
+                        if __m3_guard_6423_24.error is not None:
+                            logging.getLogger(__name__).exception("Swallowed exception")
                         self._note_control_health(True, "hf_generate_ok")
                         return best_response
                 if use_semantic_scoring:
@@ -6431,10 +7329,40 @@ class TorchConversationalPolicy:
                 else:
                     logger.warning('[HFBackend] filtered by generation quality; switching to fallback')
             except Exception as e:
-                logger.warning(f'[HFBackend] generation failed ({e})')
+                details = self._extract_hf_failure_details(e, hf=hf)
+                reason_code = str(details.get("reason_code", "hf_runtime_failure"))
+                phase = str(details.get("phase", "unknown"))
+                model_output_shape = str(details.get("model_output_shape", "unknown"))
+                has_logits = bool(details.get("has_logits", False))
                 if self._is_cuda_fatal_error(e):
                     self._trip_hf_circuit_breaker(e)
-                self._note_control_health(False, f"hf_exception:{e}")
+                    reason_code = "hf_cuda_fault"
+                failure_state = self._register_hf_runtime_failure(
+                    reason_code=reason_code,
+                    phase=phase,
+                    model_output_shape=model_output_shape,
+                    has_logits=has_logits,
+                )
+                cooldown_remaining = float(
+                    max(0.0, float(failure_state.get("cooldown_until", 0.0)) - float(time.time()))
+                )
+                self._log_jsonl(
+                    os.getenv("LLM_ADAPTER_LOG", "llm_adapter.log"),
+                    {
+                        "kind": "hf_runtime_failure",
+                        "reason_code": str(reason_code),
+                        "phase": str(phase),
+                        "model_output_shape": str(model_output_shape),
+                        "has_logits": bool(has_logits),
+                        "failure_window_count": int(failure_state.get("failure_window_count", 0)),
+                        "cooldown_remaining_sec": cooldown_remaining,
+                    },
+                )
+                logger.warning(
+                    f"[HFBackend] generation failed reason={reason_code} phase={phase} "
+                    f"count={failure_state.get('failure_window_count', 0)} err=({e})"
+                )
+                self._note_control_health(False, reason_code)
                 return self._generate_safe_fallback(
                     prompt,
                     chat_messages=chat_messages,
@@ -6549,15 +7477,16 @@ class TorchConversationalPolicy:
                 base_loss = self.criterion(logits, tgt_out_ids)
                 
                 # M3-aware loss weighting: phi/entropy/energy 
-                if hasattr(self, 'core') and self.core is not None:
-                    try:
+                if attr_has(self, 'core') and self.core is not None:
+                    with guard_context(ctx='llm_adapter/llm_core.py:6560', catch_base=False) as __m3_guard_6553_20:
                         phi = self.core.phi_calculator.phi_history[-1] if self.core.phi_calculator.phi_history else 0.5
-                        entropy = getattr(self.core.qualia, 'entropy', 0.5)
-                        energy_ratio = self.core.energy_ctrl.cognitive_energy / max(self.core.energy_ctrl.energy_capacity, 1.0) if hasattr(self.core, 'energy_ctrl') else 0.5
+                        entropy = attr_get_optional(self.core.qualia, 'entropy', 0.5)
+                        energy_ratio = self.core.energy_ctrl.cognitive_energy / max(self.core.energy_ctrl.energy_capacity, 1.0) if attr_has(self.core, 'energy_ctrl') else 0.5
                         loss_weight = (1.0 - phi) * entropy * (1.0 - energy_ratio)
                         loss_weight = torch.tensor(max(0.1, min(2.0, loss_weight)), device=self.device)
                         loss = loss_weight * base_loss
-                    except Exception:
+
+                    if __m3_guard_6553_20.error is not None:
                         loss = base_loss
                 else:
                     loss = base_loss
@@ -6571,19 +7500,21 @@ class TorchConversationalPolicy:
                 )
             
             # === kNN: collect from teacher forcing ===
-            try:
-                # optional: provide core via self.core if attached
-                self.collect_knn_from_teacher(prompt, response, core=getattr(self, "core", None))
-            except Exception:
-                pass
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:6577', catch_base=False) as __m3_guard_6574_12:
+                self.collect_knn_from_teacher(prompt, response, core=attr_get_optional(self, "core", None))
+
+            if __m3_guard_6574_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
+            with guard_context(ctx='llm_adapter/llm_core.py:6581', catch_base=False) as __m3_guard_6579_12:
                 self._record_example(prompt, response, source="learn_pair")
-            except Exception:
-                pass
-            try:
+
+            if __m3_guard_6579_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
+            with guard_context(ctx='llm_adapter/llm_core.py:6585', catch_base=False) as __m3_guard_6583_12:
                 self._maybe_auto_rebuild_tokenizer()
-            except Exception:
-                pass
+
+            if __m3_guard_6583_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         except Exception as e:
             print(f"Error in learn_pair: {e}")
             import traceback
@@ -6614,7 +7545,7 @@ class TorchConversationalPolicy:
                 # Use autocast for lower memory and higher speed
                 with self.torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda'), dtype=self.amp_dtype):
                     for prompt, response in batch:
-                        try:
+                        with guard_context(ctx='llm_adapter/llm_core.py:6644', catch_base=False) as __m3_guard_6617_24:
                             encoded = t.encode(prompt)
                             if not encoded:
                                 encoded = [t.BOS]
@@ -6637,11 +7568,9 @@ class TorchConversationalPolicy:
                             loss.backward()
                             global_loss_sum += loss.item()
                             valid_samples += 1
-                            
-                            # kNN collection (optional, can be slow so maybe skip or sample)
-                            # self.collect_knn_from_teacher(prompt, response, core=getattr(self, "core", None))
-                            
-                        except Exception as e:
+
+                        if __m3_guard_6617_24.error is not None:
+                            e = __m3_guard_6617_24.error
                             print(f"Error in batch item: {e}")
                             continue
                 
@@ -6683,11 +7612,12 @@ class TorchConversationalPolicy:
         try:
             print(f"[LLM-ADAPTER] train_batch: processed {num_trained}/{len(examples)} examples, avg_loss={avg_loss:.4f}")
         except Exception:
-            pass
-        try:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='llm_adapter/llm_core.py:6689', catch_base=False) as __m3_guard_6687_8:
             self._maybe_auto_rebuild_tokenizer()
-        except Exception:
-            pass
+
+        if __m3_guard_6687_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         return num_trained, avg_loss
 
     def train_on_example(self, prompt: str, response: str, max_len: int = 120) -> None:
@@ -6720,9 +7650,10 @@ class TorchConversationalPolicy:
                             line = line.strip()
                             if not line:
                                 continue
-                            try:
+                            with guard_context(ctx='llm_adapter/llm_core.py:6725', catch_base=False) as __m3_guard_6723_28:
                                 obj = json.loads(line)
-                            except Exception:
+
+                            if __m3_guard_6723_28.error is not None:
                                 continue
                             if not isinstance(obj, dict):
                                 continue
@@ -6803,11 +7734,12 @@ class TorchConversationalPolicy:
                         line = line.strip()
                         if not line:
                             continue
-                        try:
+                        with guard_context(ctx='llm_adapter/llm_core.py:6810', catch_base=False) as __m3_guard_6806_24:
                             obj = json.loads(line)
                             if isinstance(obj, dict):
                                 out.append(obj)
-                        except Exception:
+
+                        if __m3_guard_6806_24.error is not None:
                             continue
             except Exception:
                 return out
@@ -6979,20 +7911,22 @@ class TorchConversationalPolicy:
         for ep in range(1, max_epochs + 1):
             epochs_run = ep
             for p, r in train_pairs:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:6984', catch_base=False) as __m3_guard_6982_16:
                     self.learn_pair(p, r, max_len=max_len)
-                except Exception:
+
+                if __m3_guard_6982_16.error is not None:
                     continue
             if not val_pairs:
                 continue
             total_lp = 0.0
             total_tok = 0
             for p, r in val_pairs:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:6995', catch_base=False) as __m3_guard_6991_16:
                     lp = self._sequence_logprob(p, r, max_len=max_len)
                     total_lp += float(lp)
                     total_tok += max(1, len(self.tok.encode(r, add_special=True)) - 1)
-                except Exception:
+
+                if __m3_guard_6991_16.error is not None:
                     continue
             val_nll = float(-total_lp / max(1, total_tok))
             improved = val_nll < (best_metric - min_delta)
@@ -7001,9 +7935,10 @@ class TorchConversationalPolicy:
                 best_epoch = ep
                 bad = 0
                 if bool(cfg.restore_best_weights):
-                    try:
+                    with guard_context(ctx='llm_adapter/llm_core.py:7006', catch_base=False) as __m3_guard_7004_20:
                         best_state = copy.deepcopy(self.model.state_dict())
-                    except Exception:
+
+                    if __m3_guard_7004_20.error is not None:
                         best_state = None
             else:
                 bad += 1
@@ -7011,10 +7946,11 @@ class TorchConversationalPolicy:
                     break
         stopped_early = bool(epochs_run < max_epochs)
         if stopped_early and best_state is not None and bool(cfg.restore_best_weights):
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:7016', catch_base=False) as __m3_guard_7014_12:
                 self.model.load_state_dict(best_state, strict=False)
-            except Exception:
-                pass
+
+            if __m3_guard_7014_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         result = {
             "num_pairs": len(pairs),
             "train_pairs": len(train_pairs),
@@ -7055,22 +7991,24 @@ class TorchConversationalPolicy:
         for ep in range(1, max_epochs + 1):
             epochs_run = ep
             for p, ch, rj in train_rows:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:7060', catch_base=False) as __m3_guard_7058_16:
                     self.dpo_step(p, ch, rj, beta=beta)
-                except Exception:
+
+                if __m3_guard_7058_16.error is not None:
                     continue
             if not val_rows:
                 continue
             better = 0
             margins = []
             for p, ch, rj in val_rows:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:7073', catch_base=False) as __m3_guard_7067_16:
                     ch_lp = float(self._sequence_logprob(p, ch))
                     rj_lp = float(self._sequence_logprob(p, rj))
                     if ch_lp > rj_lp:
                         better += 1
                     margins.append(ch_lp - rj_lp)
-                except Exception:
+
+                if __m3_guard_7067_16.error is not None:
                     continue
             rate = float(better / max(1, len(val_rows)))
             margin = float(np.mean(margins)) if margins else 0.0
@@ -7082,9 +8020,10 @@ class TorchConversationalPolicy:
                 best_epoch = ep
                 bad = 0
                 if bool(cfg.restore_best_weights):
-                    try:
+                    with guard_context(ctx='llm_adapter/llm_core.py:7087', catch_base=False) as __m3_guard_7085_20:
                         best_state = copy.deepcopy(self.model.state_dict())
-                    except Exception:
+
+                    if __m3_guard_7085_20.error is not None:
                         best_state = None
             else:
                 bad += 1
@@ -7092,10 +8031,11 @@ class TorchConversationalPolicy:
                     break
         stopped_early = bool(epochs_run < max_epochs)
         if stopped_early and best_state is not None and bool(cfg.restore_best_weights):
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:7097', catch_base=False) as __m3_guard_7095_12:
                 self.model.load_state_dict(best_state, strict=False)
-            except Exception:
-                pass
+
+            if __m3_guard_7095_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         result = {
             "num_pairs": len(rows),
             "train_pairs": len(train_rows),
@@ -7113,7 +8053,7 @@ class TorchConversationalPolicy:
         """Train using DPO from preference data in data_set directory."""
         import json
         import glob
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:7124', catch_base=False) as __m3_guard_7116_8:
             if self.dpo_auto_cfg.enabled and str(os.getenv("M3_DPO_AUTO_COLLECT", "1")).lower() in ("1", "true", "yes", "on"):
                 auto_out = os.path.join(data_dir, "llm_training_data.preference.auto.jsonl")
                 self.collect_dpo_preferences_from_logs(
@@ -7121,8 +8061,9 @@ class TorchConversationalPolicy:
                     out_path=auto_out,
                     max_pairs=int(self.dpo_auto_cfg.max_pairs),
                 )
-        except Exception:
-            pass
+
+        if __m3_guard_7116_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         if self.early_stop_cfg.enabled and str(os.getenv("M3_TRAIN_EARLY_STOP", "1")).lower() in ("1", "true", "yes", "on"):
             return self.train_dpo_with_early_stopping(epochs=epochs, beta=beta, data_dir=data_dir)
         
@@ -7158,11 +8099,12 @@ class TorchConversationalPolicy:
                                     line = line.strip()
                                     if not line:
                                         continue
-                                    try:
+                                    with guard_context(ctx='llm_adapter/llm_core.py:7165', catch_base=False) as __m3_guard_7161_36:
                                         row = json.loads(line)
                                         if isinstance(row, dict):
                                             data.append(row)
-                                    except Exception:
+
+                                    if __m3_guard_7161_36.error is not None:
                                         continue
                         else:
                             with open(filepath, 'r', encoding='utf-8') as f:
@@ -7241,9 +8183,10 @@ class TorchConversationalPolicy:
                                 line = line.strip()
                                 if not line:
                                     continue
-                                try:
+                                with guard_context(ctx='llm_adapter/llm_core.py:7246', catch_base=False) as __m3_guard_7244_32:
                                     obj = json.loads(line)
-                                except Exception:
+
+                                if __m3_guard_7244_32.error is not None:
                                     continue
                                 pair = self._extract_supervised_pair(obj)
                                 if pair:
@@ -7293,9 +8236,10 @@ class TorchConversationalPolicy:
         random.shuffle(pairs)
         for e in range(max(1, int(epochs))):
             for prompt, response in pairs:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:7298', catch_base=False) as __m3_guard_7296_16:
                     self.learn_pair(prompt, response, max_len=max_len)
-                except Exception:
+
+                if __m3_guard_7296_16.error is not None:
                     continue
         logger.info(f'Supervised training complete: pairs={len(pairs)}, epochs={epochs}')
         return {'num_pairs': len(pairs), 'epochs': int(epochs)}
@@ -7315,20 +8259,22 @@ class TorchConversationalPolicy:
         total_logp = 0.0
         total_tokens = 0
         for prompt, response in pairs:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:7322', catch_base=False) as __m3_guard_7318_12:
                 lp = self._sequence_logprob(prompt, response, max_len=max_len)
                 total_logp += float(lp)
                 total_tokens += max(1, len(self.tok.encode(response, add_special=True)) - 1)
-            except Exception:
+
+            if __m3_guard_7318_12.error is not None:
                 continue
 
         avg_nll = float(-total_logp / max(1, total_tokens))
         ppl = float(math.exp(avg_nll)) if avg_nll < 30 else float('inf')
         metrics = {'num_pairs': len(pairs), 'avg_nll': avg_nll, 'ppl': ppl}
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:7330', catch_base=False) as __m3_guard_7328_8:
             self._log_jsonl(os.getenv("LLM_ADAPTER_LOG", "llm_adapter.jsonl"), {"kind": "eval_supervised", **metrics})
-        except Exception:
-            pass
+
+        if __m3_guard_7328_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         logger.info(f'Supervised eval: pairs={metrics["num_pairs"]}, avg_nll={avg_nll:.4f}, ppl={ppl:.2f}')
         return metrics
 
@@ -7355,11 +8301,12 @@ class TorchConversationalPolicy:
                                 line = line.strip()
                                 if not line:
                                     continue
-                                try:
+                                with guard_context(ctx='llm_adapter/llm_core.py:7362', catch_base=False) as __m3_guard_7358_32:
                                     row = json.loads(line)
                                     if isinstance(row, dict):
                                         data.append(row)
-                                except Exception:
+
+                                if __m3_guard_7358_32.error is not None:
                                     continue
                     else:
                         with open(filepath, 'r', encoding='utf-8') as f:
@@ -7398,7 +8345,7 @@ class TorchConversationalPolicy:
                 except Exception:
                     continue
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Swallowed exception")
 
         if not samples:
             logger.warning(f'No DPO preference samples found in {data_dir}')
@@ -7407,21 +8354,23 @@ class TorchConversationalPolicy:
         better = 0
         margins = []
         for prompt, chosen, rejected in samples:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:7416', catch_base=False) as __m3_guard_7410_12:
                 ch_lp = float(self._sequence_logprob(prompt, chosen))
                 rj_lp = float(self._sequence_logprob(prompt, rejected))
                 if ch_lp > rj_lp:
                     better += 1
                 margins.append(ch_lp - rj_lp)
-            except Exception:
+
+            if __m3_guard_7410_12.error is not None:
                 continue
         rate = better / max(1, len(samples))
         avg_margin = float(np.mean(margins)) if margins else 0.0
         metrics = {'num_pairs': len(samples), 'chosen_better_rate': rate, 'avg_logp_margin': avg_margin}
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:7423', catch_base=False) as __m3_guard_7421_8:
             self._log_jsonl(os.getenv("LLM_ADAPTER_LOG", "llm_adapter.jsonl"), {"kind": "eval_dpo", **metrics})
-        except Exception:
-            pass
+
+        if __m3_guard_7421_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         logger.info(f'DPO eval: pairs={metrics["num_pairs"]}, chosen>rejected rate={rate:.3f}, avg_margin={avg_margin:.4f}')
         return metrics
 
@@ -7448,19 +8397,21 @@ class TorchConversationalPolicy:
 
             for e in range(max(1, int(epochs))):
                 for prompt, response in train_pairs:
-                    try:
+                    with guard_context(ctx='llm_adapter/llm_core.py:7453', catch_base=False) as __m3_guard_7451_20:
                         self.learn_pair(prompt, response, max_len=max_len)
-                    except Exception:
+
+                    if __m3_guard_7451_20.error is not None:
                         continue
 
             total_logp = 0.0
             total_tokens = 0
             for prompt, response in eval_pairs:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:7463', catch_base=False) as __m3_guard_7459_16:
                     lp = self._sequence_logprob(prompt, response, max_len=max_len)
                     total_logp += float(lp)
                     total_tokens += max(1, len(self.tok.encode(response, add_special=True)) - 1)
-                except Exception:
+
+                if __m3_guard_7459_16.error is not None:
                     continue
             avg_nll = float(-total_logp / max(1, total_tokens)) if total_tokens else float('inf')
             ppl = float(np.exp(avg_nll)) if np.isfinite(avg_nll) and avg_nll < 30 else float('inf')
@@ -7472,22 +8423,25 @@ class TorchConversationalPolicy:
                 'ppl': ppl,
             }
             logger.info(f'Auto supervised: train={len(train_pairs)}, eval={len(eval_pairs)}, avg_nll={avg_nll:.4f}, ppl={ppl:.2f}')
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:7477', catch_base=False) as __m3_guard_7475_12:
                 self._log_jsonl(os.getenv("LLM_ADAPTER_LOG", "llm_adapter.jsonl"), {"kind": "auto_supervised_eval", **sup_metrics})
-            except Exception:
-                pass
+
+            if __m3_guard_7475_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         else:
             logger.info('Auto supervised: no pairs found; skipping')
 
         dpo_metrics = {}
         if enable_dpo:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:7487', catch_base=False) as __m3_guard_7484_12:
                 self.train_dpo_from_dir(epochs=max(1, int(epochs)), beta=0.1, data_dir=data_dir)
                 dpo_metrics = self.evaluate_dpo_from_dir(data_dir=data_dir)
-            except Exception as e:
+
+            if __m3_guard_7484_12.error is not None:
+                e = __m3_guard_7484_12.error
                 logger.warning(f'Auto DPO skipped due to error: {e}')
 
-        return {**({'supervised_metrics': sup_metrics} if sup_metrics else {}),
+                return {**({'supervised_metrics': sup_metrics} if sup_metrics else {}),
                 **({'dpo_metrics': dpo_metrics} if dpo_metrics else {})}
 
     def train_all_from_data_set(self,
@@ -7503,15 +8457,16 @@ class TorchConversationalPolicy:
         - Returns summary metrics for supervised and DPO evaluations.
         """
         import json, os, csv, math, random, glob
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:7513', catch_base=False) as __m3_guard_7506_8:
             if enable_dpo and self.dpo_auto_cfg.enabled and str(os.getenv("M3_DPO_AUTO_COLLECT", "1")).lower() in ("1", "true", "yes", "on"):
                 self.collect_dpo_preferences_from_logs(
                     logs_dir=os.path.dirname(TRAINING_PATH),
                     out_path=os.path.join(data_dir, "llm_training_data.preference.auto.jsonl"),
                     max_pairs=int(self.dpo_auto_cfg.max_pairs),
                 )
-        except Exception:
-            pass
+
+        if __m3_guard_7506_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         if self.early_stop_cfg.enabled and str(os.getenv("M3_TRAIN_EARLY_STOP", "1")).lower() in ("1", "true", "yes", "on"):
             sup = self.train_supervised_with_early_stopping(
                 epochs=epochs,
@@ -7566,9 +8521,10 @@ class TorchConversationalPolicy:
                                 slots = obj.get('slots', {})
                                 if isinstance(slots, list):
                                     # Some SLURP variants store list of {slot, value}
-                                    try:
+                                    with guard_context(ctx='llm_adapter/llm_core.py:7571', catch_base=False) as __m3_guard_7569_36:
                                         slots = {str(s.get('slot','')): str(s.get('value','')) for s in slots if isinstance(s, dict)}
-                                    except Exception:
+
+                                    if __m3_guard_7569_36.error is not None:
                                         slots = {}
                                 if utt and intent is not None:
                                     # Deterministic textualization of semantic target
@@ -7591,8 +8547,7 @@ class TorchConversationalPolicy:
             for mdir in mind_dirs:
                 news_path = os.path.join(mdir, 'news.tsv')
                 beh_path = os.path.join(mdir, 'behaviors.tsv')
-                try:
-                    # Build id -> title mapping
+                with guard_context(ctx='llm_adapter/llm_core.py:7641', catch_base=False) as __m3_guard_7594_16:
                     id2title = {}
                     with open(news_path, 'r', encoding='utf-8') as f:
                         reader = csv.reader(f, delimiter='\t')
@@ -7638,7 +8593,8 @@ class TorchConversationalPolicy:
                                             if lj == '0':
                                                 yield (prompt, ('__DPO__', cand_titles[idx], cand_titles[j]))
                                                 break
-                except Exception:
+
+                if __m3_guard_7594_16.error is not None:
                     continue
 
         # === C. Generic supervised pairs ===
@@ -7666,20 +8622,22 @@ class TorchConversationalPolicy:
                         if enable_dpo:
                             _, (tag, chosen, rejected) = item
                             prompt = item[0]
-                            try:
+                            with guard_context(ctx='llm_adapter/llm_core.py:7672', catch_base=False) as __m3_guard_7669_28:
                                 self.dpo_step(prompt, chosen, rejected)
                                 maybe_take_dpo_eval(prompt, chosen, rejected)
-                            except Exception:
-                                pass
+
+                            if __m3_guard_7669_28.error is not None:
+                                logging.getLogger(__name__).exception("Swallowed exception")
                         continue
-                    try:
+                    with guard_context(ctx='llm_adapter/llm_core.py:7682', catch_base=False) as __m3_guard_7675_20:
                         prompt, response = item
                         self.learn_pair(prompt, response, max_len=max_len)
                         maybe_take_sup_eval(prompt, response)
                         processed += 1
                         if limit is not None and processed >= int(limit):
                             break
-                    except Exception:
+
+                    if __m3_guard_7675_20.error is not None:
                         continue
                 if limit is not None and processed >= int(limit):
                     break
@@ -7689,28 +8647,30 @@ class TorchConversationalPolicy:
         # Additionally, generic DPO files (if present)
         dpo_metrics = {}
         if enable_dpo:
-            try:
-                # Train (uses existing parser that supports multiple schemas)
+            with guard_context(ctx='llm_adapter/llm_core.py:7695', catch_base=False) as __m3_guard_7692_12:
                 self.train_dpo_from_dir(epochs=max(1, int(epochs)), beta=0.1, data_dir=data_dir)
-            except Exception:
-                pass
+
+            if __m3_guard_7692_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             # Eval: include proactively collected mind triples + generic files
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:7701', catch_base=False) as __m3_guard_7698_12:
                 gen_dpo = self.evaluate_dpo_from_dir(data_dir=data_dir)
                 dpo_metrics.update(gen_dpo)
-            except Exception:
-                pass
+
+            if __m3_guard_7698_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             # Evaluate buffered triples
             better = 0
             margins = []
             for prompt, chosen, rejected in dpo_eval:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:7713', catch_base=False) as __m3_guard_7707_16:
                     ch_lp = float(self._sequence_logprob(prompt, chosen, max_len=max_len))
                     rj_lp = float(self._sequence_logprob(prompt, rejected, max_len=max_len))
                     if ch_lp > rj_lp:
                         better += 1
                     margins.append(ch_lp - rj_lp)
-                except Exception:
+
+                if __m3_guard_7707_16.error is not None:
                     continue
             if margins:
                 rate = better / max(1, len(margins))
@@ -7722,21 +8682,23 @@ class TorchConversationalPolicy:
         total_logp = 0.0
         total_tokens = 0
         for prompt, response in sup_eval:
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:7729', catch_base=False) as __m3_guard_7725_12:
                 lp = self._sequence_logprob(prompt, response, max_len=max_len)
                 total_logp += float(lp)
                 total_tokens += max(1, len(self.tok.encode(response, add_special=True)) - 1)
-            except Exception:
+
+            if __m3_guard_7725_12.error is not None:
                 continue
         sup_metrics = {}
         if total_tokens > 0:
             avg_nll = float(-total_logp / total_tokens)
             ppl = float(math.exp(avg_nll)) if avg_nll < 30 else float('inf')
             sup_metrics = {'num_eval_pairs': len(sup_eval), 'avg_nll': avg_nll, 'ppl': ppl}
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:7738', catch_base=False) as __m3_guard_7736_12:
                 self._log_jsonl(os.getenv("LLM_ADAPTER_LOG", "llm_adapter.jsonl"), {"kind": "train_all_eval", **sup_metrics, **({'dpo_metrics': dpo_metrics} if dpo_metrics else {})})
-            except Exception:
-                pass
+
+            if __m3_guard_7736_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
         return {**({'supervised_metrics': sup_metrics} if sup_metrics else {}),
                 **({'dpo_metrics': dpo_metrics} if dpo_metrics else {})}
@@ -7806,35 +8768,37 @@ class TorchConversationalPolicy:
             # === Phase 5: M3-aware margin (NO MAGIC NUMBERS)
             beta = float(os.getenv("DPO_BETA", str(beta)))
             phi_margin = torch.tensor(0.0, device=self.device)
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:7828', catch_base=False) as __m3_guard_7809_12:
                 with torch.no_grad():
                     # Get phi predictions for chosen vs rejected
                     v_ch = self.model.v_phi(o_ch[:, -1, :]).squeeze(-1)
                     v_rj = self.model.v_phi(o_rj[:, -1, :]).squeeze(-1)
                     
                     # Dynamic phi_margin: core (NO MAGIC NUMBER 0.1)
-                    if hasattr(self, 'core') and self.core is not None:
+                    if attr_has(self, 'core') and self.core is not None:
                         # phi/entropy/engagement  margin 
                         phi = self.core.phi_calculator.phi_history[-1] if self.core.phi_calculator.phi_history else 0.5
-                        entropy = getattr(self.core.qualia, 'entropy', 0.5)
-                        engagement = getattr(self.core.qualia, 'engagement', 0.5)
+                        entropy = attr_get_optional(self.core.qualia, 'entropy', 0.5)
+                        engagement = attr_get_optional(self.core.qualia, 'engagement', 0.5)
                         # margin_coef = phi * (1 - entropy) * engagement
                         # Compute margin coefficient
                         margin_coef = phi * (1.0 - entropy) * engagement
                         phi_margin = margin_coef * (v_ch - v_rj)
                     else:
                         # Fallback: phi difference (0.5)
-                        phi_margin = (v_ch - v_rj) * 0.5  # fallback margin scaling
-            except Exception:
-                pass
+                        phi_margin = (v_ch - v_rj) * 0.5
+
+            if __m3_guard_7809_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
             # DPO objective with phi-margin: -log(sigmoid(beta*((ch - rj) + phi_margin)))
             loss = -torch.log(torch.sigmoid(beta * ((ch_sum - rj_sum) + phi_margin)) + 1e-8)
             # Debugging: log intermediate scalars to help diagnose zero-loss/zero-grad issues
-            try:
+            with guard_context(ctx='llm_adapter/llm_core.py:7836', catch_base=False) as __m3_guard_7834_12:
                 logger.debug(f'DPO step: ch_sum={float(ch_sum):.6f}, rj_sum={float(rj_sum):.6f}, phi_margin={float(phi_margin):.6f}, beta={beta}')
-            except Exception:
-                pass
+
+            if __m3_guard_7834_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             self.opt.zero_grad(set_to_none=True)
             loss.backward()
             # compute grad norm for diagnostics
@@ -7842,19 +8806,21 @@ class TorchConversationalPolicy:
                 total_grad_norm = 0.0
                 for p in self.model.parameters():
                     if p.grad is not None:
-                        try:
+                        with guard_context(ctx='llm_adapter/llm_core.py:7847', catch_base=False) as __m3_guard_7845_24:
                             total_grad_norm += float(p.grad.data.norm().item() or 0.0)
-                        except Exception:
+
+                        if __m3_guard_7845_24.error is not None:
                             continue
                 logger.debug(f'DPO grads: total_grad_norm={total_grad_norm:.6f}, loss={float(loss):.6f}')
                 if total_grad_norm == 0.0:
                     logger.warning('DPO step produced zero gradient norm check that chosen/rejected differ, model params require_grad, and optimizer has parameters')
             except Exception:
-                pass
-            try:
+                logging.getLogger(__name__).exception("Swallowed exception")
+            with guard_context(ctx='llm_adapter/llm_core.py:7856', catch_base=False) as __m3_guard_7854_12:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            except Exception:
-                pass
+
+            if __m3_guard_7854_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             self._guarded_optimizer_step(
                 optimizer=self.opt,
                 params=list(self.model.parameters()),
@@ -7983,7 +8949,7 @@ class TorchConversationalPolicy:
 
                                 # NO MAGIC NUMBERS: M3 margin coefficient
                                 if self.core is not None:
-                                    try:
+                                    with guard_context(ctx='llm_adapter/llm_core.py:7994', catch_base=False) as __m3_guard_7986_36:
                                         phi = self.core.phi_calculator.calculate_phi()
                                         qualia = self.core.qualia_analyzer.analyze()
                                         entropy = qualia.get('entropy', 0.5)
@@ -7991,7 +8957,8 @@ class TorchConversationalPolicy:
                                         # margin_coef = phi * (1 - entropy) * engagement
                                         # Compute margin coefficient
                                         margin_coef = phi * (1.0 - entropy) * engagement
-                                    except Exception:
+
+                                    if __m3_guard_7986_36.error is not None:
                                         margin_coef = 0.1  # fallback
                                 else:
                                     margin_coef = 0.1  # standalone mode
@@ -7999,16 +8966,17 @@ class TorchConversationalPolicy:
                                 phi_margin = margin_coef * (v_ch - v_rj)
 
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).exception("Swallowed exception")
                         
                         # DPO loss
                         loss = -torch.log(torch.sigmoid(beta * ((ch_sum - rj_sum) + phi_margin)) + 1e-8)
                         batch_loss += loss
                         # Debugging per-sample (aggregate will be logged per-batch)
-                        try:
+                        with guard_context(ctx='llm_adapter/llm_core.py:8010', catch_base=False) as __m3_guard_8008_24:
                             logger.debug(f'DPO batch sample: ch_sum={float(ch_sum):.6f}, rj_sum={float(rj_sum):.6f}, phi_margin={float(phi_margin):.6f}')
-                        except Exception:
-                            pass
+
+                        if __m3_guard_8008_24.error is not None:
+                            logging.getLogger(__name__).exception("Swallowed exception")
                         valid_count += 1
                     except Exception:
                         continue
@@ -8023,19 +8991,21 @@ class TorchConversationalPolicy:
                         total_grad_norm = 0.0
                         for p in self.model.parameters():
                             if p.grad is not None:
-                                try:
+                                with guard_context(ctx='llm_adapter/llm_core.py:8028', catch_base=False) as __m3_guard_8026_32:
                                     total_grad_norm += float(p.grad.data.norm().item() or 0.0)
-                                except Exception:
+
+                                if __m3_guard_8026_32.error is not None:
                                     continue
                         logger.debug(f'DPO batch: avg_loss={float(avg_loss):.6f}, total_grad_norm={total_grad_norm:.6f}, batch_size={valid_count}')
                         if total_grad_norm == 0.0:
                             logger.warning('DPO batch produced zero gradient norm check data and model configuration')
                     except Exception:
-                        pass
-                    try:
+                        logging.getLogger(__name__).exception("Swallowed exception")
+                    with guard_context(ctx='llm_adapter/llm_core.py:8037', catch_base=False) as __m3_guard_8035_20:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                    except Exception:
-                        pass
+
+                    if __m3_guard_8035_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
                     self._guarded_optimizer_step(
                         optimizer=self.opt,
                         params=list(self.model.parameters()),
@@ -8073,9 +9043,9 @@ class TorchConversationalPolicy:
         num_records = len(records)
 
         # Initialize accumulators if not already present
-        if not hasattr(self, 'phi_targets'):
+        if not attr_has(self, 'phi_targets'):
             self.phi_targets: List[float] = []
-        if not hasattr(self, 'phi_preds'):
+        if not attr_has(self, 'phi_preds'):
             self.phi_preds: List[float] = []
 
         import random
@@ -8088,7 +9058,7 @@ class TorchConversationalPolicy:
                 batch_loss = 0.0
                 valid_count = 0
                 for rec in batch:
-                    try:
+                    with guard_context(ctx='llm_adapter/llm_core.py:8138', catch_base=False) as __m3_guard_8091_20:
                         prompt = str(rec.get('prompt', ''))
                         response = str(rec.get('response', ''))
                         phi_d = float(rec.get('phi_delta', 0.0))
@@ -8135,8 +9105,8 @@ class TorchConversationalPolicy:
                                     att = torch.softmax((q @ mem_k.transpose(1, 2)) / np.sqrt(self.model.hidden + 1e-8), dim=-1)
                                     ctx = att @ mem_v
                                     o[:, t_pos:t_pos+1, :] = (dec_t + ctx) * 0.5
-                    except Exception:
-                        # Skip problematic sample quietly
+
+                    if __m3_guard_8091_20.error is not None:
                         continue
 
         # === G. Compute and log phi-delta correlation ===
@@ -8153,7 +9123,7 @@ class TorchConversationalPolicy:
                 logger.info(f'Value head training complete: n={n}, avg_loss={(total_loss / max(1, n)):.4f}, phi_correlation={phi_correlation:.4f}')
                 
                 # Optional: log to file
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:8166', catch_base=False) as __m3_guard_8156_16:
                     rec = {
                         "t": int(time.time() * 1000),
                         "kind": "value_train",
@@ -8163,8 +9133,9 @@ class TorchConversationalPolicy:
                         "task_weights": dict(self._task_weights)
                     }
                     self._log_jsonl(os.getenv("LLM_ADAPTER_LOG", "llm_adapter.jsonl"), rec)
-                except Exception:
-                    pass
+
+                if __m3_guard_8156_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
         except Exception:
             logger.exception('Failed to compute phi correlation')
         
@@ -8196,7 +9167,7 @@ class TorchConversationalPolicy:
             total = 0.0
             n = 0
             for rec in records:
-                try:
+                with guard_context(ctx='llm_adapter/llm_core.py:8267', catch_base=False) as __m3_guard_8199_16:
                     prompt = str(rec.get('prompt', ''))
                     response = str(rec.get('response', ''))
                     token_credits = rec.get('token_credits', [])  # list of per-token credits
@@ -8264,7 +9235,8 @@ class TorchConversationalPolicy:
                         )
                     total += float(loss.item())
                     n += 1
-                except Exception:
+
+                if __m3_guard_8199_16.error is not None:
                     continue
         return
 
@@ -8308,7 +9280,7 @@ class PlasticBrainPolicy(UnifiedM3Policy):
         # Replace model with Plastic Brain
         logger.info("Initializing PlasticBrainPolicy: Rewiring synapses to 1-bit PlasticBitLinear...")
         self.model = M3PlasticPolicy(device=str(self.device)).to(self.device)
-        # CPU에서는 bfloat16 비지원 → float32로 강제
+        # CPU?먯꽌??bfloat16 鍮꾩?????float32濡?媛뺤젣
         if self.device.type == 'cpu':
             self.model = self.model.float()
         self.model.train() # Default to plastic mode (Online Learning)
@@ -8324,7 +9296,7 @@ class PlasticBrainPolicy(UnifiedM3Policy):
     def _state_vector(self, core=None):
         """Expose plastic hidden state."""
         h = self.model._hidden_state
-        # CPU에서는 float32로 강제 변환
+        # CPU?먯꽌??float32濡?媛뺤젣 蹂??
         if h is not None and self.device.type == 'cpu' and h.dtype == self.torch.bfloat16:
             h = h.float()
         return h
@@ -8395,36 +9367,39 @@ def _attach_control_compat(adapter):
         return allows and os.getenv("M3_ENABLE_CONTROL_BRIDGE", "0").lower() in ("1", "true", "yes", "on")
 
     def _bridge_safe(self) -> bool:
-        try:
-            fn = getattr(self, "_bridge_enabled", None)
+        with guard_context(ctx='llm_adapter/llm_core.py:8402', catch_base=False) as __m3_guard_8398_8:
+            fn = attr_get_optional(self, "_bridge_enabled", None)
             if callable(fn):
                 return bool(fn())
-        except Exception:
-            pass
+
+        if __m3_guard_8398_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         return False
 
     def _note(self, success: bool, reason: str = "") -> None:
-        try:
-            if getattr(self, '_control_health_window', None) is None:
+        reason_code = _normalize_control_reason(reason)
+        with guard_context(ctx='llm_adapter/llm_core.py:8412', catch_base=False) as __m3_guard_8407_8:
+            if attr_get_optional(self, '_control_health_window', None) is None:
                 window = int(os.getenv("M3_CONTROL_HEALTH_WINDOW", "24"))
                 self._control_health_window = deque(maxlen=max(1, window))
-            self._control_health_window.append((time.time(), bool(success), str(reason or "")))
-        except Exception:
+            self._control_health_window.append((time.time(), bool(success), str(reason_code)))
+
+        if __m3_guard_8407_8.error is not None:
             return
         if success:
             self._auto_mode_fail_streak = 0
         else:
-            self._auto_mode_fail_streak = getattr(self, '_auto_mode_fail_streak', 0) + 1
+            self._auto_mode_fail_streak = attr_get_optional(self, '_auto_mode_fail_streak', 0) + 1
 
-    if not callable(getattr(adapter, '_control_selection_mode', None)):
+    if not callable(attr_get_optional(adapter, '_control_selection_mode', None)):
         adapter._control_selection_mode = types.MethodType(_selection_mode, adapter)
-    if not callable(getattr(adapter, '_control_allows', None)):
+    if not callable(attr_get_optional(adapter, '_control_allows', None)):
         adapter._control_allows = types.MethodType(_allows, adapter)
-    if not callable(getattr(adapter, '_note_control_health', None)):
+    if not callable(attr_get_optional(adapter, '_note_control_health', None)):
         adapter._note_control_health = types.MethodType(_note, adapter)
-    if not callable(getattr(adapter, '_bridge_enabled', None)):
+    if not callable(attr_get_optional(adapter, '_bridge_enabled', None)):
         adapter._bridge_enabled = types.MethodType(_bridge, adapter)
-    if not callable(getattr(adapter, '_bridge_enabled_safe', None)):
+    if not callable(attr_get_optional(adapter, '_bridge_enabled_safe', None)):
         adapter._bridge_enabled_safe = types.MethodType(_bridge_safe, adapter)
 
 
@@ -8461,15 +9436,15 @@ def attach_llm_to_core(core, adapter=None, record: bool = True):
                 logger.info(f'Created UnifiedM3Policy adapter with device={device}')
             
             # If core has a policy, attach it as motor policy
-            if hasattr(core, 'policy') and core.policy is not None:
+            if attr_has(core, 'policy') and core.policy is not None:
                 adapter.set_motor_policy(core.policy)
                 logger.info('Attached existing core policy as motor policy')
         else:
-            missing_methods = [m for m in required_methods if not callable(getattr(adapter, m, None))]
+            missing_methods = [m for m in required_methods if not callable(attr_get_optional(adapter, m, None))]
             if missing_methods:
                 # First, try compatibility binding in-place for legacy adapters.
                 _attach_control_compat(adapter)
-                still_missing = [m for m in required_methods if not callable(getattr(adapter, m, None))]
+                still_missing = [m for m in required_methods if not callable(attr_get_optional(adapter, m, None))]
                 if still_missing:
                     logger.warning(
                         f'Attached adapter missing control hooks {still_missing}; '
@@ -8485,7 +9460,7 @@ def attach_llm_to_core(core, adapter=None, record: bool = True):
                         )
                         _attach_control_compat(adapter)
         # Ensure attached adapter always has control API, even if newly-created.
-        missing_final = [m for m in required_methods if not callable(getattr(adapter, m, None))]
+        missing_final = [m for m in required_methods if not callable(attr_get_optional(adapter, m, None))]
         if missing_final:
             _attach_control_compat(adapter)
         
@@ -8494,23 +9469,26 @@ def attach_llm_to_core(core, adapter=None, record: bool = True):
         adapter.core = core
 
         # Enable M3 integration by default unless disabled
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:8503', catch_base=False) as __m3_guard_8497_8:
             m3_flag = os.getenv('M3_INTEGRATION', '1').lower()
             if m3_flag in ('1', 'true', 'yes', 'on'):
-                if hasattr(adapter, 'enable_m3_integration'):
+                if attr_has(adapter, 'enable_m3_integration'):
                     adapter.enable_m3_integration()
                     logger.info('M3 integration enabled for LLM adapter')
-        except Exception:
-            pass
+
+        if __m3_guard_8497_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         
         # Connect MessageBus inbox for credit assignment
-        if hasattr(core, 'message_bus') and core.message_bus is not None:
-            try:
-                if hasattr(core.message_bus, 'inboxes') and 'llm_adapter' in core.message_bus.inboxes:
+        if attr_has(core, 'message_bus') and core.message_bus is not None:
+            with guard_context(ctx='llm_adapter/llm_core.py:8513', catch_base=False) as __m3_guard_8508_12:
+                if attr_has(core.message_bus, 'inboxes') and 'llm_adapter' in core.message_bus.inboxes:
                     adapter._bus_inbox = core.message_bus.inboxes['llm_adapter']
                     adapter.start_credit_consumer()
                     logger.info('LLM adapter connected to MessageBus for credit assignment')
-            except Exception as e:
+
+            if __m3_guard_8508_12.error is not None:
+                e = __m3_guard_8508_12.error
                 logger.warning(f'Failed to connect LLM adapter to MessageBus: {e}')
         
         # Enable training data recording if requested
@@ -8522,13 +9500,14 @@ def attach_llm_to_core(core, adapter=None, record: bool = True):
             logger.info('LLM adapter attached to core (recording disabled)')
 
         # Optionally start autonomy loop if enabled via environment
-        try:
+        with guard_context(ctx='llm_adapter/llm_core.py:8530', catch_base=False) as __m3_guard_8525_8:
             auto_flag = os.getenv('LLM_AUTONOMY', '0').lower()
             if auto_flag in ('1', 'true', 'yes', 'on'):
                 adapter.start_autonomy_loop()
                 logger.info('Autonomy loop started (LLM_AUTONOMY enabled)')
-        except Exception:
-            pass
+
+        if __m3_guard_8525_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
         return adapter
         

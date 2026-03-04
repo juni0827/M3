@@ -9,6 +9,7 @@ Contains:
 """
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -39,7 +40,7 @@ def _resolve_device():
             _DEVICE = get_device(require_cuda=False)
             return _DEVICE
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Swallowed exception")
     _DEVICE = torch.device("cpu")
     return _DEVICE
 

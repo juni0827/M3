@@ -1,7 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 import hashlib
 import json
+import os
 import re
 import time
 import uuid
@@ -144,6 +146,22 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _clamp01(value: Any, default: float = 0.0) -> float:
+    try:
+        v = float(value)
+    except Exception:
+        v = float(default)
+    return float(max(0.0, min(1.0, v)))
+
+
+def _flag(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return bool(value)
+    if value is None:
+        return bool(default)
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def build_meaning_state(
     user_text: str,
     chat_history: Optional[Iterable[Dict[str, Any]]] = None,
@@ -178,12 +196,70 @@ def build_meaning_state(
         uncertainty["reasons"].append("intent_low_conf")
 
     if chat_history:
-        try:
+        with guard_context(ctx='m3/meaning_pipeline.py:184', catch_base=False) as __m3_guard_181_8:
             if len(list(chat_history)) > 0:
                 uncertainty["reasons"].append("has_history")
-        except Exception:
+
+        if __m3_guard_181_8.error is not None:
             pass
 
+    dynamic_unc = _flag(
+        cfg.get("dynamic_uncertainty", os.getenv("M3_MEANING_DYNAMIC_UNCERTAINTY", "1")),
+        default=True,
+    )
+    chat_items: List[Dict[str, Any]] = []
+    if chat_history:
+        try:
+            chat_items = list(chat_history)
+        except Exception:
+            chat_items = []
+    token_count = int(len(tokens))
+    entity_count = int(len(entities))
+    entity_density = _clamp01(entity_count / float(max(1, token_count)), 0.0)
+    history_conflict = 0.0
+    if chat_items and tokens:
+        last_assistant = ""
+        for item in reversed(chat_items):
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role", "")).strip().lower()
+            if role in {"assistant", "m3", "bot"}:
+                last_assistant = _safe_text(item.get("text") or item.get("content"))
+                if last_assistant:
+                    break
+        if last_assistant:
+            curr_tokens = set(_tokenize(text))
+            prev_tokens = set(_tokenize(last_assistant))
+            overlap = float(len(curr_tokens & prev_tokens) / max(1, len(curr_tokens | prev_tokens)))
+            history_conflict = _clamp01(1.0 - overlap, 0.0)
+    intent_confidence = 0.58
+    if intent in {"identity_query", "state_query", "world_query", "task_request", "meta_control"}:
+        intent_confidence = 0.68
+    if intent in {"unknown", "clarification"}:
+        intent_confidence = 0.34
+    intent_confidence = _clamp01(
+        intent_confidence + min(0.18, float(token_count) * 0.012) - (0.22 * history_conflict),
+        0.5,
+    )
+    grounding_confidence = _clamp01(
+        0.28 + (0.38 * entity_density) + (0.12 if chat_items else 0.0) - (0.16 * history_conflict),
+        0.4,
+    )
+    if dynamic_unc and text:
+        uncertainty["intent"] = _clamp01(1.0 - intent_confidence, 0.5)
+        uncertainty["grounding"] = _clamp01(1.0 - grounding_confidence, 0.5)
+        overall = (
+            0.44 * uncertainty["intent"]
+            + 0.34 * uncertainty["grounding"]
+            + 0.22 * history_conflict
+        )
+        if intent in {"unknown", "clarification"}:
+            overall = min(0.99, overall + 0.12)
+        uncertainty["overall"] = _clamp01(overall, 0.42)
+        uncertainty.setdefault("reasons", []).append("dynamic_uncertainty")
+    else:
+        intent_confidence = _clamp01(1.0 - _safe_float(uncertainty.get("intent", 0.5), 0.5), 0.5)
+        grounding_confidence = _clamp01(1.0 - _safe_float(uncertainty.get("grounding", 0.5), 0.5), 0.5)
     if intent == "identity_query":
         user_goal = "M3 정체성 및 동작 근거를 설명한다."
     elif intent == "task_request":
@@ -217,6 +293,10 @@ def build_meaning_state(
             "evidence_ids": self_model_ref["evidence_ids"],
         },
         "uncertainty": uncertainty,
+        "intent_confidence": float(intent_confidence),
+        "grounding_confidence": float(grounding_confidence),
+        "history_conflict": float(history_conflict),
+        "entity_density": float(entity_density),
     }
 
 
@@ -263,21 +343,22 @@ def ground_meaning_state(
     memory_texts: List[str] = []
 
     if chat_history:
-        try:
+        with guard_context(ctx='m3/meaning_pipeline.py:273', catch_base=False) as __m3_guard_266_8:
             hist_list = list(chat_history)[-max(0, evidence_limit):]
             for item in hist_list:
                 if isinstance(item, dict):
                     txt = _safe_text(item.get("text"))
                     if txt:
                         memory_texts.append(_normalize_text(txt))
-        except Exception:
+
+        if __m3_guard_266_8.error is not None:
             memory_texts = []
 
-    if getattr(core_state, "episodic_memory", None) is not None:
-        mem_obj = getattr(core_state, "episodic_memory")
+    if attr_get_optional(core_state, "episodic_memory", None) is not None:
+        mem_obj = attr_get_optional(core_state, "episodic_memory")
         if isinstance(mem_obj, dict):
             mem_list = list(mem_obj.get("memories", []) or [])[:evidence_limit]
-        elif hasattr(mem_obj, "memories") and isinstance(getattr(mem_obj, "memories"), list):
+        elif attr_has(mem_obj, "memories") and isinstance(attr_get_optional(mem_obj, "memories"), list):
             mem_list = list(mem_obj.memories[-evidence_limit:])
         else:
             mem_list = []
@@ -310,13 +391,14 @@ def ground_meaning_state(
             evidences.append(clue)
 
     world_evidence = []
-    if getattr(core_state, "_get_current_world_state", None):
-        try:
+    if attr_get_optional(core_state, "_get_current_world_state", None):
+        with guard_context(ctx='m3/meaning_pipeline.py:319', catch_base=False) as __m3_guard_314_8:
             ws = core_state._get_current_world_state()
             if isinstance(ws, dict):
                 stability = float(ws.get("stability", 0.0) or 0.0)
                 world_evidence.append(f"world-stability:{stability:.4f}")
-        except Exception:
+
+        if __m3_guard_314_8.error is not None:
             pass
 
     grounded_unc = _safe_float(uncertainty.get("grounding", 0.4), 0.4)
@@ -421,6 +503,184 @@ def build_response_plan(
             "plan_adherence_min": _safe_float(cfg.get("plan_adherence_min", 0.75), 0.75),
             "identity_consistency_min": _safe_float(cfg.get("identity_consistency_min", 0.90), 0.90),
         },
+    }
+
+
+def build_response_plan(
+    meaning_state: Dict[str, Any],
+    grounded_evidence: Optional[Iterable[str]] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    cfg = cfg or {}
+    intent = str(meaning_state.get("intent", "unknown"))
+    lang = _detect_lang(_safe_text(meaning_state.get("user_goal")))
+
+    uncertainty = meaning_state.get("uncertainty", {}) or {}
+    overall_unc = _safe_float(uncertainty.get("overall", 0.5), 0.5)
+    grounding_unc = _safe_float(uncertainty.get("grounding", 0.5), 0.5)
+    intent_confidence = _clamp01(meaning_state.get("intent_confidence", 1.0 - overall_unc), 0.5)
+    grounding_confidence = _clamp01(meaning_state.get("grounding_confidence", 1.0 - grounding_unc), 0.5)
+    history_conflict = _clamp01(meaning_state.get("history_conflict", 0.0), 0.0)
+    entity_density = _clamp01(meaning_state.get("entity_density", 0.0), 0.0)
+
+    clarify_threshold = _safe_float(
+        cfg.get("force_clarify_overall_uncertainty_threshold", cfg.get("uncertainty_min_for_clarify", 0.45)),
+        0.45,
+    )
+    grounding_threshold = _safe_float(
+        cfg.get("force_clarify_grounding_uncertainty_threshold", cfg.get("grounding_confidence_min", 0.35)),
+        0.35,
+    )
+    hysteresis_enter = _safe_float(cfg.get("hysteresis_enter", 0.58), 0.58)
+    hysteresis_exit = _safe_float(cfg.get("hysteresis_exit", 0.42), 0.42)
+    previous_answer_type = str(
+        meaning_state.get("previous_answer_type", cfg.get("previous_answer_type", ""))
+    ).strip().lower()
+
+    risk = max(
+        _clamp01(overall_unc, 0.5),
+        _clamp01(1.0 - intent_confidence, 0.5),
+        _clamp01(1.0 - grounding_confidence, 0.5),
+        _clamp01(history_conflict * 0.85, 0.0),
+    )
+    uncertain_enter = risk >= hysteresis_enter
+    uncertain_exit = risk <= hysteresis_exit
+    sticky_uncertain = uncertain_enter or (
+        previous_answer_type in {"clarify", "abstain"} and not uncertain_exit
+    )
+
+    must_avoid = list(cfg.get("must_avoid") or [
+        "ai_identity_claim",
+        "no_feelings_claim",
+        "provider_claim",
+    ])
+    if intent == "task_request":
+        must_avoid.append("unsafe_action_advice")
+    if intent in {"world_query", "meta_control"}:
+        must_avoid.append("fabricated_citation")
+    must_avoid = list(dict.fromkeys([str(x).strip() for x in must_avoid if str(x).strip()]))
+
+    evidence_ids = list((meaning_state.get("world_state_ref", {}) or {}).get("evidence_ids", []) or [])
+    evidence_sources: List[str] = []
+    if grounded_evidence:
+        for item in list(grounded_evidence):
+            if isinstance(item, dict):
+                src = str(item.get("source") or item.get("id") or "").strip()
+            else:
+                src = str(item or "").strip()
+            if src:
+                evidence_sources.append(src)
+    evidence_sources = list(dict.fromkeys(evidence_sources))
+
+    if intent in {"unknown", "clarification"}:
+        if sticky_uncertain and risk >= 0.90 and grounding_confidence < 0.35:
+            answer_type = "abstain"
+        else:
+            answer_type = "clarify"
+    elif sticky_uncertain or overall_unc >= clarify_threshold or grounding_unc >= grounding_threshold:
+        answer_type = "clarify"
+    elif not evidence_ids and grounding_confidence < 0.45:
+        answer_type = "clarify"
+    else:
+        answer_type = "direct"
+
+    key_templates: Dict[str, List[str]] = {
+        "identity_query": [
+            "Explain identity from current grounded state.",
+            "Avoid provider or generic AI claims.",
+        ],
+        "state_query": [
+            "Describe current internal state with concrete signals.",
+        ],
+        "world_query": [
+            "Answer from available evidence without speculation.",
+        ],
+        "task_request": [
+            "Propose executable next steps.",
+            "State constraints before action.",
+        ],
+        "clarification": [
+            "Ask only the minimum missing context.",
+        ],
+        "meta_control": [
+            "Explain control changes and expected impact.",
+        ],
+    }
+    key_points = list(key_templates.get(intent, ["Answer directly and stay grounded."]))
+    if evidence_sources:
+        key_points.append(f"Use {len(evidence_sources)} grounded evidence source(s).")
+    if answer_type == "clarify":
+        key_points.append("Ask one concise clarifying question.")
+    elif answer_type == "abstain":
+        key_points.append("State limitation and request stronger evidence.")
+    max_points = _safe_int(cfg.get("max_key_points", 5), 5)
+    key_points = key_points[:max(1, max_points)]
+
+    style = {
+        "language": lang,
+        "length": "short",
+        "tone": "factual",
+    }
+    if intent == "task_request":
+        style["length"] = "medium"
+        style["tone"] = "actionable"
+    elif intent == "identity_query":
+        style["tone"] = "reflective"
+    elif intent == "world_query":
+        style["tone"] = "analytic"
+    if answer_type in {"clarify", "abstain"}:
+        style["tone"] = "cautious"
+
+    validation_targets = {
+        "entailment_min": _safe_float(cfg.get("entailment_min", 0.62), 0.62),
+        "plan_adherence_min": _safe_float(cfg.get("plan_adherence_min", 0.75), 0.75),
+        "identity_consistency_min": _safe_float(cfg.get("identity_consistency_min", 0.90), 0.90),
+    }
+    if answer_type in {"clarify", "abstain"}:
+        validation_targets["entailment_min"] = max(validation_targets["entailment_min"], 0.66)
+        validation_targets["plan_adherence_min"] = max(validation_targets["plan_adherence_min"], 0.78)
+    if intent == "task_request":
+        validation_targets["plan_adherence_min"] = max(validation_targets["plan_adherence_min"], 0.80)
+
+    allowed_claims: List[Dict[str, Any]] = []
+    for idx, point in enumerate(key_points):
+        allowed_claims.append(
+            {
+                "claim_id": f"c-{idx:02d}",
+                "text": point,
+                "support_evidence_ids": evidence_ids[:3],
+                "confidence": float(max(0.35, min(0.92, 1.0 - risk))),
+            }
+        )
+
+    evidence_count_mode = str(cfg.get("plan_evidence_count_mode", "source_based") or "source_based").strip().lower()
+    grounded_evidence_count = len(evidence_sources) if evidence_count_mode == "source_based" else len(list(grounded_evidence or []))
+    decision_trace = [
+        f"intent={intent}",
+        f"risk={risk:.3f}",
+        f"sticky_uncertain={int(sticky_uncertain)}",
+        f"answer_type={answer_type}",
+        f"evidence_sources={len(evidence_sources)}",
+    ]
+
+    return {
+        "schema_version": RESPONSE_PLAN_SCHEMA_VERSION,
+        "plan_id": _turn_id(),
+        "answer_type": answer_type,
+        "key_points": key_points,
+        "must_avoid": must_avoid,
+        "clarify_if_uncertain": True,
+        "allowed_claims": allowed_claims,
+        "style": style,
+        "validation_targets": validation_targets,
+        "grounded_evidence_count": int(grounded_evidence_count),
+        "evidence_sources": list(evidence_sources),
+        "decision_trace": decision_trace,
+        "evidence_count_mode": evidence_count_mode,
+        "intent_confidence": float(intent_confidence),
+        "grounding_confidence": float(grounding_confidence),
+        "history_conflict": float(history_conflict),
+        "entity_density": float(entity_density),
     }
 
 

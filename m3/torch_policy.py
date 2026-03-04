@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 import math
 import os
 from dataclasses import dataclass
@@ -82,13 +83,14 @@ class _MoEFFN(nn.Module):
                     xe = x[m]
                     ye = self.experts[e](xe)
                     y[m] = y[m] + w[m] * ye
-        try:
+        with guard_context(ctx='m3/torch_policy.py:91', catch_base=False) as __m3_guard_85_8:
             aux_lb, z_loss, entropy, max_load = _switch_aux_terms(logits, probs, topi[:, 0], self.n_experts)
             self.last_aux_lb = float(aux_lb.detach().item())
             self.last_router_z_loss = float(z_loss.detach().item())
             self.last_expert_usage_entropy = float(entropy.detach().item())
             self.last_max_expert_load = float(max_load.detach().item())
-        except Exception:
+
+        if __m3_guard_85_8.error is not None:
             self.last_aux_lb = 0.0
             self.last_router_z_loss = 0.0
             self.last_expert_usage_entropy = 0.0
@@ -257,10 +259,11 @@ class TorchPolicy:
 
     @property
     def sigma(self) -> float:
-        try:
+        with guard_context(ctx='m3/torch_policy.py:263', catch_base=False) as __m3_guard_260_8:
             with torch.no_grad():
                 return float(self.model.log_sigma.exp().mean().detach().cpu().item())
-        except Exception:
+
+        if __m3_guard_260_8.error is not None:
             return 0.6
 
     def sample(self, obs: np.ndarray, affect: Optional[np.ndarray] = None) -> Tuple[np.ndarray, float, np.ndarray, float]:
@@ -391,13 +394,15 @@ class TorchPolicy:
             last_clip_frac = clip_frac
             if approx_kl > float(target_kl):
                 break
-        try:
-            self._last_expert_usage_entropy = float(getattr(self.model, "last_expert_usage_entropy", torch.tensor(0.0)).detach().item())
-        except Exception:
+        with guard_context(ctx='m3/torch_policy.py:396', catch_base=False) as __m3_guard_394_8:
+            self._last_expert_usage_entropy = float(attr_get_optional(self.model, "last_expert_usage_entropy", torch.tensor(0.0)).detach().item())
+
+        if __m3_guard_394_8.error is not None:
             self._last_expert_usage_entropy = 0.0
-        try:
-            self._last_max_expert_load = float(getattr(self.model, "last_max_expert_load", torch.tensor(0.0)).detach().item())
-        except Exception:
+        with guard_context(ctx='m3/torch_policy.py:400', catch_base=False) as __m3_guard_398_8:
+            self._last_max_expert_load = float(attr_get_optional(self.model, "last_max_expert_load", torch.tensor(0.0)).detach().item())
+
+        if __m3_guard_398_8.error is not None:
             self._last_max_expert_load = 0.0
         self._last_kl = float(last_approx_kl)
         self._last_clipped = bool(last_clip_frac > 0.0)
@@ -530,10 +535,11 @@ class BRPolicy:
 
     @property
     def sigma(self) -> float:
-        try:
+        with guard_context(ctx='m3/torch_policy.py:536', catch_base=False) as __m3_guard_533_8:
             with torch.no_grad():
                 return float(self.model.log_sigma.exp().mean().detach().cpu().item())
-        except Exception:
+
+        if __m3_guard_533_8.error is not None:
             return 0.6
 
     def set_active_specs(self, active_names: List[str], ranges: Dict[str, Tuple[int, int]]) -> None:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """M3 command-line runner with integrated control profile and runtime setting APIs."""
 
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 import os
 import sys
 import threading
@@ -89,28 +90,30 @@ for _name in (
     logging.getLogger(_name).setLevel(logging.WARNING)
 logging.getLogger("llm_adapter.tokenization").setLevel(logging.WARNING)
 
-try:
-    from transformers.utils import logging as _tlog
-    _tlog.set_verbosity_error()
-    try:
-        _tlog.disable_progress_bar()
-    except Exception:
-        pass
-except Exception:
-    pass
+def _disable_progress_bars_if_supported(logging_module) -> None:
+    for name in ("disable_progress_bars", "disable_progress_bar"):
+        fn = getattr(logging_module, name, None)
+        if callable(fn):
+            fn()
+            return
 
-try:
+
+def _configure_external_library_logging() -> None:
+    from transformers.utils import logging as _tlog
     from huggingface_hub.utils import logging as _hlog
-    try:
-        _hlog.set_verbosity_error()
-    except Exception:
-        pass
-    try:
-        _hlog.disable_progress_bars()
-    except Exception:
-        pass
-except Exception:
-    pass
+
+    set_t = getattr(_tlog, "set_verbosity_error", None)
+    if callable(set_t):
+        set_t()
+    _disable_progress_bars_if_supported(_tlog)
+
+    set_h = getattr(_hlog, "set_verbosity_error", None)
+    if callable(set_h):
+        set_h()
+    _disable_progress_bars_if_supported(_hlog)
+
+
+_configure_external_library_logging()
 
 project_root = Path(__file__).resolve().parent
 if str(project_root) not in sys.path:
@@ -118,10 +121,11 @@ if str(project_root) not in sys.path:
 
 # Centralize adapter logs under docs_tests_data by default.
 default_log_dir = (project_root / "docs_tests_data").resolve()
-try:
+with guard_context(ctx='run_llm_adapter.py:123', catch_base=False) as __m3_guard_121_0:
     default_log_dir.mkdir(parents=True, exist_ok=True)
-except Exception:
-    pass
+
+if __m3_guard_121_0.error is not None:
+    logging.getLogger(__name__).exception("Swallowed exception")
 default_log_path = str((default_log_dir / "llm_adapter.log").resolve())
 os.environ.setdefault("LLM_ADAPTER_LOG_DIR", str(default_log_dir))
 os.environ.setdefault("LLM_ADAPTER_LOG_PATH", default_log_path)
@@ -134,13 +138,13 @@ import m3.m3_core as m3core
 
 core_cls = None
 for name in ("M3Core", "M3ConsciousnessCore", "M3CoreEngine"):
-    if hasattr(m3core, name):
-        core_cls = getattr(m3core, name)
+    if attr_has(m3core, name):
+        core_cls = attr_get_optional(m3core, name)
         break
 if core_cls is None:
     for attr in dir(m3core):
         if "Core" in attr and attr[0].isupper():
-            core_cls = getattr(m3core, attr)
+            core_cls = attr_get_optional(m3core, attr)
             break
 if core_cls is None:
     raise ImportError("No suitable Core class found in m3.m3_core")
@@ -149,7 +153,7 @@ print(f"Found core class: {core_cls.__name__}. Initializing...")
 core = core_cls()
 
 force_attach = os.getenv("FORCE_ATTACH_LLM", "0").lower() in ("1", "true", "yes", "on")
-if getattr(core, "llm_adapter", None) is not None and not force_attach:
+if attr_get_optional(core, "llm_adapter", None) is not None and not force_attach:
     adapter = core.llm_adapter
     required_control_methods = (
         "_control_allows",
@@ -158,19 +162,20 @@ if getattr(core, "llm_adapter", None) is not None and not force_attach:
         "_bridge_enabled",
         "_bridge_enabled_safe",
     )
-    has_required_control = all(callable(getattr(adapter, m, None)) for m in required_control_methods)
+    has_required_control = all(callable(attr_get_optional(adapter, m, None)) for m in required_control_methods)
     if not has_required_control:
         print("Existing adapter is missing new control hooks; rebuilding adapter.")
         force_attach = True
     else:
         print("Reusing existing adapter:", type(adapter))
 
-if getattr(core, "llm_adapter", None) is None or force_attach:
+if attr_get_optional(core, "llm_adapter", None) is None or force_attach:
     adapter = TorchConversationalPolicy()
-    try:
+    with guard_context(ctx='run_llm_adapter.py:172', catch_base=False) as __m3_guard_170_4:
         adapter.core = core
-    except Exception:
-        pass
+
+    if __m3_guard_170_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
     adapter = attach_llm_to_core(core, adapter=adapter)
     print("Attached adapter:", type(adapter))
 else:
@@ -182,10 +187,11 @@ _print_lock = threading.Lock()
 def _safe_print(*args, **kwargs):
     with _print_lock:
         print(*args, **kwargs)
-        try:
+        with guard_context(ctx='run_llm_adapter.py:187', catch_base=False) as __m3_guard_185_8:
             sys.stdout.flush()
-        except Exception:
-            pass
+
+        if __m3_guard_185_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
 
 def _bool_env(key: str, default: bool = False) -> bool:
@@ -246,23 +252,27 @@ adapter._on_spontaneous = _on_spontaneous
 
 
 def _start_research(max_cycles: int = 20, topic: str = None, force: bool = True):
-    try:
+    with guard_context(ctx='run_llm_adapter.py:251', catch_base=False) as __m3_guard_249_4:
         os.environ["M3_RESEARCH_FORCE"] = "1" if force else "0"
-    except Exception:
-        pass
+
+    if __m3_guard_249_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
 
     def _run():
-        try:
-            if hasattr(core, "run_autonomous_research"):
+        with guard_context(ctx='run_llm_adapter.py:263', catch_base=False) as __m3_guard_255_8:
+            if attr_has(core, "run_autonomous_research"):
                 try:
                     core.run_autonomous_research(max_cycles=int(max_cycles), topic=topic)
                 except TypeError:
                     core.run_autonomous_research(max_cycles=int(max_cycles))
             else:
                 _safe_print("  M3.autonomous_research is not available.")
-        except Exception as e:
+
+        if __m3_guard_255_8.error is not None:
+            e = __m3_guard_255_8.error
             _safe_print(f"  research failed: {e}")
 
+    # always create/start the background thread regardless of guard errors
     th = threading.Thread(target=_run, daemon=True)
     th.start()
     return th
@@ -270,24 +280,27 @@ def _start_research(max_cycles: int = 20, topic: str = None, force: bool = True)
 
 def _start_creation(cycles: int = 20, topic: str = None):
     def _run():
-        try:
-            if hasattr(core, "run_autonomous_creation"):
+        with guard_context(ctx='run_llm_adapter.py:281', catch_base=False) as __m3_guard_273_8:
+            if attr_has(core, "run_autonomous_creation"):
                 try:
                     core.run_autonomous_creation(cycles=int(cycles), topic=topic)
                 except TypeError:
                     core.run_autonomous_creation(cycles=int(cycles))
             else:
                 _safe_print("  M3.autonomous_creation is not available.")
-        except Exception as e:
+
+        if __m3_guard_273_8.error is not None:
+            e = __m3_guard_273_8.error
             _safe_print(f"  creation failed: {e}")
 
+    # thread always defined
     th = threading.Thread(target=_run, daemon=True)
     th.start()
     return th
 
 
 def _start_learning(dataset_root: str, max_iterations: int = -1):
-    if not hasattr(core, "run_autonomous_learning"):
+    if not attr_has(core, "run_autonomous_learning"):
         _safe_print("  run_autonomous_learning is not available.")
         return None
 
@@ -415,15 +428,16 @@ def _normalize_control_mode(value: str) -> str:
 
 
 def _print_status():
-    try:
+    with guard_context(ctx='run_llm_adapter.py:422', catch_base=False) as __m3_guard_418_4:
         energy = core.energy_ctrl.cognitive_energy
         arousal = core.qualia.arousal
         valence = core.qualia.valence
-    except Exception:
+
+    if __m3_guard_418_4.error is not None:
         energy = arousal = valence = None
 
     _safe_print("[status]")
-    _safe_print(f"  auto loop: {getattr(adapter, '_auto_running', False)}")
+    _safe_print(f"  auto loop: {attr_get_optional(adapter, '_auto_running', False)}")
     if energy is not None:
         _safe_print(f"  energy={energy:.2f} arousal={arousal:.3f} valence={valence:.3f}")
     else:
@@ -441,10 +455,11 @@ def _print_status():
     }
     mode = _normalize_control_mode(os.environ.get("M3_CONTROL_SELECTION_MODE", "state"))
     resolved_mode = mode
-    if mode == "auto" and hasattr(adapter, "_control_selection_mode"):
-        try:
+    if mode == "auto" and attr_has(adapter, "_control_selection_mode"):
+        with guard_context(ctx='run_llm_adapter.py:447', catch_base=False) as __m3_guard_445_8:
             resolved_mode = str(adapter._control_selection_mode())
-        except Exception:
+
+        if __m3_guard_445_8.error is not None:
             resolved_mode = "auto"
     if mode == "auto" and mode != resolved_mode:
         _safe_print(f"  M3_CONTROL_SELECTION_MODE={mode} -> resolved: {resolved_mode}")
@@ -456,21 +471,23 @@ def _print_status():
         mode_for_desc = mode
     _safe_print(f"  control level: {mode_desc_map.get(mode_for_desc, mode_for_desc)}")
 
-    if hasattr(core, "growing_som") and hasattr(core.growing_som, "get_topology_health"):
-        try:
+    if attr_has(core, "growing_som") and attr_has(core.growing_som, "get_topology_health"):
+        with guard_context(ctx='run_llm_adapter.py:463', catch_base=False) as __m3_guard_460_8:
             health = core.growing_som.get_topology_health()
             _safe_print("  topology: " + ", ".join(f"{k}={v:.4f}" for k, v in health.items()))
-        except Exception:
+
+        if __m3_guard_460_8.error is not None:
             _safe_print("  topology: (not available)")
-    if hasattr(core, "global_workspace"):
+    if attr_has(core, "global_workspace"):
         gw = core.global_workspace
-        try:
-            _safe_print(f"  gw allowlist size: {len(getattr(gw, '_policy_param_allowlist', []))}")
-        except Exception:
-            pass
+        with guard_context(ctx='run_llm_adapter.py:469', catch_base=False) as __m3_guard_467_8:
+            _safe_print(f"  gw allowlist size: {len(attr_get_optional(gw, '_policy_param_allowlist', []))}")
+
+        if __m3_guard_467_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     # NeuroModulator status
-    try:
+    with guard_context(ctx='run_llm_adapter.py:485', catch_base=False) as __m3_guard_473_4:
         from llm_adapter.llm_core import HFBackend
         if HFBackend.is_available():
             hf = HFBackend.get_instance()
@@ -482,8 +499,9 @@ def _print_status():
                 )
             else:
                 _safe_print("  neuro_modulator: inactive")
-    except Exception:
-        pass
+
+    if __m3_guard_473_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
 
 
 def _print_help():
@@ -507,7 +525,7 @@ def _print_help():
 
 def _print_topology():
     _safe_print("[topology]")
-    if not hasattr(core, "growing_som"):
+    if not attr_has(core, "growing_som"):
         _safe_print("  core.growing_som unavailable")
         return
     gs = core.growing_som
@@ -516,9 +534,10 @@ def _print_topology():
         ("topology", "get_topology_health"),
         ("state", "get_network_state"),
     ]:
-        try:
-            fn_obj = getattr(gs, fn)
-        except Exception:
+        with guard_context(ctx='run_llm_adapter.py:521', catch_base=False) as __m3_guard_519_8:
+            fn_obj = attr_get_optional(gs, fn)
+
+        if __m3_guard_519_8.error is not None:
             continue
         try:
             val = fn_obj()
@@ -528,14 +547,15 @@ def _print_topology():
 
 
 def _print_shadow_writes(limit: int = 20):
-    if not hasattr(core, "global_workspace"):
+    if not attr_has(core, "global_workspace"):
         _safe_print("  global workspace unavailable")
         return
     ws = core.global_workspace
     logs = []
-    try:
+    with guard_context(ctx='run_llm_adapter.py:538', catch_base=False) as __m3_guard_536_4:
         logs = ws.get_policy_param_shadow_writes(limit)
-    except Exception:
+
+    if __m3_guard_536_4.error is not None:
         logs = []
     if not logs:
         _safe_print("  shadow log empty")
@@ -724,10 +744,11 @@ except Exception as e:
 finally:
     _safe_print("[shutdown] stopping autonomy loop")
     adapter.stop_autonomy_loop()
-    try:
-        if hasattr(core, "_save_checkpoint"):
+    with guard_context(ctx='run_llm_adapter.py:731', catch_base=False) as __m3_guard_727_4:
+        if attr_has(core, "_save_checkpoint"):
             core._save_checkpoint()
             _safe_print("  checkpoint saved")
-    except Exception:
-        pass
+
+    if __m3_guard_727_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
     _safe_print("goodbye.")

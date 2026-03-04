@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 import json
 import os
 import logging
@@ -12,6 +13,10 @@ from llm_adapter.config import TokenizerConfig, get_global_config
 
 logger = logging.getLogger(__name__)
 _LOG_ONCE_KEYS: Set[str] = set()
+_DEFAULT_DOCS_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "docs_tests_data")
+)
+_DEFAULT_TOKENIZER_PATH = os.path.join(_DEFAULT_DOCS_DIR, "tokenizer.json")
 
 
 def _log_once(level: str, message: str, *args: Any) -> None:
@@ -23,7 +28,7 @@ def _log_once(level: str, message: str, *args: Any) -> None:
     if key in _LOG_ONCE_KEYS:
         return
     _LOG_ONCE_KEYS.add(key)
-    getattr(logger, level)(message, *args)
+    attr_get_optional(logger, level)(message, *args)
 
 class M3Tokenizer:
     """
@@ -68,7 +73,7 @@ class M3Tokenizer:
                 hf_loaded = True
             else:
                 # Check unified data path
-                default_path = os.path.join('docs_tests_data', 'tokenizer.json')
+                default_path = _DEFAULT_TOKENIZER_PATH
                 # Check legacy paths
                 legacy_path = os.path.join('out_m3', 'tokenizer.json')
 
@@ -157,19 +162,21 @@ class M3Tokenizer:
         if self._type == "hf":
             ids = self._backend.encode(text).ids
         elif self._type == "tiktoken":
-            try:
+            with guard_context(ctx='llm_adapter/tokenization.py:162', catch_base=True) as __m3_guard_160_12:
                 ids = self._backend.encode(text)
-            except:
+
+            if __m3_guard_160_12.error is not None:
                 ids = []
         else: # byte
             ids = list(text.encode('utf-8', errors='replace'))
 
         if add_special:
             ids = [self.bos_id] + ids + [self.eos_id]
-        try:
+        with guard_context(ctx='llm_adapter/tokenization.py:171', catch_base=False) as __m3_guard_169_8:
             self.observe_unknown_rate(text)
-        except Exception:
-            pass
+
+        if __m3_guard_169_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         return ids
 
     def decode(self, ids: List[int]) -> str:
@@ -209,11 +216,12 @@ class M3Tokenizer:
 
         def safe_file_iterator(file_paths):
             for path in file_paths:
-                try:
-                    # Attempt to read with utf-8 and ignore errors to skip bad bytes
+                with guard_context(ctx='llm_adapter/tokenization.py:216', catch_base=False) as __m3_guard_212_16:
                     with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                         yield f.read()
-                except Exception as e:
+
+                if __m3_guard_212_16.error is not None:
+                    e = __m3_guard_212_16.error
                     logger.warning(f"Failed to read file {path}: {e}")
                     continue
 
@@ -233,7 +241,7 @@ class M3Tokenizer:
                             line = line.strip()
                             if not line:
                                 continue
-                            try:
+                            with guard_context(ctx='llm_adapter/tokenization.py:247', catch_base=False) as __m3_guard_236_28:
                                 obj = json.loads(line)
                                 if isinstance(obj, dict):
                                     for key in ("prompt", "response", "chosen", "rejected", "content", "text", "input", "output"):
@@ -244,7 +252,8 @@ class M3Tokenizer:
                                             yield seg
                                             if max_chars > 0 and total_chars >= max_chars:
                                                 return
-                            except Exception:
+
+                            if __m3_guard_236_28.error is not None:
                                 total_chars += len(line)
                                 yield line
                                 if max_chars > 0 and total_chars >= max_chars:
@@ -262,14 +271,27 @@ class M3Tokenizer:
 
     def _rebuild_state_path(self) -> str:
         cfg = get_global_config().tokenizer_auto_vocab
-        p = str(os.getenv("M3_TOKENIZER_REBUILD_STATE", cfg.state_file or "tokenizer_rebuild_state.json"))
+        p = str(
+            os.getenv(
+                "M3_TOKENIZER_REBUILD_STATE",
+                cfg.state_file or "tokenizer_rebuild_state.json",
+            )
+            or ""
+        ).strip()
+        if not p:
+            p = "tokenizer_rebuild_state.json"
         if not os.path.isabs(p):
-            p = os.path.abspath(p)
+            base_dir = str(os.getenv("LLM_ADAPTER_LOG_DIR", _DEFAULT_DOCS_DIR) or "").strip()
+            if not base_dir:
+                base_dir = _DEFAULT_DOCS_DIR
+            if not os.path.isabs(base_dir):
+                base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", base_dir))
+            p = os.path.join(base_dir, p)
         return p
 
     def load_rebuild_state(self) -> Dict[str, Any]:
         path = self._rebuild_state_path()
-        try:
+        with guard_context(ctx='llm_adapter/tokenization.py:283', catch_base=False) as __m3_guard_272_8:
             if not os.path.exists(path):
                 return {"ok": False, "reason": "missing", "path": path}
             with open(path, "r", encoding="utf-8") as f:
@@ -280,7 +302,9 @@ class M3Tokenizer:
             self._last_rebuild_path = str(st.get("last_rebuild_path", self._last_rebuild_path or ""))
             self._last_rebuild_corpus_fingerprint = str(st.get("last_rebuild_corpus_fingerprint", ""))
             return {"ok": True, "path": path}
-        except Exception as e:
+
+        if __m3_guard_272_8.error is not None:
+            e = __m3_guard_272_8.error
             logger.warning(f"Failed to load tokenizer rebuild state: {e}")
             return {"ok": False, "reason": str(e), "path": path}
 
@@ -294,23 +318,27 @@ class M3Tokenizer:
             "last_rebuild_corpus_fingerprint": str(self._last_rebuild_corpus_fingerprint or ""),
             "vocab_size": int(self.vocab_size),
         }
-        try:
+        with guard_context(ctx='llm_adapter/tokenization.py:302', catch_base=False) as __m3_guard_297_8:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
             return {"ok": True, "path": path}
-        except Exception as e:
+
+        if __m3_guard_297_8.error is not None:
+            e = __m3_guard_297_8.error
             logger.warning(f"Failed to save tokenizer rebuild state: {e}")
             return {"ok": False, "reason": str(e), "path": path}
 
     def export_vocab_snapshot(self) -> Dict[str, Any]:
         if self._type == "hf":
-            try:
+            with guard_context(ctx='llm_adapter/tokenization.py:311', catch_base=False) as __m3_guard_308_12:
                 vocab = self._backend.get_vocab()
                 return {"ok": True, "type": "hf", "size": int(len(vocab)), "tokens": set(vocab.keys())}
-            except Exception as e:
+
+            if __m3_guard_308_12.error is not None:
+                e = __m3_guard_308_12.error
                 return {"ok": False, "reason": str(e), "type": "hf", "size": int(self.vocab_size), "tokens": set()}
-        return {"ok": True, "type": self._type, "size": int(self.vocab_size), "tokens": set()}
+                return {"ok": True, "type": self._type, "size": int(self.vocab_size), "tokens": set()}
 
     def _collect_corpus_stats(self, files: List[str], max_chars: int) -> Dict[str, Any]:
         total_chars = 0
@@ -339,13 +367,15 @@ class M3Tokenizer:
         new_vocab_size: Optional[int] = None,
     ) -> bool:
         cfg = get_global_config().tokenizer_auto_vocab
-        try:
+        with guard_context(ctx='llm_adapter/tokenization.py:344', catch_base=False) as __m3_guard_342_8:
             chars = int(corpus_stats.get("chars", 0))
-        except Exception:
+
+        if __m3_guard_342_8.error is not None:
             chars = 0
-        try:
+        with guard_context(ctx='llm_adapter/tokenization.py:348', catch_base=False) as __m3_guard_346_8:
             uniq = int(corpus_stats.get("unique_terms", 0))
-        except Exception:
+
+        if __m3_guard_346_8.error is not None:
             uniq = 0
         if chars < int(max(1, cfg.min_corpus_chars)):
             return False
@@ -439,7 +469,7 @@ class M3Tokenizer:
             min_frequency=2,
             show_progress=False,
         )
-        try:
+        with guard_context(ctx='llm_adapter/tokenization.py:458', catch_base=False) as __m3_guard_442_8:
             corpus_iter = self._safe_text_iter(files, max_chars=max_chars)
             tok.train_from_iterator(corpus_iter, trainer=trainer)
             new_vocab_size = int(tok.get_vocab_size())
@@ -455,7 +485,9 @@ class M3Tokenizer:
                 )
                 return False
             tok.save(out_path)
-        except Exception as e:
+
+        if __m3_guard_442_8.error is not None:
+            e = __m3_guard_442_8.error
             logger.warning(f"Tokenizer rebuild failed: {e}")
             return False
         self._backend = tok
@@ -468,7 +500,7 @@ class M3Tokenizer:
         self._last_rebuild_path = out_path
         self._last_rebuild_unix = float(time.time())
         self._rebuild_count = int(self._rebuild_count) + 1
-        try:
+        with guard_context(ctx='llm_adapter/tokenization.py:480', catch_base=False) as __m3_guard_471_8:
             fp_payload = {
                 "files": [str(p) for p in files],
                 "stats": corpus_stats,
@@ -477,7 +509,8 @@ class M3Tokenizer:
             self._last_rebuild_corpus_fingerprint = hashlib.sha1(
                 json.dumps(fp_payload, sort_keys=True, ensure_ascii=False).encode("utf-8", errors="ignore")
             ).hexdigest()[:16]
-        except Exception:
+
+        if __m3_guard_471_8.error is not None:
             self._last_rebuild_corpus_fingerprint = ""
         self._unknown_tokens = 0
         self._observed_tokens = 0

@@ -48,6 +48,7 @@ from llm_adapter.m3_control_bridge import (
     NeuroModControls,
 )
 from llm_adapter.remote import get_local_thinking
+from llm_adapter.control_plane import M3ControlDecision
 
 __all__ = [
     'attach_llm_to_core',
@@ -58,6 +59,7 @@ __all__ = [
     'M3ControlBridge', 'LayerGateRuntime', 'GenerationQualityGate', 'QualityGateResult', 'find_decoder_layers',
     'NeuroModulator', 'NeuroModulatorRuntime', 'NeuroModControls',
     'get_local_thinking',
+    'M3ControlDecision',
     'M3LLMConfig', 'M3StateEncoderConfig', 'M3StateCacheConfig', 'M3AwareDecoderLayerConfig', 'M3AdaptiveSamplerConfig',
     'M3EpisodicMemoryConfig', 'KNNIndexConfig', 'TokenizerConfig', 'TorchPolicyConfig',
     'AutonomyRLConfig', 'EpisodicANNConfig', 'DPOAutoCollectConfig', 'EarlyStopConfig',

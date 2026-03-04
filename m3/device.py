@@ -1,5 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 import os
 from typing import Optional
 
@@ -40,9 +41,11 @@ def resolve_torch_device(
     raw = _normalize_device_string(explicit)
 
     if raw:
-        try:
+        with guard_context(ctx='m3/device.py:45', catch_base=False) as __m3_guard_43_8:
             target = torch.device(raw)
-        except Exception as exc:
+
+        if __m3_guard_43_8.error is not None:
+            exc = __m3_guard_43_8.error
             raise RuntimeError(f'Invalid device string: {raw}') from exc
 
         if target.type == 'cuda':

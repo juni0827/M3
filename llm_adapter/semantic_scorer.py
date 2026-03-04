@@ -1,5 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 import json
 import logging
 import os
@@ -87,7 +88,7 @@ class SemanticScorer:
             self._last_error = "nli_load_error:empty_model_name"
             return None
 
-        try:
+        with guard_context(ctx='llm_adapter/semantic_scorer.py:100', catch_base=False) as __m3_guard_90_8:
             from transformers import pipeline
 
             self._nli_classifier = pipeline(
@@ -97,7 +98,9 @@ class SemanticScorer:
                 device=self.cfg.nli_device if self.cfg.nli_device != "auto" else -1,
             )
             logger.info("NLI scorer loaded: %s", self.cfg.model_name)
-        except Exception as e:
+
+        if __m3_guard_90_8.error is not None:
+            e = __m3_guard_90_8.error
             self._last_error = f"nli_load_error:{e}"
             logger.warning("Falling back to heuristic semantic scorer: %s", e)
             self._nli_classifier = None
@@ -115,7 +118,7 @@ class SemanticScorer:
                 "neutral": 1.0,
                 "source": "heuristic",
             }
-        try:
+        with guard_context(ctx='llm_adapter/semantic_scorer.py:134', catch_base=False) as __m3_guard_118_8:
             out = clf((premise, hypothesis))
             first = out[0] if isinstance(out, list) else out
             scores = {"entailment": 0.0, "contradiction": 0.0, "neutral": 0.0}
@@ -131,7 +134,9 @@ class SemanticScorer:
                 scores[label] = _as_float(first.get("score", 0.0))
             scores["source"] = "nli"
             return scores
-        except Exception as e:
+
+        if __m3_guard_118_8.error is not None:
+            e = __m3_guard_118_8.error
             self._last_error = f"nli_eval_error:{e}"
             logger.debug("NLI eval failed, fallback heuristic: %s", e)
             return {
@@ -264,11 +269,12 @@ class SemanticScorer:
         if isinstance(generation_contract, dict):
             return str(generation_contract.get("mode", "")).lower()
         if isinstance(generation_contract, str):
-            try:
+            with guard_context(ctx='llm_adapter/semantic_scorer.py:271', catch_base=False) as __m3_guard_267_12:
                 payload = json.loads(generation_contract)
                 if isinstance(payload, dict):
                     return str(payload.get("mode", "")).lower()
-            except Exception:
+
+            if __m3_guard_267_12.error is not None:
                 return generation_contract.strip().lower()
         return ""
 
@@ -399,7 +405,7 @@ class SemanticScorer:
         )
 
     def save_eval_record(self, rec: Dict[str, Any]) -> None:
-        try:
+        with guard_context(ctx='llm_adapter/semantic_scorer.py:413', catch_base=False) as __m3_guard_402_8:
             base = os.path.abspath(os.getenv("LLM_ADAPTER_LOG_DIR", os.path.join(os.path.dirname(__file__), "..", "docs_tests_data")))
             if not os.path.isabs(base):
                 base = os.path.abspath(base)
@@ -410,14 +416,15 @@ class SemanticScorer:
             rec_payload.setdefault("ts", time.time())
             with open(out, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec_payload, ensure_ascii=False) + "\n")
-        except Exception:
+
+        if __m3_guard_402_8.error is not None:
             pass
 
     def save_rejection_stats(self) -> Dict[str, Any]:
         stats = self.pop_rejection_stats()
         if not stats:
             return {}
-        try:
+        with guard_context(ctx='llm_adapter/semantic_scorer.py:434', catch_base=False) as __m3_guard_420_8:
             base = os.path.abspath(os.getenv("LLM_ADAPTER_LOG_DIR", os.path.join(os.path.dirname(__file__), "..", "docs_tests_data")))
             if not os.path.isabs(base):
                 base = os.path.abspath(base)
@@ -431,7 +438,8 @@ class SemanticScorer:
             with open(out, "w", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False, indent=2))
             return payload
-        except Exception:
+
+        if __m3_guard_420_8.error is not None:
             return {"stats": stats}
 
 

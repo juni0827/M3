@@ -1,8 +1,7 @@
 from typing import Optional
 
 from m3.config import QUALIA_CFG, QUALIA_LOG_PATH, _CESConfig
-from m3.features import HebbianMemory, FeatureSpec, pack_learned_proj, pack_scalar, pack_spatial_pool, pack_stats_sample, Scope
-from m3.visualization import GlitchEncoder, Retinizer, FeatureSummarizer, hilbert_index_to_xy, vector_to_grid
+from m3.features import HebbianMemory, FeatureSpec, pack_learned_proj, pack_scalar, pack_spatial_pool, pack_stats_sample
 from .device import (
     resolve_torch_device_obj,
     resolve_torch_device_string,
@@ -44,10 +43,14 @@ def _resolve_cached_device():
     return _DEVICE_CACHE
 
 
-def __getattr__(name):
-    if name == 'DEVICE':
-        return _resolve_cached_device()
-    raise AttributeError(name)
+def init_device_cache():
+    """Initialize and return the module-level cached device."""
+    global DEVICE
+    DEVICE = _resolve_cached_device()
+    return DEVICE
+
+
+DEVICE = init_device_cache()
 
 
 __all__ = [
@@ -61,12 +64,6 @@ __all__ = [
     'pack_scalar',
     'pack_spatial_pool',
     'pack_stats_sample',
-    'Scope',
-    'GlitchEncoder',
-    'Retinizer',
-    'FeatureSummarizer',
-    'hilbert_index_to_xy',
-    'vector_to_grid',
     'M3ConsciousnessCore',
     'M3Core',
     'get_device',
