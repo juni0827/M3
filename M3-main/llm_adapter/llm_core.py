@@ -3068,7 +3068,8 @@ class TorchConversationalPolicy:
             "[error:",
             "local error:",
             "generation is in safe mode",
-            "?꾩옱 ?앹꽦 寃쎈줈媛 ?쇱떆?곸쑝濡??덉쟾 紐⑤뱶?낅땲??",
+            "현재 생성 경로가 일시적으로 안전 모드입니다.",
+
         )
         if any(sl.startswith(p) for p in prefixes):
             return True
