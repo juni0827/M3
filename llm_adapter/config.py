@@ -7,6 +7,12 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger('llm_adapter')
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_DEFAULT_DOCS_DIR = os.path.join(_PROJECT_ROOT, "docs_tests_data")
+
+
+def _default_docs_dir() -> str:
+    return _DEFAULT_DOCS_DIR
 
 
 # ===========================
@@ -333,7 +339,7 @@ class MeaningPipelineConfig:
     enabled: bool = True
     mode: str = "shadow"
     candidate_count: int = 4
-    artifact_dir: str = "docs_tests_data"
+    artifact_dir: str = field(default_factory=_default_docs_dir)
     mean_state_log: str = "meaning_state.jsonl"
     plan_log: str = "response_plan.jsonl"
     min_history_turns: int = 6

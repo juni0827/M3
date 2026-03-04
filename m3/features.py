@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
+import logging
 import hashlib
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from numpy.random import default_rng
-
-from m3.visualization import GlitchEncoder, FeatureSummarizer, Retinizer, vector_to_grid
-
 
 @dataclass
 class HebbianMemory:
@@ -36,32 +35,36 @@ class HebbianMemory:
         self.items = []
         self.episodes = {}
         if self.rng is None:
-            try:
+            with guard_context(ctx='m3/features.py:42', catch_base=False) as __m3_guard_40_12:
                 self.rng = default_rng()
-            except Exception:
+
+            if __m3_guard_40_12.error is not None:
                 self.rng = np.random.default_rng()
 
     def update(self, x: np.ndarray):
         """Update the global memory trace with vector x and also record as an item."""
-        try:
+        with guard_context(ctx='m3/features.py:49', catch_base=False) as __m3_guard_47_8:
             x = np.asarray(x, dtype=np.float32)
-        except Exception:
+
+        if __m3_guard_47_8.error is not None:
             return
         if x.size == 0:
             return
         x = x - x.mean()
         x = np.clip(x, 0, 1)
         L = min(self.size, x.size)
-        try:
+        with guard_context(ctx='m3/features.py:58', catch_base=False) as __m3_guard_56_8:
             self.memory[:L] += float(self.lr) * x[:L]
-        except Exception:
-            pass
+
+        if __m3_guard_56_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         # store a compact copy as an item for later similarity search
-        try:
+        with guard_context(ctx='m3/features.py:64', catch_base=False) as __m3_guard_61_8:
             compact = x.flatten()[:self.size].astype(np.float32).copy()
             self.items.append(compact)
-        except Exception:
-            pass
+
+        if __m3_guard_61_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def read(self) -> np.ndarray:
         m = self.memory.copy()
@@ -122,15 +125,15 @@ class HebbianMemory:
             if not seq:
                 continue
             # If all frames in episode share the same shape, compute mean directly
-            try:
+            with guard_context(ctx='m3/features.py:133', catch_base=False) as __m3_guard_126_12:
                 if all(s.shape == seq[0].shape for s in seq):
                     # stack along a new axis; if already 2D arrays this yields (N, H, W)
                     arr = np.stack([s for s in seq], axis=0)
                     mean_frame = np.mean(arr, axis=0)
                 else:
                     mean_frame = np.mean(np.vstack([s.flatten() for s in seq]), axis=0)
-            except Exception:
-                # Fallback: flatten and average
+
+            if __m3_guard_126_12.error is not None:
                 mean_frame = np.mean(np.vstack([np.asarray(s).flatten() for s in seq]), axis=0)
             score = self.similarity_score(q, mean_frame)
             if score >= threshold:
@@ -164,20 +167,22 @@ def pack_scalar(val: Any, params: Dict[str, Any]) -> np.ndarray:
     try:
         return np.array([float(val)], dtype=np.float32)
     except Exception:
-        try:
+        with guard_context(ctx='m3/features.py:172', catch_base=False) as __m3_guard_168_8:
             a = np.asarray(val).ravel()
             if a.size:
                 return np.array([float(a.ravel()[0])], dtype=np.float32)
-        except Exception:
-            pass
+
+        if __m3_guard_168_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
     return np.array([0.0], dtype=np.float32)
 
 
 def pack_stats_sample(val: Any, params: Dict[str, Any]) -> np.ndarray:
     max_elems = int(params.get('samples', 8))
-    try:
+    with guard_context(ctx='m3/features.py:181', catch_base=False) as __m3_guard_179_4:
         a = np.asarray(val, dtype=np.float32).ravel()
-    except Exception:
+
+    if __m3_guard_179_4.error is not None:
         a = np.zeros((0,), dtype=np.float32)
     if a.size == 0:
         return np.zeros(4 + max_elems, dtype=np.float32)
@@ -201,9 +206,10 @@ def pack_spatial_pool(val: Any, params: Dict[str, Any]) -> np.ndarray:
     """
     grid = params.get('grid', 4)
     pool_type = params.get('pool_type', 'mean')
-    try:
+    with guard_context(ctx='m3/features.py:207', catch_base=False) as __m3_guard_205_4:
         a = np.asarray(val, dtype=np.float32)
-    except Exception:
+
+    if __m3_guard_205_4.error is not None:
         return np.zeros((4 + int(grid),), dtype=np.float32)
     # ensure 2D by averaging channels if needed
     if a.ndim == 3:
@@ -214,10 +220,11 @@ def pack_spatial_pool(val: Any, params: Dict[str, Any]) -> np.ndarray:
         a2 = np.asarray(a).ravel()
         a2 = a2.reshape(1, -1)
     # resize to small grid
-    try:
+    with guard_context(ctx='m3/features.py:221', catch_base=False) as __m3_guard_218_4:
         h = int(np.clip(a2.shape[0], 1, 256))
         w = int(np.clip(a2.shape[1], 1, 256)) if a2.ndim == 2 else 1
-    except Exception:
+
+    if __m3_guard_218_4.error is not None:
         h, w = a2.shape[0], (a2.shape[1] if a2.ndim == 2 else 1)
     # target grid
     if isinstance(grid, (list, tuple)):
@@ -262,12 +269,13 @@ def pack_learned_proj(val: Any, params: Dict[str, Any]) -> np.ndarray:
     """
     dim = int(params.get('dim', 16))
     proj = params.get('proj', None)
-    try:
+    with guard_context(ctx='m3/features.py:268', catch_base=False) as __m3_guard_266_4:
         a = np.asarray(val, dtype=np.float32).ravel()
-    except Exception:
+
+    if __m3_guard_266_4.error is not None:
         a = np.zeros((1,), dtype=np.float32)
     if proj is not None and callable(proj):
-        try:
+        with guard_context(ctx='m3/features.py:280', catch_base=False) as __m3_guard_271_8:
             out = proj(a)
             out = np.asarray(out, dtype=np.float32).ravel()
             if out.size == dim:
@@ -276,8 +284,9 @@ def pack_learned_proj(val: Any, params: Dict[str, Any]) -> np.ndarray:
                 return out[:dim]
             pad = np.zeros((dim - out.size,), dtype=np.float32)
             return np.concatenate([out, pad], axis=0)
-        except Exception:
-            pass
+
+        if __m3_guard_271_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
     # fallback random projection using hash-based seed for determinism
     seed = int(hashlib.blake2b(a.tobytes() if a.size else b'0', digest_size=4).digest()[0]) if a.size else 0
     rng = np.random.default_rng(seed)
@@ -291,68 +300,6 @@ def pack_learned_proj(val: Any, params: Dict[str, Any]) -> np.ndarray:
     return out.astype(np.float32)
 
 
-@dataclass
-class Scope:
-    retina: Retinizer = field(default_factory=lambda: Retinizer((256, 256)))
-    summarizer: FeatureSummarizer = field(default_factory=lambda: FeatureSummarizer(8))
-    mem: HebbianMemory = field(default_factory=lambda: HebbianMemory(512))
-    # Default to grayscale to avoid noisy one-bit visuals; can be overridden via drivers['one_bit']
-    glitch: GlitchEncoder = field(default_factory=lambda: GlitchEncoder((768, 1024), False))
-
-    def encode(self, frame: np.ndarray | None, drivers: Optional[Dict[str, float]] = None):
-        retina = self.retina(frame)
-        if retina.ndim == 3:
-            if retina.shape[2] >= 3:
-                # Convert RGB(A) inputs to luminance preserving 0-1 range.
-                coeffs = np.array([0.2989, 0.5870, 0.1140], dtype=np.float32)
-                retina = np.tensordot(retina[..., :3], coeffs, axes=([-1], [0]))
-            else:
-                retina = retina.mean(axis=-1)
-        elif retina.ndim == 0:
-            retina = np.full(self.retina.target_size, float(retina), dtype=np.float32)
-        retina = np.asarray(retina, dtype=np.float32)
-        # Use FeatureSummarizer to compute features (single path for maintainability)
-        feats = self.summarizer(retina)
-        self.mem.update(feats)
-        context = np.concatenate([feats[:256], self.mem.read()[:256]])
-        driver_grid = vector_to_grid(context, 32)
-        driver_vec = driver_grid.flatten()
-        A = 0.5
-        if drivers:
-            # expand effective range so mid arousal yields stronger modulation
-            a0 = float(np.clip(drivers.get('arousal', 0.5), 0.0, 1.0))
-            A = float(np.clip(0.2 + 0.8 * a0, 0.0, 1.0))
-            # allow external control of one-bit rendering
-            if 'one_bit' in drivers:
-                try:
-                    self.glitch.one_bit = bool(drivers['one_bit'])
-                except Exception:
-                    pass
-        # Optionally bypass glitch and show raw retina (useful for camera/folder/push realism)
-        bypass = bool(drivers.get('bypass_glitch')) if drivers else False
-        if bypass:
-            H, W = self.glitch.out_size
-            try:
-                from PIL import Image as _PIL_Image, Image as _PIL
-                resample = getattr(_PIL, 'Resampling', _PIL)
-                im = _PIL_Image.fromarray((retina * 255).astype(np.uint8)).resize((W, H), resample.BILINEAR)
-                image = np.asarray(im).astype(np.uint8)
-            except Exception:
-                # fallback nearest
-                image = (np.kron(retina, np.ones((int(np.ceil(H / retina.shape[0])), int(np.ceil(W / retina.shape[1]))), dtype=np.float32))[:H, :W] * 255).astype(np.uint8)
-        else:
-            image = self.glitch(retina, driver_vec, arousal=A)
-        hist, _ = np.histogram(image, bins=2 if self.glitch.one_bit else 16, range=(0, 255), density=True)
-        meta = {
-            "retina_mean": float(retina.mean()),
-            "retina_std": float(retina.std()),
-            "feature_dim": int(feats.size),
-            "arousal": A,
-            "img_hist": hist.tolist()
-        }
-        return image, meta
-
-
 __all__ = [
     'HebbianMemory',
     'FeatureSpec',
@@ -360,5 +307,4 @@ __all__ = [
     'pack_stats_sample',
     'pack_spatial_pool',
     'pack_learned_proj',
-    'Scope',
 ]

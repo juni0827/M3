@@ -1,10 +1,14 @@
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 import copy
 import json
 import os
 import sys
 import tempfile
+import threading
 import types
 import unittest
+from collections import deque
+import importlib.util
 from pathlib import Path
 from unittest import mock
 
@@ -173,7 +177,7 @@ class AdaptiveSamplerInputShapeTests(unittest.TestCase):
         core = types.SimpleNamespace(token_entropy=0.20)
         updated = HFBackend._micro_update_step_state(core, _step=3, generated_ids=[1, 2, 3], interval=3)
         self.assertTrue(updated)
-        self.assertTrue(hasattr(core, "decode_entropy"))
+        self.assertTrue(attr_has(core, "decode_entropy"))
 
     def test_dummy_core_affect_kernel_returns_5d_vector(self):
         core = _DummyCore()
@@ -480,7 +484,7 @@ class M3PlanFeatureTests(unittest.TestCase):
             log_path = os.path.join(td, "llm_adapter.log")
             os.environ["LLM_ADAPTER_LOG"] = log_path
             with torch.no_grad():
-                if getattr(policy.model.q_head, "bias", None) is not None:
+                if attr_get_optional(policy.model.q_head, "bias", None) is not None:
                     policy.model.q_head.bias[0].fill_(-2.0)
                     policy.model.q_head.bias[1].fill_(2.0)
             with mock.patch.object(policy, "generate", return_value="smoke response"), mock.patch("numpy.random.rand", return_value=0.0):
@@ -648,6 +652,141 @@ class M3PlanFeatureTests(unittest.TestCase):
         self.assertEqual(nm_cfg.trunk_dim, 256)
         self.assertEqual(nm_cfg.warmup_steps, 100)
         self.assertEqual(nm_cfg.max_gain_delta, 0.3)
+
+    def test_18_bus_jsonl_integrity_under_concurrent_push(self):
+        with tempfile.TemporaryDirectory() as td:
+            bus = ConsciousnessBus(
+                top_k=4,
+                outdir=td,
+                async_dispatch=False,
+                max_queue=20_000,
+            )
+
+            def _writer(seed: int):
+                for j in range(1000):
+                    idx = seed + j
+                    vec = np.full((8,), float(idx % 3), dtype=np.float32)
+                    bus.push("tester", f"k{idx}", vec, salience=0.5, confidence=1.0, ttl=2)
+
+            threads = []
+            for t_idx in range(10):
+                th = threading.Thread(target=_writer, args=(t_idx * 1000,), daemon=True)
+                th.start()
+                threads.append(th)
+            for th in threads:
+                th.join(timeout=5.0)
+
+            bus_path = os.path.join(td, "bus.jsonl")
+            validator_path = PROJECT_ROOT / "tests" / "validate_bus_jsonl.py"
+            spec = importlib.util.spec_from_file_location("validate_bus_jsonl", str(validator_path))
+            module = importlib.util.module_from_spec(spec)
+            assert spec is not None and spec.loader is not None
+            spec.loader.exec_module(module)  # type: ignore[attr-defined]
+            stats = module.validate_bus_jsonl(bus_path, max_lines=50_000, strict=True)
+            self.assertGreater(int(stats.get("total_lines", 0)), 0)
+            self.assertEqual(int(stats.get("parse_errors", 0)), 0)
+            self.assertEqual(int(stats.get("schema_errors", 0)), 0)
+
+    def test_19_meaning_plan_reduces_unknown_abstain_convergence(self):
+        from m3.meaning_pipeline import build_response_plan
+
+        samples = [
+            {
+                "intent": "unknown",
+                "user_goal": "need clarification",
+                "world_state_ref": {"evidence_ids": []},
+                "uncertainty": {"overall": 0.56, "grounding": 0.52},
+                "intent_confidence": 0.41,
+                "grounding_confidence": 0.46,
+                "history_conflict": 0.10,
+                "entity_density": 0.25,
+            },
+            {
+                "intent": "task_request",
+                "user_goal": "give next actions",
+                "world_state_ref": {"evidence_ids": ["ev:1"]},
+                "uncertainty": {"overall": 0.18, "grounding": 0.22},
+                "intent_confidence": 0.82,
+                "grounding_confidence": 0.76,
+                "history_conflict": 0.02,
+                "entity_density": 0.44,
+            },
+            {
+                "intent": "world_query",
+                "user_goal": "summarize world state",
+                "world_state_ref": {"evidence_ids": ["ev:2"]},
+                "uncertainty": {"overall": 0.40, "grounding": 0.36},
+                "intent_confidence": 0.62,
+                "grounding_confidence": 0.58,
+                "history_conflict": 0.08,
+                "entity_density": 0.30,
+            },
+            {
+                "intent": "identity_query",
+                "user_goal": "identity",
+                "world_state_ref": {"evidence_ids": ["ev:3"]},
+                "uncertainty": {"overall": 0.28, "grounding": 0.25},
+                "intent_confidence": 0.71,
+                "grounding_confidence": 0.69,
+                "history_conflict": 0.03,
+                "entity_density": 0.36,
+            },
+            {
+                "intent": "clarification",
+                "user_goal": "clarify missing inputs",
+                "world_state_ref": {"evidence_ids": []},
+                "uncertainty": {"overall": 0.61, "grounding": 0.58},
+                "intent_confidence": 0.40,
+                "grounding_confidence": 0.42,
+                "history_conflict": 0.22,
+                "entity_density": 0.20,
+            },
+        ]
+        intents = []
+        answer_types = []
+        styles = []
+        unknown_abstain = 0
+        for ms in samples:
+            plan = build_response_plan(
+                meaning_state=ms,
+                grounded_evidence=[{"source": "memory:demo"}],
+                cfg={
+                    "dynamic_uncertainty": True,
+                    "hysteresis_enter": 0.58,
+                    "hysteresis_exit": 0.42,
+                    "plan_evidence_count_mode": "source_based",
+                },
+            )
+            intents.append(str(ms.get("intent")))
+            answer_types.append(str(plan.get("answer_type")))
+            styles.append(json.dumps(plan.get("style", {}), sort_keys=True))
+            if str(ms.get("intent")) == "unknown" and str(plan.get("answer_type")) == "abstain":
+                unknown_abstain += 1
+
+        ratio = float(unknown_abstain / max(1, len(samples)))
+        self.assertLessEqual(ratio, 0.40)
+        self.assertGreaterEqual(len(set(intents)), 2)
+        self.assertGreaterEqual(len(set(answer_types)), 2)
+        self.assertGreaterEqual(len(set(styles)), 2)
+
+    def test_20_repeat_blocking_triggers_on_two_consecutive_high_similarity_turns(self):
+        policy = TorchConversationalPolicy.__new__(TorchConversationalPolicy)
+        core = types.SimpleNamespace(
+            _chat_history=deque(
+                [
+                    {"role": "assistant", "text": "Output is in stabilization mode."},
+                    {"role": "assistant", "text": "Output is in stabilization mode."},
+                ],
+                maxlen=8,
+            )
+        )
+        blocked, meta = TorchConversationalPolicy._is_repeat_candidate_blocked(
+            policy,
+            "Output is in stabilization mode.",
+            core=core,
+        )
+        self.assertTrue(blocked)
+        self.assertGreaterEqual(float(meta.get("similarity_min", 0.0)), 0.9)
 
 
 class PhiResponsibilitySeparationTests(unittest.TestCase):

@@ -1,15 +1,16 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 import argparse, os, time, math, json, heapq
 import re
 import os as _os
 import logging
+from difflib import SequenceMatcher
 import torch
 import torch.nn as nn
 from .device import resolve_torch_device_string
 from m3.config import QUALIA_CFG, QUALIA_LOG_PATH, _CESConfig
-from m3.features import HebbianMemory, FeatureSpec, pack_learned_proj, pack_scalar, pack_spatial_pool, pack_stats_sample, Scope
-from m3.visualization import FeatureSummarizer, GlitchEncoder, Retinizer, hilbert_index_to_xy, vector_to_grid
+from m3.features import HebbianMemory, FeatureSpec, pack_learned_proj, pack_scalar, pack_spatial_pool, pack_stats_sample
 from m3.reward import RewardSystem
 from m3.meaning_pipeline import (
     build_meaning_state as _pipeline_build_meaning_state,
@@ -18,6 +19,7 @@ from m3.meaning_pipeline import (
     ground_meaning_state as _pipeline_ground_meaning_state,
     format_plan_fallback_prompt as _pipeline_format_plan_fallback_prompt,
 )
+from m3.io.jsonl_writer import append_jsonl
 from functools import lru_cache
 
 def _default_docs_outdir() -> str:
@@ -25,12 +27,11 @@ def _default_docs_outdir() -> str:
 
 
 def _write_jsonl_safe(path, obj):
-    try:
-        import json as _json, io as _io
-        with _io.open(path, 'a', encoding='utf-8') as f:
-            f.write(_json.dumps(obj, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    with guard_context(ctx='m3/m3_core.py:32', catch_base=False) as __m3_guard_28_4:
+        append_jsonl(path, dict(obj or {}))
+
+    if __m3_guard_28_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
 
 
 def _resolve_llm_adapter_log_path(default_name: str = "llm_adapter.log") -> str:
@@ -45,10 +46,11 @@ def _resolve_llm_adapter_log_path(default_name: str = "llm_adapter.log") -> str:
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs_tests_data"))
     if not os.path.isabs(base_dir):
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", base_dir))
-    try:
+    with guard_context(ctx='m3/m3_core.py:50', catch_base=False) as __m3_guard_48_4:
         os.makedirs(base_dir, exist_ok=True)
-    except Exception:
-        pass
+
+    if __m3_guard_48_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
     raw_path = str(os.getenv("LLM_ADAPTER_LOG") or os.getenv("LLM_ADAPTER_LOG_PATH") or default_name).strip()
     if not raw_path:
         raw_path = default_name
@@ -84,7 +86,7 @@ def _normalize_phi_policy(raw: Optional[Dict[str, Any]] = None) -> Dict[str, flo
                 if k in raw:
                     base[k] = float(raw[k])
             except Exception:
-                pass
+                logging.getLogger(__name__).exception("Swallowed exception")
     base["low"] = float(max(base["floor"] + 1e-6, base["low"]))
     base["mid"] = float(max(base["low"] + 1e-6, base["mid"]))
     base["high"] = float(max(base["mid"] + 1e-6, base["high"]))
@@ -100,14 +102,16 @@ def _compute_phi_policy_from_history(
     policy = _normalize_phi_policy(None)
     if cfg is None:
         cfg = {}
-    try:
+    with guard_context(ctx='m3/m3_core.py:105', catch_base=False) as __m3_guard_103_4:
         enabled = bool(cfg.get("enabled", True))
-    except Exception:
+
+    if __m3_guard_103_4.error is not None:
         enabled = True
-    try:
+    with guard_context(ctx='m3/m3_core.py:110', catch_base=False) as __m3_guard_107_4:
         floor_min = float(cfg.get("phi_floor_min", 0.005))
         floor_max = float(cfg.get("phi_floor_max", 0.05))
-    except Exception:
+
+    if __m3_guard_107_4.error is not None:
         floor_min, floor_max = 0.005, 0.05
     if not enabled:
         return policy
@@ -117,20 +121,22 @@ def _compute_phi_policy_from_history(
     vals = vals[np.isfinite(vals)]
     if vals.size <= 0:
         return policy
-    try:
+    with guard_context(ctx='m3/m3_core.py:122', catch_base=False) as __m3_guard_120_4:
         warmup = int(max(0, cfg.get("warmup_steps", 256)))
-    except Exception:
+
+    if __m3_guard_120_4.error is not None:
         warmup = 256
     if vals.size < warmup:
         p75 = float(np.quantile(vals, 0.75))
         policy["floor"] = float(np.clip(0.5 * max(0.0, p75), floor_min, floor_max))
         return _normalize_phi_policy(policy)
-    try:
+    with guard_context(ctx='m3/m3_core.py:133', catch_base=False) as __m3_guard_128_4:
         q_low = float(np.quantile(vals, float(cfg.get("quantile_low", 0.50))))
         q_mid = float(np.quantile(vals, float(cfg.get("quantile_mid", 0.75))))
         q_high = float(np.quantile(vals, float(cfg.get("quantile_high", 0.90))))
         hyst = float(max(0.0, cfg.get("announce_hysteresis", 0.02)))
-    except Exception:
+
+    if __m3_guard_128_4.error is not None:
         q_low, q_mid, q_high, hyst = 0.10, 0.30, 0.50, 0.02
     policy["floor"] = float(np.clip(0.5 * max(0.0, q_low), floor_min, floor_max))
     policy["low"] = float(max(policy["floor"] + 1e-4, q_low))
@@ -170,38 +176,48 @@ def _default_torch_device():
 # Ensure stdout/stderr can handle Unicode on Windows consoles (CP949, etc.)
 try:  # best-effort; never crash on setup
     import io
-    if hasattr(sys.stdout, "reconfigure"):
+    if attr_has(sys.stdout, "reconfigure"):
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            try:
+        except Exception as e:
+            with guard_context(ctx='m3/m3_core.py:180', catch_base=False) as __m3_guard_177_12:
                 import traceback as _tb
                 _tb.print_exc()
-            except Exception:
-                pass
-        try:
+
+            if __m3_guard_177_12.error is not None:
+                outer_e = __m3_guard_177_12.error
+                print(f"Failed to set stdout encoding: {e}, also failed to print trackback: {outer_e}")
+        with guard_context(ctx='m3/m3_core.py:184', catch_base=False) as __m3_guard_182_8:
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+
+        if __m3_guard_182_8.error is not None:
+            e = __m3_guard_182_8.error
+            print(f"Failed to reconfigure stderr encoding: {e}")
     else:
-        try:
+        with guard_context(ctx='m3/m3_core.py:189', catch_base=False) as __m3_guard_187_8:
             sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
-        except Exception:
-            pass
-        try:
+
+        if __m3_guard_187_8.error is not None:
+            e = __m3_guard_187_8.error
+            print(f"Failed to set stdout TextIOWrapper: {e}")
+        with guard_context(ctx='m3/m3_core.py:193', catch_base=False) as __m3_guard_191_8:
             sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
-        except Exception:
-            pass
+
+        if __m3_guard_191_8.error is not None:
+            e = __m3_guard_191_8.error
+            print(f"Failed to set stderr TextIOWrapper: {e}")
     # Try to switch Windows console code page to UTF-8 for correct rendering
     if os.name == "nt":
-        try:
+        with guard_context(ctx='m3/m3_core.py:201', catch_base=False) as __m3_guard_197_8:
             import ctypes
             ctypes.windll.kernel32.SetConsoleOutputCP(65001)
             ctypes.windll.kernel32.SetConsoleCP(65001)
-        except Exception:
-            pass
-except Exception:
-    pass
+
+        if __m3_guard_197_8.error is not None:
+            e = __m3_guard_197_8.error
+            print(f"Warning: Failed to set Windows Console CP to 65001: {e}")
+except Exception as setup_e:
+    print(f"Failed during Unicode setup: {setup_e}")
 
 # ==================== MULTI-LOOP MESSAGE PASSING INFRASTRUCTURE ====================
 
@@ -263,16 +279,18 @@ class MessageBus:
                 # Deliver to all modules except sender
                 for name in self.modules:
                     if name != msg.source:
-                        try:
+                        with guard_context(ctx='m3/m3_core.py:268', catch_base=True) as __m3_guard_266_24:
                             self.inboxes[name].put_nowait(msg)
-                        except:
+
+                        if __m3_guard_266_24.error is not None:
                             pass  # Queue full, drop message
             else:
                 # Direct message to specific module
                 if msg.target in self.inboxes:
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:275', catch_base=True) as __m3_guard_273_20:
                         self.inboxes[msg.target].put_nowait(msg)
-                    except:
+
+                    if __m3_guard_273_20.error is not None:
                         pass
     
     def receive(self, module_name: str, timeout: float = 0.001) -> Optional[Message]:
@@ -340,7 +358,7 @@ class MessageBus:
         gamma = float(signal.get('gamma', 0.98))
         window = int(signal.get('window', 8))
         
-        # Composite value: φ + stability + tool success + drive reward
+        # Composite value: ? + stability + tool success + drive reward
         value = (
             float(signal.get('phi_delta', 0.0)) +
             0.5 * float(signal.get('stability_delta', 0.0)) +
@@ -371,9 +389,10 @@ class MessageBus:
                     
                     # Direct send (bypass queue for immediate delivery)
                     if source in self.inboxes:
-                        try:
+                        with guard_context(ctx='m3/m3_core.py:376', catch_base=True) as __m3_guard_374_24:
                             self.inboxes[source].put_nowait(credit_msg)
-                        except:
+
+                        if __m3_guard_374_24.error is not None:
                             pass  # Queue full, drop message
 
 @dataclass
@@ -617,6 +636,21 @@ class PolicyMLP(nn.Module):
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=1e-3)
 
 
+def _validate_feature_bank_contract(fb: Any, where: str) -> None:
+    required = (
+        "_register_default_specs",
+        "set_log_paths",
+        "build",
+        "panels",
+        "register_spec",
+        "grow",
+    )
+    missing = [name for name in required if not callable(getattr(fb, name, None))]
+    if missing:
+        missing_text = ", ".join(sorted(missing))
+        raise AttributeError(f"FeatureBank contract violation at {where}: missing callable method(s): {missing_text}")
+
+
 class FeatureBank:
     """Build a fixed-length observation vector with optional input mask and running normalization."""
     def __init__(self, max_dim: int = 128, embed_dim: int = 32):
@@ -642,11 +676,7 @@ class FeatureBank:
         # FeatureSpec registry: ordered list of FeatureSpec
         self.specs: List[FeatureSpec] = []
         # initialize default specs to preserve legacy behavior
-        try:
-            self._register_default_specs()
-        except Exception:
-            # non-fatal: leave specs empty and fallback to legacy build
-            self.specs = []
+        self._register_default_specs()
         
         # === AUTONOMOUS GROWTH CONTROL ===
         self.growth_history: deque = deque(maxlen=256)
@@ -699,18 +729,14 @@ class FeatureBank:
         If no specs are registered, fall back to legacy compact observation.
         """
         # If no specs registered, keep small legacy fallback
-        if not getattr(self, 'specs', None):
+        if not attr_get_optional(self, 'specs', None):
             # Fallback to previous compact behavior (12D-ish)
-            try:
-                retina = core._vision_build_retina(size=(32, 32), foveate=True)
-                contrast, entropy, edge_density, depth_cue = core._vision_features(retina)
-                r_mean = float(np.mean(retina))
-            except Exception:
-                contrast = entropy = edge_density = 0.0
-                r_mean = 0.0
-            try:
+            contrast = entropy = edge_density = 0.0
+            r_mean = 0.0
+            with guard_context(ctx='m3/m3_core.py:713', catch_base=False) as __m3_guard_711_12:
                 last_phi = float(core.phi_calculator.phi_history[-1]) if core.phi_calculator.phi_history else 0.0
-            except Exception:
+
+            if __m3_guard_711_12.error is not None:
                 last_phi = 0.0
             obs = np.array([
                 r_mean, contrast, entropy, edge_density,
@@ -718,7 +744,7 @@ class FeatureBank:
                 float(core.self_model.meta_awareness),
                 float(core.energy_ctrl.activation_level),
                 float(core.unified_subject.unity_score),
-                float(core.world_state.get('stability', 0.5)) if hasattr(core, 'world_state') else 0.5,
+                float(core.world_state.get('stability', 0.5)) if attr_has(core, 'world_state') else 0.5,
                 float(core.qualia.arousal), float(core.qualia.valence), float(core.qualia.entropy)
             ], dtype=np.float32)
             obs = np.clip((obs - 0.5) * 2.0, -1.0, 1.0)
@@ -726,72 +752,65 @@ class FeatureBank:
 
         # Build a small context of commonly used derived values to avoid repeated computation
         ctx: Dict[str, Any] = {}
-        try:
-            ctx['vision.retina'] = core._vision_build_retina(size=(32, 32), foveate=True)
-            try:
-                c, e, ed, dc = core._vision_features(ctx['vision.retina'])
-            except Exception:
-                c = e = ed = dc = 0.0
-            ctx['vision.contrast'] = c
-            ctx['vision.entropy'] = e
-            ctx['vision.edge_density'] = ed
-            ctx['vision.depth_cue'] = dc
-            ctx['vision.r_mean'] = float(np.mean(ctx['vision.retina'])) if ctx['vision.retina'] is not None else 0.0
-        except Exception:
-            ctx['vision.retina'] = None
-            ctx['vision.contrast'] = ctx['vision.entropy'] = ctx['vision.edge_density'] = ctx['vision.depth_cue'] = 0.0
-            ctx['vision.r_mean'] = 0.0
-        try:
-            ph = list(core.phi_calculator.phi_history) if hasattr(core, 'phi_calculator') else []
+        with guard_context(ctx='m3/m3_core.py:749', catch_base=False) as __m3_guard_744_8:
+            ph = list(core.phi_calculator.phi_history) if attr_has(core, 'phi_calculator') else []
             ctx['phi.last'] = float(ph[-1]) if ph else 0.0
             ctx['phi.mean10'] = float(np.mean(ph[-10:])) if len(ph) >= 10 else ctx['phi.last']
             ctx['phi.delta'] = float(ph[-1] - ph[-2]) if len(ph) >= 2 else 0.0
-        except Exception:
+
+        if __m3_guard_744_8.error is not None:
             ctx['phi.last'] = ctx['phi.mean10'] = ctx['phi.delta'] = 0.0
-        try:
-            ctx['self.meta_awareness'] = float(getattr(core.self_model, 'meta_awareness', 0.0))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:753', catch_base=False) as __m3_guard_751_8:
+            ctx['self.meta_awareness'] = float(attr_get_optional(core.self_model, 'meta_awareness', 0.0))
+
+        if __m3_guard_751_8.error is not None:
             ctx['self.meta_awareness'] = 0.0
-        try:
-            ctx['self.meta_confidence'] = float(getattr(core.self_model, 'meta_confidence', 0.5))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:757', catch_base=False) as __m3_guard_755_8:
+            ctx['self.meta_confidence'] = float(attr_get_optional(core.self_model, 'meta_confidence', 0.5))
+
+        if __m3_guard_755_8.error is not None:
             ctx['self.meta_confidence'] = 0.5
-        try:
-            ctx['energy.activation'] = float(getattr(core.energy_ctrl, 'activation_level', 0.0))
+        with guard_context(ctx='m3/m3_core.py:762', catch_base=False) as __m3_guard_759_8:
+            ctx['energy.activation'] = float(attr_get_optional(core.energy_ctrl, 'activation_level', 0.0))
             ctx['energy.ratio'] = float(core.energy_ctrl.cognitive_energy / core.energy_ctrl.energy_capacity)
-        except Exception:
+
+        if __m3_guard_759_8.error is not None:
             ctx['energy.activation'] = 0.0
             ctx['energy.ratio'] = 0.5
-        try:
-            ctx['unity'] = float(getattr(core.unified_subject, 'unity_score', 0.0))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:767', catch_base=False) as __m3_guard_765_8:
+            ctx['unity'] = float(attr_get_optional(core.unified_subject, 'unity_score', 0.0))
+
+        if __m3_guard_765_8.error is not None:
             ctx['unity'] = 0.0
-        try:
-            ctx['stability'] = float(getattr(core, 'world_state', {}).get('stability', 0.5))
-            ctx['delta_hat'] = float(getattr(core, 'world_state', {}).get('delta_hat', 0.5))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:772', catch_base=False) as __m3_guard_769_8:
+            ctx['stability'] = float(attr_get_optional(core, 'world_state', {}).get('stability', 0.5))
+            ctx['delta_hat'] = float(attr_get_optional(core, 'world_state', {}).get('delta_hat', 0.5))
+
+        if __m3_guard_769_8.error is not None:
             ctx['stability'] = 0.5
             ctx['delta_hat'] = 0.5
-        try:
-            ctx['qualia.arousal'] = float(getattr(core.qualia, 'arousal', 0.0))
-            ctx['qualia.valence'] = float(getattr(core.qualia, 'valence', 0.0))
-            ctx['qualia.entropy'] = float(getattr(core.qualia, 'entropy', 0.0))
-            ctx['qualia.engagement'] = float(getattr(core.qualia, 'engagement', 0.0))
-            ctx['qualia.frustration'] = float(getattr(core.qualia, 'frustration', 0.0))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:781', catch_base=False) as __m3_guard_775_8:
+            ctx['qualia.arousal'] = float(attr_get_optional(core.qualia, 'arousal', 0.0))
+            ctx['qualia.valence'] = float(attr_get_optional(core.qualia, 'valence', 0.0))
+            ctx['qualia.entropy'] = float(attr_get_optional(core.qualia, 'entropy', 0.0))
+            ctx['qualia.engagement'] = float(attr_get_optional(core.qualia, 'engagement', 0.0))
+            ctx['qualia.frustration'] = float(attr_get_optional(core.qualia, 'frustration', 0.0))
+
+        if __m3_guard_775_8.error is not None:
             ctx['qualia.arousal'] = ctx['qualia.valence'] = ctx['qualia.entropy'] = ctx['qualia.engagement'] = ctx['qualia.frustration'] = 0.0
 
         # Language embedding
         try:
             utt = ''
-            try:
+            with guard_context(ctx='m3/m3_core.py:794', catch_base=False) as __m3_guard_787_12:
                 rep = core.self_model.introspect()
                 if isinstance(rep, dict):
                     import json as _json
                     utt = _json.dumps(rep, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
                 else:
                     utt = str(rep)
-            except Exception:
+
+            if __m3_guard_787_12.error is not None:
                 utt = ''
             lang = self._hash_embed(utt, self.embed_dim)
         except Exception:
@@ -803,13 +822,14 @@ class FeatureBank:
         applied: List[str] = []
         # Optional gating via Bus tokens (match by spec.name)
         gated_names: Optional[Set[str]] = None
-        try:
-            if self.use_bus_gating and getattr(core, 'bus', None) is not None:
+        with guard_context(ctx='m3/m3_core.py:812', catch_base=False) as __m3_guard_806_8:
+            if self.use_bus_gating and attr_get_optional(core, 'bus', None) is not None:
                 gated_names = set(core.bus.top_keys())
                 # If only generic 'policy' present, disable gating to avoid empty inputs
                 if not gated_names or gated_names.issubset({'policy'}):
                     gated_names = None
-        except Exception:
+
+        if __m3_guard_806_8.error is not None:
             gated_names = None
         for spec in self.specs:
             if not spec.active:
@@ -817,17 +837,18 @@ class FeatureBank:
             if gated_names is not None and spec.name not in gated_names:
                 continue
             # extract value
-            try:
+            with guard_context(ctx='m3/m3_core.py:827', catch_base=False) as __m3_guard_820_12:
                 if isinstance(spec.source, str):
                     val = ctx.get(spec.source, None)
                 elif callable(spec.source):
                     val = spec.source(core)
                 else:
                     val = None
-            except Exception:
+
+            if __m3_guard_820_12.error is not None:
                 val = None
             # pack
-            try:
+            with guard_context(ctx='m3/m3_core.py:841', catch_base=False) as __m3_guard_830_12:
                 if spec.packer == 'scalar':
                     outp = pack_scalar(val, spec.params)
                 elif spec.packer == 'stats_sample':
@@ -838,22 +859,24 @@ class FeatureBank:
                     outp = pack_learned_proj(val, spec.params)
                 else:
                     outp = pack_scalar(val, spec.params)
-            except Exception:
+
+            if __m3_guard_830_12.error is not None:
                 outp = np.zeros(spec.produced_dim if spec.produced_dim > 0 else 1, dtype=np.float32)
             # ensure length
-            try:
+            with guard_context(ctx='m3/m3_core.py:849', catch_base=False) as __m3_guard_844_12:
                 ln = outp.size
                 if spec.produced_dim != ln:
                     # align declared produced_dim with actual output
                     spec.produced_dim = int(ln)
-            except Exception:
-                pass
+
+            if __m3_guard_844_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             # A/B trial application: include spec output with probability epsilon when trialing
             apply_this = True
             tr = self._ab_trials.get(spec.name)
             if tr is not None and tr.get('active', False):
                 eps = float(tr.get('epsilon', 0.3))
-                apply_this = bool((core.rng.random() if hasattr(core, 'rng') else np.random.random()) < eps)
+                apply_this = bool((core.rng.random() if attr_has(core, 'rng') else np.random.random()) < eps)
             if apply_this:
                 start = len(packed)
                 packed.extend(outp.ravel().tolist())
@@ -862,10 +885,11 @@ class FeatureBank:
             else:
                 start = len(packed)
                 end = len(packed)
-            try:
+            with guard_context(ctx='m3/m3_core.py:867', catch_base=False) as __m3_guard_865_12:
                 self._ranges[spec.name] = (start, end)
-            except Exception:
-                pass
+
+            if __m3_guard_865_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             if len(packed) >= capacity:
                 break
 
@@ -883,10 +907,10 @@ class FeatureBank:
         self._last_applied_specs = applied
         # Broadcast top-K spec tokens to Bus with English keys (spec.name)
         try:
-            if getattr(core, 'bus', None) is not None:
+            if attr_get_optional(core, 'bus', None) is not None:
                 sal_list = []
                 for spec in self.specs:
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:899', catch_base=False) as __m3_guard_889_20:
                         rng = self._ranges.get(spec.name)
                         if not rng:
                             continue
@@ -896,38 +920,40 @@ class FeatureBank:
                         vec = out[i0:i1].astype(np.float32)
                         sal = float(np.sqrt(np.mean((vec * vec))))
                         sal_list.append((sal, spec.name, vec))
-                    except Exception:
+
+                    if __m3_guard_889_20.error is not None:
                         continue
                 sal_list.sort(key=lambda x: x[0], reverse=True)
                 for sal, name, vec in sal_list[:4]:
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:905', catch_base=False) as __m3_guard_903_20:
                         core.bus.push('feature', name, vec, salience=float(sal), confidence=0.8, ttl=5)
-                    except Exception:
-                        pass
+
+                    if __m3_guard_903_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
                 core.bus.step()
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Swallowed exception")
         return z.astype(np.float32)
 
     def panels(self, core: "M3ConsciousnessCore") -> list[np.ndarray]:
         """
-        Φ_total을 의미층별 '패널'로 쪼개어 D차 벡터 리스트로 반환한다.
-        각 패널 = 메모리 토큰 1개로 사용.
-        반환: [v1, v2, ..., vM], 각 v_i.shape == (D,)
+        過_total???섎?痢듬퀎 '?⑤꼸'濡?履쇨컻??D李?踰≫꽣 由ъ뒪?몃줈 諛섑솚?쒕떎.
+        媛??⑤꼸 = 硫붾え由??좏겙 1媛쒕줈 ?ъ슜.
+        諛섑솚: [v1, v2, ..., vM], 媛?v_i.shape == (D,)
         """
-        D = int(getattr(self, "embed_dim", 32))  # 패널 임베딩 차원
+        D = int(attr_get_optional(self, "embed_dim", 32))  # ?⑤꼸 ?꾨쿋??李⑥썝
         
         def _to_panel(x: np.ndarray | list[float] | float) -> np.ndarray:
-            """입력 스칼라/벡터를 길이 D의 float32 패널로 변환(정규화+패딩/절단)."""
+            """?낅젰 ?ㅼ뭡??踰≫꽣瑜?湲몄씠 D??float32 ?⑤꼸濡?蹂???뺢퇋???⑤뵫/?덈떒)."""
             arr = np.atleast_1d(np.array(x, dtype=np.float32)).ravel()
             if arr.size == 0:
                 arr = np.zeros(1, dtype=np.float32)
-            # 간단 정규화(robust): 평균-분산 정규화 후 tanh로 스케일 억제
+            # 媛꾨떒 ?뺢퇋??robust): ?됯퇏-遺꾩궛 ?뺢퇋????tanh濡??ㅼ????듭젣
             mu = float(np.mean(arr))
             sd = float(np.std(arr) + 1e-6)
             z = (arr - mu) / sd
             z = np.tanh(z)
-            # 길이 맞추기
+            # 湲몄씠 留욎텛湲?
             if z.size < D:
                 out = np.zeros(D, dtype=np.float32)
                 out[:z.size] = z
@@ -935,65 +961,58 @@ class FeatureBank:
             else:
                 return z[:D].astype(np.float32)
 
-        # ---- 공통 컨텍스트(기존 build()와 유사) ----
+        # ---- 怨듯넻 而⑦뀓?ㅽ듃(湲곗〈 build()? ?좎궗) ----
         ctx: dict[str, float | np.ndarray] = {}
-        # Vision/환경 파생량
-        try:
-            retina = core._vision_build_retina(size=(32, 32), foveate=True)
-            c, e, ed, dc = core._vision_features(retina)
-            r_mean = float(np.mean(retina)) if retina is not None else 0.0
-        except Exception:
-            c = e = ed = dc = 0.0
-            r_mean = 0.0
-        ctx["vision.contrast"] = float(c)
-        ctx["vision.entropy"] = float(e)
-        ctx["vision.edge_density"] = float(ed)
-        ctx["vision.depth_cue"] = float(dc)
-        ctx["vision.r_mean"] = float(r_mean)
+        # Vision/?섍꼍 ?뚯깮??
 
-        # φ/안정성/에너지/주체/정신상태
-        try:
-            ph = list(core.phi_calculator.phi_history) if hasattr(core, "phi_calculator") else []
+        # ?/?덉젙???먮꼫吏/二쇱껜/?뺤떊?곹깭
+        with guard_context(ctx='m3/m3_core.py:960', catch_base=False) as __m3_guard_955_8:
+            ph = list(core.phi_calculator.phi_history) if attr_has(core, "phi_calculator") else []
             phi_last = float(ph[-1]) if ph else 0.0
             phi_delta = float(ph[-1] - ph[-2]) if len(ph) >= 2 else 0.0
             phi_mean10 = float(np.mean(ph[-10:])) if len(ph) >= 10 else phi_last
-        except Exception:
+
+        if __m3_guard_955_8.error is not None:
             phi_last = phi_delta = phi_mean10 = 0.0
         ctx["phi.last"] = phi_last
         ctx["phi.delta"] = phi_delta
         ctx["phi.mean10"] = phi_mean10
 
-        try:
-            stability = float(getattr(core, "world_state", {}).get("stability", 0.5))
-            delta_hat = float(getattr(core, "world_state", {}).get("delta_hat", 0.5))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:969', catch_base=False) as __m3_guard_966_8:
+            stability = float(attr_get_optional(core, "world_state", {}).get("stability", 0.5))
+            delta_hat = float(attr_get_optional(core, "world_state", {}).get("delta_hat", 0.5))
+
+        if __m3_guard_966_8.error is not None:
             stability = 0.5
             delta_hat = 0.5
         ctx["stability"] = stability
         ctx["delta_hat"] = delta_hat
 
-        try:
-            energy_act = float(getattr(core.energy_ctrl, "activation_level", 0.0))
+        with guard_context(ctx='m3/m3_core.py:978', catch_base=False) as __m3_guard_975_8:
+            energy_act = float(attr_get_optional(core.energy_ctrl, "activation_level", 0.0))
             energy_ratio = float(core.energy_ctrl.cognitive_energy / core.energy_ctrl.energy_capacity)
-        except Exception:
+
+        if __m3_guard_975_8.error is not None:
             energy_act = 0.0
             energy_ratio = 0.5
         ctx["energy.activation"] = energy_act
         ctx["energy.ratio"] = energy_ratio
 
-        try:
-            unity = float(getattr(core.unified_subject, "unity_score", 0.0))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:986', catch_base=False) as __m3_guard_984_8:
+            unity = float(attr_get_optional(core.unified_subject, "unity_score", 0.0))
+
+        if __m3_guard_984_8.error is not None:
             unity = 0.0
         ctx["unity"] = unity
 
-        try:
-            arousal = float(getattr(core.qualia, "arousal", 0.0))
-            valence = float(getattr(core.qualia, "valence", 0.0))
-            qent = float(getattr(core.qualia, "entropy", 0.0))
-            engage = float(getattr(core.qualia, "engagement", 0.0))
-            frustr = float(getattr(core.qualia, "frustration", 0.0))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:996', catch_base=False) as __m3_guard_990_8:
+            arousal = float(attr_get_optional(core.qualia, "arousal", 0.0))
+            valence = float(attr_get_optional(core.qualia, "valence", 0.0))
+            qent = float(attr_get_optional(core.qualia, "entropy", 0.0))
+            engage = float(attr_get_optional(core.qualia, "engagement", 0.0))
+            frustr = float(attr_get_optional(core.qualia, "frustration", 0.0))
+
+        if __m3_guard_990_8.error is not None:
             arousal = valence = qent = engage = frustr = 0.0
         ctx["qualia.arousal"] = arousal
         ctx["qualia.valence"] = valence
@@ -1001,21 +1020,22 @@ class FeatureBank:
         ctx["qualia.engagement"] = engage
         ctx["qualia.frustration"] = frustr
 
-        # 최근 RPE/엔트로피/메타 등 시계열(있으면)
-        try:
-            rpe_hist = np.asarray(getattr(core, "rpe_history", [])[-32:], dtype=np.float32)
-        except Exception:
+        # 理쒓렐 RPE/?뷀듃濡쒗뵾/硫뷀? ???쒓퀎???덉쑝硫?
+        with guard_context(ctx='m3/m3_core.py:1007', catch_base=False) as __m3_guard_1005_8:
+            rpe_hist = np.asarray(attr_get_optional(core, "rpe_history", [])[-32:], dtype=np.float32)
+
+        if __m3_guard_1005_8.error is not None:
             rpe_hist = np.zeros(0, dtype=np.float32)
-        try:
-            ent_hist = np.asarray(getattr(core, "entropy_history", [])[-32:], dtype=np.float32)
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:1011', catch_base=False) as __m3_guard_1009_8:
+            ent_hist = np.asarray(attr_get_optional(core, "entropy_history", [])[-32:], dtype=np.float32)
+
+        if __m3_guard_1009_8.error is not None:
             ent_hist = np.zeros(0, dtype=np.float32)
 
-        # 툴콜/버스 이벤트 통계(있으면)
+        # ?댁퐳/踰꾩뒪 ?대깽???듦퀎(?덉쑝硫?
         tool_counts = np.zeros(8, dtype=np.float32)
-        try:
-            # 최근 N개 툴콜 로그에서 성공/실패/지연을 요약 (핵심 통계만)
-            logs = list(getattr(core, "tool_logs", [])[-64:])
+        with guard_context(ctx='m3/m3_core.py:1034', catch_base=False) as __m3_guard_1016_8:
+            logs = list(attr_get_optional(core, "tool_logs", [])[-64:])
             succ = sum(1 for L in logs if L.get("ok"))
             fail = sum(1 for L in logs if not L.get("ok"))
             lat = np.array([float(L.get("latency_ms", 0.0)) for L in logs], dtype=np.float32)
@@ -1023,7 +1043,7 @@ class FeatureBank:
             tool_counts[1] = float(fail)
             tool_counts[2] = float(np.mean(lat) if lat.size else 0.0)
             tool_counts[3] = float(np.std(lat) if lat.size else 0.0)
-            # 간단 토픽/툴 태그 상위 빈도(최대 4개만 카운팅처럼)
+            # 媛꾨떒 ?좏뵿/???쒓렇 ?곸쐞 鍮덈룄(理쒕? 4媛쒕쭔 移댁슫?낆쿂??
             tags = {}
             for L in logs:
                 t = str(L.get("tool", "unk"))[:12]
@@ -1031,37 +1051,44 @@ class FeatureBank:
             top = sorted(tags.items(), key=lambda x: x[1], reverse=True)[:4]
             for i, (_, v) in enumerate(top, start=4):
                 tool_counts[i] = float(v)
-        except Exception:
-            pass
+
+        if __m3_guard_1016_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
         bus_counts = np.zeros(6, dtype=np.float32)
-        try:
-            # MessageBus 상위 키/타입/지연 등 요약 (있으면)
-            bus = getattr(core, "bus", None)
+        with guard_context(ctx='m3/m3_core.py:1051', catch_base=False) as __m3_guard_1038_8:
+            bus = attr_get_optional(core, "bus", None)
             if bus is not None:
-                # 안전하게 접근 (top_keys()가 있으면 사용)
-                if hasattr(bus, "top_keys"):
+                # ?덉쟾?섍쾶 ?묎렐 (top_keys()媛 ?덉쑝硫??ъ슜)
+                if attr_has(bus, "top_keys"):
                     klist = list(bus.top_keys())[:4]
                     for i, _ in enumerate(klist):
-                        bus_counts[i] = 1.0  # 존재 플래그
-                if hasattr(bus, "latency_ms"):
-                    bus_counts[4] = float(getattr(bus, "latency_ms", 0.0))
-                if hasattr(bus, "depth"):
-                    bus_counts[5] = float(getattr(bus, "depth", 0.0))
-        except Exception:
-            pass
+                        bus_counts[i] = 1.0  # 議댁옱 ?뚮옒洹?
+                if attr_has(bus, "latency_ms"):
+                    bus_counts[4] = float(attr_get_optional(bus, "latency_ms", 0.0))
+                if attr_has(bus, "depth"):
+                    bus_counts[5] = float(attr_get_optional(bus, "depth", 0.0))
 
-        # ---- 패널 구성: 각기 다른 의미층을 D차 벡터로 ----
+        if __m3_guard_1038_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+
+        # ---- ?⑤꼸 援ъ꽦: 媛곴린 ?ㅻⅨ ?섎?痢듭쓣 D李?踰≫꽣濡?----
         stability_panel = _to_panel([
             ctx["stability"], ctx["delta_hat"], ctx["energy.activation"], ctx["energy.ratio"], ctx["unity"],
             ctx["qualia.arousal"], ctx["qualia.valence"], ctx["qualia.entropy"]
         ])
         topo_panel = _to_panel([
-            ctx["vision.contrast"], ctx["vision.entropy"], ctx["vision.edge_density"], ctx["vision.depth_cue"],
-            ctx["phi.last"], ctx["phi.delta"], ctx["phi.mean10"], ctx["vision.r_mean"]
+            ctx["phi.last"],
+            ctx["phi.delta"],
+            ctx["phi.mean10"],
+            ctx["stability"],
+            ctx["delta_hat"],
+            ctx["energy.activation"],
+            ctx["energy.ratio"],
+            ctx["unity"],
         ])
         time_panel = _to_panel(np.concatenate([
-            # 최근 시계열 2종을 간단히 평균/분산/최댓값 등 요약 + 원본 일부
+            # 理쒓렐 ?쒓퀎??2醫낆쓣 媛꾨떒???됯퇏/遺꾩궛/理쒕뙎媛????붿빟 + ?먮낯 ?쇰?
             np.array([np.mean(rpe_hist) if rpe_hist.size else 0.0,
                       np.std(rpe_hist) if rpe_hist.size else 0.0,
                       np.max(rpe_hist) if rpe_hist.size else 0.0,
@@ -1074,11 +1101,12 @@ class FeatureBank:
         tool_panel = _to_panel(tool_counts)
         bus_panel = _to_panel(bus_counts)
 
-        # (옵션) 주제/토픽 패널: 간단히 최근 언어 임베딩/키워드 요약이 있으면 사용
-        try:
-            lang = getattr(core, "language_embed", None)
+        # (?듭뀡) 二쇱젣/?좏뵿 ?⑤꼸: 媛꾨떒??理쒓렐 ?몄뼱 ?꾨쿋???ㅼ썙???붿빟???덉쑝硫??ъ슜
+        with guard_context(ctx='m3/m3_core.py:1081', catch_base=False) as __m3_guard_1078_8:
+            lang = attr_get_optional(core, "language_embed", None)
             topic_panel = _to_panel(lang if isinstance(lang, np.ndarray) else np.zeros(D, dtype=np.float32))
-        except Exception:
+
+        if __m3_guard_1078_8.error is not None:
             topic_panel = _to_panel(np.zeros(D, dtype=np.float32))
 
         panels: list[np.ndarray] = [stability_panel, topo_panel, time_panel, tool_panel, bus_panel, topic_panel]
@@ -1093,17 +1121,18 @@ class FeatureBank:
         Expects attributes like self.utilization, self.entropy, self.mi (list/array-like).
         """
         import numpy as _np
-        n = len(getattr(self, 'active_features', [])) if hasattr(self, 'active_features') else 0
+        n = len(attr_get_optional(self, 'active_features', [])) if attr_has(self, 'active_features') else 0
         if n == 0:
             return _np.zeros(0, dtype=float)
         def _to_arr(name):
-            v = getattr(self, name, None)
-            try:
+            v = attr_get_optional(self, name, None)
+            with guard_context(ctx='m3/m3_core.py:1105', catch_base=False) as __m3_guard_1101_12:
                 a = _np.asarray(v, dtype=float)
                 if a.ndim == 1 and len(a) >= n:
                     return a[:n]
-            except Exception:
-                pass
+
+            if __m3_guard_1101_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             return None
         if criterion == 'util':
             a = _to_arr('utilization')
@@ -1147,22 +1176,23 @@ class FeatureBank:
             return mat
 
         # apply to common fields
-        if hasattr(self, 'active_features') and isinstance(self.active_features, list):
+        if attr_has(self, 'active_features') and isinstance(self.active_features, list):
             self.active_features = _filter_list(self.active_features)
-        if hasattr(self, 'features') and isinstance(self.features, list):
+        if attr_has(self, 'features') and isinstance(self.features, list):
             self.features = _filter_list(self.features)
-        if hasattr(self, 'weights') and getattr(self, 'weights', None) is not None:
+        if attr_has(self, 'weights') and attr_get_optional(self, 'weights', None) is not None:
             self.weights = _filter_2d(self.weights)
         # optional aligned arrays
         for name in ('utilization', 'entropy', 'mi'):
-            if hasattr(self, name):
-                arr = getattr(self, name)
-                try:
+            if attr_has(self, name):
+                arr = attr_get_optional(self, name)
+                with guard_context(ctx='m3/m3_core.py:1164', catch_base=False) as __m3_guard_1160_16:
                     a = _np.asarray(arr)
                     if a.ndim == 1 and len(a) >= n:
-                        setattr(self, name, a[ranks[:k]].tolist())
-                except Exception:
-                    pass
+                        attr_set(self, name, a[ranks[:k]].tolist())
+
+                if __m3_guard_1160_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
     def merge(self, spec: dict | None = None):
         """
         Merge highly similar features (cosine sim on weight rows) and merge aligned stats.
@@ -1181,14 +1211,14 @@ class FeatureBank:
 
         thr = float(spec.get('sim_threshold', 0.95))
         max_pairs = int(spec.get('max_pairs', 128))
-        W = getattr(self, 'weights', None)
+        W = attr_get_optional(self, 'weights', None)
         if W is None:
             return
         A = _np.asarray(W, dtype=float)
         if A.ndim != 2 or A.shape[0] < 2:
             return
         n = A.shape[0]
-        counts = getattr(self, 'feat_counts', None)
+        counts = attr_get_optional(self, 'feat_counts', None)
         if counts is None or len(counts) < n:
             counts = [1.0] * n
         counts = _np.asarray(counts, dtype=float)[:n]
@@ -1225,8 +1255,8 @@ class FeatureBank:
 
         k = A2.shape[0]
         def _realign_1d(name, reducer='mean'):
-            if not hasattr(self, name): return
-            arr = _np.asarray(getattr(self, name))
+            if not attr_has(self, name): return
+            arr = _np.asarray(attr_get_optional(self, name))
             out = []
             for keep in map_keep:
                 if len(keep) == 2:
@@ -1239,18 +1269,18 @@ class FeatureBank:
                         out.append(float(0.5*(arr[i]+arr[j])))
                 else:
                     out.append(float(arr[keep[0]]))
-            setattr(self, name, out[:k])
+            attr_set(self, name, out[:k])
 
         for nm in ('utilization', 'entropy', 'mi'):
             _realign_1d(nm, reducer='mean')
 
         for name in ('active_features', 'features'):
-            if hasattr(self, name) and isinstance(getattr(self, name), list):
-                lst = getattr(self, name)
+            if attr_has(self, name) and isinstance(attr_get_optional(self, name), list):
+                lst = attr_get_optional(self, name)
                 out = []
                 for keep in map_keep:
                     out.append(lst[keep[0]] if len(keep)==1 else f"{lst[keep[0]]}+{lst[keep[1]]}")
-                setattr(self, name, out[:k])
+                attr_set(self, name, out[:k])
 
         def _row_norm(x):
             n = _np.linalg.norm(x, axis=1, keepdims=True) + 1e-12
@@ -1282,20 +1312,112 @@ class FeatureBank:
         self.weights = A2.tolist()
         # if we track active_features/features, truncate to new size
         k = A2.shape[0]
-        if hasattr(self, 'active_features') and isinstance(self.active_features, list):
+        if attr_has(self, 'active_features') and isinstance(self.active_features, list):
             self.active_features = self.active_features[:k]
-        if hasattr(self, 'features') and isinstance(self.features, list):
+        if attr_has(self, 'features') and isinstance(self.features, list):
             self.features = self.features[:k]
         # aligned arrays
         for name in ('utilization', 'entropy', 'mi'):
-            if hasattr(self, name):
-                arr = getattr(self, name)
-                try:
+            if attr_has(self, name):
+                arr = attr_get_optional(self, name)
+                with guard_context(ctx='m3/m3_core.py:1297', catch_base=False) as __m3_guard_1293_16:
                     a = _np.asarray(arr)
                     if a.ndim == 1 and len(a) >= k:
-                        setattr(self, name, a[:k].tolist())
-                except Exception:
-                    pass
+                        attr_set(self, name, a[:k].tolist())
+
+                if __m3_guard_1293_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
+
+    # --------- FeatureSpec registry / growth / logging ---------
+    def set_log_paths(self, outdir: str) -> None:
+        os.makedirs(outdir, exist_ok=True)
+        self._provenance_path = os.path.join(outdir, 'feature_provenance.jsonl')
+        self._metrics_path = os.path.join(outdir, 'metrics.jsonl')
+
+    def _log_jsonl(self, path: Optional[str], rec: Dict[str, Any]) -> None:
+        if not path:
+            return
+        _write_jsonl_safe(path, rec)
+
+    def register_spec(self, spec: FeatureSpec) -> None:
+        self.specs.append(spec)
+
+    def unregister_spec(self, name: str) -> bool:
+        keep = [s for s in self.specs if s.name != name]
+        if len(keep) != len(self.specs):
+            self.specs = keep
+            return True
+        return False
+
+    def compute_total_produced_dim(self) -> int:
+        return int(sum(attr_get_optional(s, 'produced_dim', 1) for s in self.specs if attr_get_optional(s, 'active', True)))
+
+    def grow(self, new_max_dim: int, new_embed_dim: int | None = None) -> None:
+        new_max_dim = int(new_max_dim)
+        if new_max_dim <= self.max_dim:
+            return
+        old = int(self.max_dim)
+        add = new_max_dim - old
+        self.mu = np.concatenate([self.mu, np.zeros(add, dtype=np.float32)])
+        self.s2 = np.concatenate([self.s2, np.ones(add, dtype=np.float32)])
+        self.input_mask = np.concatenate([self.input_mask, np.ones(add, dtype=np.float32)])
+        if new_embed_dim is not None:
+            self.embed_dim = int(min(int(new_embed_dim), new_max_dim))
+        self.max_dim = int(new_max_dim)
+
+    def _register_default_specs(self) -> None:
+        self.specs = []
+        # phi trends
+        self.register_spec(FeatureSpec(name='phi.last', source='phi.last', packer='scalar', produced_dim=1))
+        self.register_spec(FeatureSpec(name='phi.mean10', source='phi.mean10', packer='scalar', produced_dim=1))
+        self.register_spec(FeatureSpec(name='phi.delta', source='phi.delta', packer='scalar', produced_dim=1))
+        # internal scalars
+        self.register_spec(FeatureSpec(name='self.meta_awareness', source='self.meta_awareness', packer='scalar', produced_dim=1))
+        self.register_spec(FeatureSpec(name='self.meta_confidence', source='self.meta_confidence', packer='scalar', produced_dim=1))
+        self.register_spec(FeatureSpec(name='energy.activation', source='energy.activation', packer='scalar', produced_dim=1))
+        self.register_spec(FeatureSpec(name='energy.ratio', source='energy.ratio', packer='scalar', produced_dim=1))
+        self.register_spec(FeatureSpec(name='unity', source='unity', packer='scalar', produced_dim=1))
+        self.register_spec(FeatureSpec(name='stability', source='stability', packer='scalar', produced_dim=1))
+        self.register_spec(FeatureSpec(name='delta_hat', source='delta_hat', packer='scalar', produced_dim=1))
+        # qualia
+        self.register_spec(FeatureSpec(name='qualia.arousal', source='qualia.arousal', packer='scalar', produced_dim=1))
+        self.register_spec(FeatureSpec(name='qualia.valence', source='qualia.valence', packer='scalar', produced_dim=1))
+        self.register_spec(FeatureSpec(name='qualia.entropy', source='qualia.entropy', packer='scalar', produced_dim=1))
+        self.register_spec(FeatureSpec(name='qualia.engagement', source='qualia.engagement', packer='scalar', produced_dim=1))
+        self.register_spec(FeatureSpec(name='qualia.frustration', source='qualia.frustration', packer='scalar', produced_dim=1))
+
+    def ab_update(self, reward: float, applied_names: Optional[List[str]] = None, kl: float = 0.0, clipped: bool = False) -> None:
+        names = list(applied_names or [])
+        for name in names:
+            st = self._ab_trials.setdefault(name, {"n": 0, "reward_sum": 0.0, "kl_sum": 0.0, "clipped_count": 0})
+            st["n"] = int(st.get("n", 0)) + 1
+            st["reward_sum"] = float(st.get("reward_sum", 0.0)) + float(reward)
+            st["kl_sum"] = float(st.get("kl_sum", 0.0)) + float(kl)
+            if clipped:
+                st["clipped_count"] = int(st.get("clipped_count", 0)) + 1
+
+    def adaptive_grow(self, current_time: float, core: Any, apply: bool = True) -> Optional[Dict[str, Any]]:
+        if (float(current_time) - float(self.last_growth_time)) < float(self.growth_cooldown):
+            return None
+        if self._last_built_z is None:
+            return None
+        util = float(np.mean(np.abs(self._last_built_z) > 1e-3))
+        if util < float(self.adaptive_growth_threshold):
+            return None
+        old_dim = int(self.max_dim)
+        new_dim = int(min(4096, old_dim + max(16, old_dim // 4)))
+        if new_dim <= old_dim:
+            return None
+        if apply:
+            self.grow(new_dim, self.embed_dim)
+            self.last_growth_time = float(current_time)
+        return {
+            "timestamp": float(current_time),
+            "old_max_dim": old_dim,
+            "new_max_dim": int(self.max_dim if apply else new_dim),
+            "reason": f"feature_utilization({util:.3f})",
+            "applied": bool(apply),
+        }
 
 class SkillsManager:
     def __init__(self, window: int = 256, bias: float = 0.2):
@@ -1305,7 +1427,7 @@ class SkillsManager:
         self._counts: Dict[Tuple[str, ...], int] = {}
 
     def observe(self, keys: List[str]) -> None:
-        try:
+        with guard_context(ctx='m3/m3_core.py:1323', catch_base=False) as __m3_guard_1308_8:
             keys = [str(k) for k in keys if isinstance(k, str)]
             if not keys:
                 return
@@ -1320,11 +1442,12 @@ class SkillsManager:
                 combos.append((ks[0], ks[1], ks[2]))
             for c in combos:
                 self._counts[c] = self._counts.get(c, 0) + 1
-        except Exception:
-            pass
+
+        if __m3_guard_1308_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def get_gate_biases(self, active: List[str]) -> Dict[str, float]:
-        try:
+        with guard_context(ctx='m3/m3_core.py:1342', catch_base=False) as __m3_guard_1327_8:
             if not active:
                 return {}
             s = set(active)
@@ -1339,7 +1462,8 @@ class SkillsManager:
                 return {}
             # assign a small positive bias to specs in the best combo
             return {k: self.bias for k in best_c if k in s}
-        except Exception:
+
+        if __m3_guard_1327_8.error is not None:
             return {}
 
 
@@ -1385,7 +1509,7 @@ class SharedRepresentation:
         X_window is [T, max_dim] raw (pre-normalization) feature matrix.
         Returns the new embed_dim actually set (clamped to [4, cap]).
         """
-        try:
+        with guard_context(ctx='m3/m3_core.py:1402', catch_base=False) as __m3_guard_1388_8:
             X = np.asarray(X_window, dtype=np.float32)
             if X.ndim != 2 or X.shape[1] <= 0:
                 return int(self.embed_dim)
@@ -1399,43 +1523,45 @@ class SharedRepresentation:
             m = max(4, min(int(cap), int(m)))
             self.embed_dim = int(m)
             return int(m)
-        except Exception:
+
+        if __m3_guard_1388_8.error is not None:
             return int(self.embed_dim)
 
     # --------- Advanced autodiscovery / pruning / logging ---------
     def set_log_paths(self, outdir: str) -> None:
-        try:
-            os.makedirs(outdir, exist_ok=True)
-        except Exception:
-            pass
+        os.makedirs(outdir, exist_ok=True)
         self._provenance_path = os.path.join(outdir, 'feature_provenance.jsonl')
         self._metrics_path = os.path.join(outdir, 'metrics.jsonl')
 
     def _log_jsonl(self, path: Optional[str], rec: Dict[str, Any]) -> None:
         if not path:
             return
-        try:
-            with open(path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
+        with guard_context(ctx='m3/m3_core.py:1421', catch_base=False) as __m3_guard_1418_8:
+            _write_jsonl_safe(path, rec)
+
+        if __m3_guard_1418_8.error is not None:
+            e = __m3_guard_1418_8.error
+            import logging
+            logging.debug(f"_log_jsonl failed to write to {path}: {e}")
 
     def autodiscover(self, core: Any, controller: Any, trials: int = 8, dim_budget: int = 32,
                      score_thresh: float = 0.02, lambda_size: float = 1e-5) -> List[FeatureSpec]:
         accepted: List[FeatureSpec] = []
-        try:
+        with guard_context(ctx='m3/m3_core.py:1430', catch_base=False) as __m3_guard_1428_8:
             base = self.build(core)
-        except Exception:
+
+        if __m3_guard_1428_8.error is not None:
             base = np.zeros((self.max_dim,), dtype=np.float32)
         # ask controller for candidates
-        try:
+        with guard_context(ctx='m3/m3_core.py:1435', catch_base=False) as __m3_guard_1433_8:
             cands = controller.decide(base, k=trials)
-        except Exception:
+
+        if __m3_guard_1433_8.error is not None:
             cands = []
         added = 0
         for spec in cands:
             score, meta = self._score_spec(core, base, spec)
-            cost = float(max(1, getattr(spec, 'produced_dim', 1)))
+            cost = float(max(1, attr_get_optional(spec, 'produced_dim', 1)))
             score_adj = float(score - (lambda_size * cost))
             if score_adj >= float(score_thresh) and (added + cost) <= float(dim_budget):
                 try:
@@ -1444,38 +1570,46 @@ class SharedRepresentation:
                     added += int(cost)
                     spec_id = hashlib.blake2b(json.dumps({'source':spec.source, 'packer':spec.packer, 'params':spec.params}, default=str).encode('utf-8'), digest_size=8).hexdigest()
                     # begin AB trial for this spec
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:1451', catch_base=False) as __m3_guard_1449_20:
                         self.start_ab_trial(spec.name, epsilon=0.3, trial_steps=1000)
-                    except Exception:
-                        pass
+
+                    if __m3_guard_1449_20.error is not None:
+                        e = __m3_guard_1449_20.error
+                        import logging
+                        logging.debug(f"autodiscover failed to start AB trial: {e}")
                     self._log_jsonl(self._provenance_path, {
-                        'ts': int(getattr(core, 't', 0)), 'event': 'spec_adopt', 'spec_id': spec_id,
+                        'ts': int(attr_get_optional(core, 't', 0)), 'event': 'spec_adopt', 'spec_id': spec_id,
                         'name': spec.name, 'source': str(spec.source), 'packer': spec.packer,
                         'params': spec.params, 'produced_dim': int(spec.produced_dim),
                         'score': float(score), 'mi': float(meta.get('mi', 0.0)),
                         'fisher': float(meta.get('fi', 0.0)), 'red': float(meta.get('red', 0.0)),
                         'cost': float(cost), 'reason': 'autodiscover'} )
-                except Exception:
-                    pass
+                except Exception as e:
+                    import logging
+                    logging.debug(f"autodiscover failed to logic for spec {spec.name}: {e}")
             # feedback to controller
-            try:
+            with guard_context(ctx='m3/m3_core.py:1467', catch_base=False) as __m3_guard_1465_12:
                 controller.observe(reward=float(max(0.0, score_adj)), action_meta=meta)
-            except Exception:
-                pass
+
+            if __m3_guard_1465_12.error is not None:
+                e = __m3_guard_1465_12.error
+                import logging
+                logging.debug(f"autodiscover controller.observe failed: {e}")
         return accepted
 
     def _score_spec(self, core: Any, base_vec: np.ndarray, spec: "FeatureSpec") -> Tuple[float, Dict[str, Any]]:
         # 1) extract and pack
-        try:
+        with guard_context(ctx='m3/m3_core.py:1483', catch_base=False) as __m3_guard_1474_8:
             val = None
             if isinstance(spec.source, str):
                 # use ctx-like accessor if available
-                val = getattr(core, 'get_ctx', lambda k: None)(spec.source) if hasattr(core, 'get_ctx') else None
+                val = attr_get_optional(core, 'get_ctx', lambda k: None)(spec.source) if attr_has(core, 'get_ctx') else None
                 if val is None:
-                    val = getattr(core, spec.source.replace('.', '_'), None)
+                    val = attr_get_optional(core, spec.source.replace('.', '_'), None)
             elif callable(spec.source):
                 val = spec.source(core)
-        except Exception:
+
+        if __m3_guard_1474_8.error is not None:
             val = None
         outp = np.asarray(self._pack_spec(spec, val), dtype=np.float32).ravel()
         if outp.size == 0:
@@ -1490,14 +1624,17 @@ class SharedRepresentation:
         return score, {'mi': float(mi), 'fi': float(fi), 'red': float(red), 'spec': spec.name}
 
     def _pack_spec(self, spec: "FeatureSpec", val: Any) -> np.ndarray:
-        try:
+        with guard_context(ctx='m3/m3_core.py:1503', catch_base=False) as __m3_guard_1498_8:
             if spec.packer == 'scalar':        return pack_scalar(val, spec.params)
             if spec.packer == 'stats_sample':  return pack_stats_sample(val, spec.params)
             if spec.packer == 'spatial_pool':  return pack_spatial_pool(val, spec.params)
             if spec.packer == 'learned_proj':  return pack_learned_proj(val, spec.params)
-        except Exception:
-            pass
-        return np.zeros((max(1, getattr(spec, 'produced_dim', 1)),), dtype=np.float32)
+
+        if __m3_guard_1498_8.error is not None:
+            e = __m3_guard_1498_8.error
+            import logging
+            logging.debug(f"_pack_spec failed for {spec.packer}: {e}")
+        return np.zeros((max(1, attr_get_optional(spec, 'produced_dim', 1)),), dtype=np.float32)
 
     def _assemble_with_extra(self, base: np.ndarray, extra: np.ndarray) -> np.ndarray:
         out = np.zeros_like(base, dtype=np.float32)
@@ -1512,8 +1649,8 @@ class SharedRepresentation:
 
     def _mi_with_advantage(self, core: Any, x: np.ndarray) -> float:
         # Advantage buffer from policy end_batch (normalized)
-        try:
-            adv = getattr(getattr(core, 'policy', None), '_last_adv_buf', None)
+        with guard_context(ctx='m3/m3_core.py:1535', catch_base=False) as __m3_guard_1521_8:
+            adv = attr_get_optional(attr_get_optional(core, 'policy', None), '_last_adv_buf', None)
             if adv is None or len(adv) < 8:
                 return 0.0
             a = np.asarray(adv, dtype=np.float32).ravel()
@@ -1526,23 +1663,25 @@ class SharedRepresentation:
             rho = float(np.dot(x, a) / (L + 1e-6))
             rho = float(np.clip(rho, -0.999, 0.999))
             return float(-0.5 * np.log(1.0 - rho * rho))
-        except Exception:
+
+        if __m3_guard_1521_8.error is not None:
             return 0.0
 
     def _fisher_wrt_policy(self, core: Any, base: np.ndarray, aug: np.ndarray) -> float:
-        try:
-            p = getattr(core, 'policy', None)
+        with guard_context(ctx='m3/m3_core.py:1547', catch_base=False) as __m3_guard_1539_8:
+            p = attr_get_optional(core, 'policy', None)
             if p is None:
                 return 0.0
             mu_b, _ = p.forward(base)
             mu_a, _ = p.forward(aug)
             d = np.asarray(mu_a, np.float32) - np.asarray(mu_b, np.float32)
             return float(np.sqrt((d * d).mean()))
-        except Exception:
+
+        if __m3_guard_1539_8.error is not None:
             return 0.0
 
     def _redundancy_vs_existing(self, base: np.ndarray, extra: np.ndarray) -> float:
-        try:
+        with guard_context(ctx='m3/m3_core.py:1560', catch_base=False) as __m3_guard_1551_8:
             X = base.astype(np.float32).reshape(1, -1)
             U, S, Vt = np.linalg.svd(X, full_matrices=False)
             axes = Vt[:8]
@@ -1551,7 +1690,8 @@ class SharedRepresentation:
             e = e / n
             sims = [abs(float(np.dot(e, ax) / (np.linalg.norm(ax) + 1e-6))) for ax in axes]
             return float(max(sims) if sims else 0.0)
-        except Exception:
+
+        if __m3_guard_1551_8.error is not None:
             return 0.5
 
     def start_ab_trial(self, spec_name: str, epsilon: float = 0.3, trial_steps: int = 1000) -> None:
@@ -1571,7 +1711,7 @@ class SharedRepresentation:
             tr['steps_left'] = int(tr.get('steps_left', 0)) - 1
             if tr['steps_left'] <= 0:
                 # decide adoption
-                try:
+                with guard_context(ctx='m3/m3_core.py:1589', catch_base=False) as __m3_guard_1580_16:
                     t = np.asarray(tr['treat_rewards'], dtype=np.float32)
                     c = np.asarray(tr['ctrl_rewards'], dtype=np.float32)
                     if t.size >= 8 and c.size >= 8:
@@ -1580,7 +1720,8 @@ class SharedRepresentation:
                         approve = (d / noise) > 0.5 and (not clipped) and (kl <= 0.02 + 1e-6)
                     else:
                         approve = False
-                except Exception:
+
+                if __m3_guard_1580_16.error is not None:
                     approve = False
                 # finalize
                 self._ab_trials[name]['active'] = False
@@ -1602,7 +1743,7 @@ class SharedRepresentation:
         base = self._last_built_z if self._last_built_z is not None else np.zeros((self.max_dim,), dtype=np.float32)
         for name, (i0, i1) in list(self._ranges.items()):
             seg = base[i0:i1] if i1 > i0 else np.zeros((1,), dtype=np.float32)
-            mi = self._mi_with_advantage(getattr(self, '_core_for_prune', None) or None, seg)
+            mi = self._mi_with_advantage(attr_get_optional(self, '_core_for_prune', None) or None, seg)
             red = self._redundancy_vs_existing(base, seg)
             psi = 0.0  # placeholder drift metric; requires distribution buffers
             if (mi < mi_floor) or (red > red_ceiling) or (psi > psi_thresh):
@@ -1623,7 +1764,7 @@ class SharedRepresentation:
         Pads mu, s2, and input_mask preserving existing statistics. If new_embed_dim
         is provided, update embed_dim (but ensure embed_dim <= max_dim).
         """
-        try:
+        with guard_context(ctx='m3/m3_core.py:1646', catch_base=False) as __m3_guard_1632_8:
             new_max_dim = int(new_max_dim)
             if new_max_dim <= self.max_dim:
                 return
@@ -1637,8 +1778,8 @@ class SharedRepresentation:
                 self.embed_dim = int(min(new_embed_dim, new_max_dim))
             # update max_dim last
             self.max_dim = int(new_max_dim)
-        except Exception:
-            # best-effort fallback: re-init to zeros
+
+        if __m3_guard_1632_8.error is not None:
             self.max_dim = int(new_max_dim)
             self.input_mask = np.ones(self.max_dim, dtype=np.float32)
             self.mu = np.zeros(self.max_dim, dtype=np.float32)
@@ -1651,15 +1792,6 @@ class SharedRepresentation:
         Each spec.source can be a context key (string) that build() computes once per call.
         """
         self.specs = []
-        # vision scalars
-        self.register_spec(FeatureSpec(name='vision.r_mean', source='vision.r_mean', packer='scalar', produced_dim=1))
-        self.register_spec(FeatureSpec(name='vision.contrast', source='vision.contrast', packer='scalar', produced_dim=1))
-        self.register_spec(FeatureSpec(name='vision.entropy', source='vision.entropy', packer='scalar', produced_dim=1))
-        self.register_spec(FeatureSpec(name='vision.edge_density', source='vision.edge_density', packer='scalar', produced_dim=1))
-        # depth cue (may be array) - use stats+samples
-        self.register_spec(FeatureSpec(name='vision.depth_cue', source='vision.depth_cue', packer='stats_sample', params={'samples':8}, produced_dim=12))
-        # retina spatial summary
-        self.register_spec(FeatureSpec(name='vision.retina', source='vision.retina', packer='spatial_pool', params={'grid':4, 'pool_type':'mean'}, produced_dim=4 + 4))
         # phi trends
         self.register_spec(FeatureSpec(name='phi.last', source='phi.last', packer='scalar', produced_dim=1))
         self.register_spec(FeatureSpec(name='phi.mean10', source='phi.mean10', packer='scalar', produced_dim=1))
@@ -1680,32 +1812,41 @@ class SharedRepresentation:
         self.register_spec(FeatureSpec(name='qualia.frustration', source='qualia.frustration', packer='scalar', produced_dim=1))
 
     def register_spec(self, spec: FeatureSpec) -> None:
-        try:
-            # Ensure deterministic ordering: append at end
+        with guard_context(ctx='m3/m3_core.py:1692', catch_base=False) as __m3_guard_1689_8:
             self.specs.append(spec)
-        except Exception:
-            pass
+
+        if __m3_guard_1689_8.error is not None:
+            e = __m3_guard_1689_8.error
+            import logging
+            logging.debug(f"register_spec failed: {e}")
 
     def unregister_spec(self, name: str) -> bool:
-        try:
+        with guard_context(ctx='m3/m3_core.py:1702', catch_base=False) as __m3_guard_1697_8:
             keep = [s for s in self.specs if s.name != name]
             if len(keep) != len(self.specs):
                 self.specs = keep
                 return True
-        except Exception:
-            pass
+
+        if __m3_guard_1697_8.error is not None:
+            e = __m3_guard_1697_8.error
+            import logging
+            logging.debug(f"unregister_spec failed for {name}: {e}")
         return False
 
     def compute_total_produced_dim(self) -> int:
-        try:
-            return int(sum(getattr(s, 'produced_dim', 1) for s in self.specs if s.active))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:1710', catch_base=False) as __m3_guard_1708_8:
+            return int(sum(attr_get_optional(s, 'produced_dim', 1) for s in self.specs if s.active))
+
+        if __m3_guard_1708_8.error is not None:
+            e = __m3_guard_1708_8.error
+            import logging
+            logging.debug(f"compute_total_produced_dim failed: {e}")
             return 0
     
     # === AUTONOMOUS GROWTH METHODS ===
     
     def measure_complexity(self, core: Any) -> Dict[str, float]:
-        """현재 시스템 복잡도 측정"""
+        """?꾩옱 ?쒖뒪??蹂듭옟??痢≪젙"""
         metrics = {
             'feature_utilization': 0.0,
             'variance_diversity': 0.0,
@@ -1713,8 +1854,7 @@ class SharedRepresentation:
             'processing_load': 0.0
         }
         
-        try:
-            # Feature utilization: how many dimensions are actually used
+        with guard_context(ctx='m3/m3_core.py:1753', catch_base=False) as __m3_guard_1726_8:
             if self._last_built_z is not None:
                 active_dims = np.sum(np.abs(self._last_built_z) > 0.01)
                 metrics['feature_utilization'] = active_dims / max(1, self.max_dim)
@@ -1736,18 +1876,19 @@ class SharedRepresentation:
                 metrics['information_density'] = float(entropy / max_entropy) if max_entropy > 0 else 0.0
             
             # Processing load: ratio of active specs to capacity
-            if hasattr(self, 'specs'):
+            if attr_has(self, 'specs'):
                 active_specs = sum(1 for s in self.specs if s.active)
                 metrics['processing_load'] = active_specs / max(1, len(self.specs))
-        
-        except Exception as e:
+
+        if __m3_guard_1726_8.error is not None:
+            e = __m3_guard_1726_8.error
             logging.debug(f"Complexity measurement error: {e}")
         
         self.complexity_metrics.append(metrics)
         return metrics
     
     def should_grow(self, current_time: float, core: Any) -> Tuple[bool, str]:
-        """성장 타이밍 자동 결정"""
+        """?깆옣 ??대컢 ?먮룞 寃곗젙"""
         
         # Cooldown check
         if current_time - self.last_growth_time < self.growth_cooldown:
@@ -1759,11 +1900,11 @@ class SharedRepresentation:
         # Growth trigger conditions
         reasons = []
         
-        # 1. High feature utilization → need more capacity
+        # 1. High feature utilization ??need more capacity
         if complexity['feature_utilization'] > self.adaptive_growth_threshold:
             reasons.append(f"high_utilization({complexity['feature_utilization']:.2f})")
         
-        # 2. High information density → complex enough to expand
+        # 2. High information density ??complex enough to expand
         if complexity['information_density'] > 0.8:
             reasons.append(f"high_density({complexity['information_density']:.2f})")
         
@@ -1772,12 +1913,12 @@ class SharedRepresentation:
             reasons.append(f"high_load({complexity['processing_load']:.2f})")
         
         # 4. Stability check - don't grow if system is unstable
-        if hasattr(core, 'self_model') and hasattr(core.self_model, 'belief_stability'):
+        if attr_has(core, 'self_model') and attr_has(core.self_model, 'belief_stability'):
             if core.self_model.belief_stability < 0.4:
                 return False, "unstable_system"
         
         # 5. Energy check - don't grow if low energy
-        if hasattr(core, 'energy_ctrl') and hasattr(core.energy_ctrl, 'activation_level'):
+        if attr_has(core, 'energy_ctrl') and attr_has(core.energy_ctrl, 'activation_level'):
             if core.energy_ctrl.activation_level < 0.3:
                 return False, "low_energy"
         
@@ -1788,7 +1929,7 @@ class SharedRepresentation:
         return False, "insufficient_triggers"
     
     def adaptive_grow(self, current_time: float, core: Any, apply: bool = True) -> Optional[Dict[str, Any]]:
-        """조건이 충족되면 자동으로 성장"""
+        """議곌굔??異⑹”?섎㈃ ?먮룞?쇰줈 ?깆옣"""
         should, reason = self.should_grow(current_time, core)
         
         if not should:
@@ -1835,7 +1976,7 @@ class SharedRepresentation:
             self.growth_history.append(growth_report)
             self.last_growth_time = current_time
         
-        logging.info(f"FeatureBank adaptive growth: {old_max_dim} → {self.max_dim} | Reason: {reason}")
+        logging.info(f"FeatureBank adaptive growth: {old_max_dim} ??{self.max_dim} | Reason: {reason}")
         
         return growth_report
 
@@ -1858,7 +1999,7 @@ class MetaFeatureController:
         self.rng = rng or np.random.default_rng()
         self.packer_candidates = packer_candidates or ['scalar', 'stats_sample', 'spatial_pool', 'learned_proj']
         # default sources (will be filtered by core's ctx keys)
-        self.source_candidates = source_candidates or ['vision.retina', 'vision.depth_cue', 'self.meta_awareness', 'qualia.entropy']
+        self.source_candidates = source_candidates or ['self.meta_awareness', 'self.meta_confidence', 'qualia.entropy', 'energy.activation']
         # policy network outputs a vector we will split: packer logits, source logits, continuous params
         self.num_cat = len(self.packer_candidates) + len(self.source_candidates)
         # continuous params: [samples_norm, grid_norm, produced_scale]
@@ -1909,17 +2050,18 @@ class MetaFeatureController:
             spec = FeatureSpec(name=name, source=source, packer=packer, params=params, produced_dim=int(produced_dim), active=True)
             proposals.append(spec)
             # record last action vector for learning
-            try:
+            with guard_context(ctx='m3/m3_core.py:1925', catch_base=False) as __m3_guard_1922_12:
                 self.last_mu = mu.copy()
                 self.last_act_vec = mu.copy()
-            except Exception:
+
+            if __m3_guard_1922_12.error is not None:
                 self.last_mu = None
                 self.last_act_vec = None
         return proposals
 
     def observe(self, reward: float, action_meta: Dict[str, Any]) -> None:
         # simple scalar reward to update policy: record (features->action) pairs
-        try:
+        with guard_context(ctx='m3/m3_core.py:1944', catch_base=False) as __m3_guard_1932_8:
             feats = np.asarray(action_meta.get('features', np.zeros((self.in_dim,), dtype=np.float32)), dtype=np.float32).reshape(-1)
             mu = action_meta.get('mu')
             act_vec = action_meta.get('act_vec')
@@ -1931,8 +2073,11 @@ class MetaFeatureController:
             self.policy.record(feats, act, float(0.0), mu, float(reward))
             # small batch update
             self.policy.end_batch(gamma=0.99, kl_coeff=0.01, lr=self.lr)
-        except Exception:
-            pass
+
+        if __m3_guard_1932_8.error is not None:
+            e = __m3_guard_1932_8.error
+            import logging
+            logging.debug(f"observe in GrowthMetaController failed: {e}")
 
     # ----- autosize (bandit over width multipliers) -----
     def _pick_width(self, t: int) -> float:
@@ -1944,7 +2089,7 @@ class MetaFeatureController:
         return float(vals[0][1])
 
     def autosize_step(self, perf: float, lambda_size: float = 1e-5) -> None:
-        try:
+        with guard_context(ctx='m3/m3_core.py:1972', catch_base=False) as __m3_guard_1958_8:
             pol = self.target_policy
             if pol is None:
                 return
@@ -1958,8 +2103,11 @@ class MetaFeatureController:
             self.current_width = self._pick_width(st['n'])
             new_h = max(8, int(round(self.current_width * max(8, self.H_max))))
             pol.resize_hidden(new_h)
-        except Exception:
-            pass
+
+        if __m3_guard_1958_8.error is not None:
+            e = __m3_guard_1958_8.error
+            import logging
+            logging.debug(f"autosize_step failed: {e}")
 
 
 class GrowthTrigger:
@@ -1984,21 +2132,26 @@ class GrowthTrigger:
             # binary decision
             trigger = bool(act[0] > 0.0)
             # record for learning (reward will be provided to end_batch later)
-            try:
+            with guard_context(ctx='m3/m3_core.py:2001', catch_base=False) as __m3_guard_1999_12:
                 self.policy.record(obs, act, float(logp), mu, 0.0)
-            except Exception:
-                pass
-            meta = {'mu': mu.copy() if hasattr(mu, 'copy') else mu, 'act_vec': act.copy() if hasattr(act, 'copy') else act}
+
+            if __m3_guard_1999_12.error is not None:
+                e = __m3_guard_1999_12.error
+                import logging
+                logging.debug(f"decide policy.record failed: {e}")
+            meta = {'mu': mu.copy() if attr_has(mu, 'copy') else mu, 'act_vec': act.copy() if attr_has(act, 'copy') else act}
             return trigger, meta
         except Exception:
             return False, {}
 
     def observe(self, reward: float) -> None:
-        try:
-            # end_batch will update weights using recorded trajectory
+        with guard_context(ctx='m3/m3_core.py:2013', catch_base=False) as __m3_guard_2010_8:
             self.policy.end_batch(gamma=0.99, kl_coeff=0.01, lr=self.lr)
-        except Exception:
-            pass
+
+        if __m3_guard_2010_8.error is not None:
+            e = __m3_guard_2010_8.error
+            import logging
+            logging.debug(f"observe in GrowthTrigger failed: {e}")
 
 
 class SelfDynamicsModel(nn.Module):
@@ -2174,11 +2327,11 @@ class SelfDynamicsModel(nn.Module):
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
 
     def load(self, path: str) -> bool:
-        try:
-            # Try loading pytorch model
+        with guard_context(ctx='m3/m3_core.py:2195', catch_base=True) as __m3_guard_2191_8:
             self.load_state_dict(torch.load(path + ".pth"))
             return True
-        except:
+
+        if __m3_guard_2191_8.error is not None:
             return False
 
     def sample(self, obs: np.ndarray) -> tuple[np.ndarray, float, np.ndarray]:
@@ -2231,10 +2384,10 @@ class IITPhiCalculator:
         # RNG management: prefer injected RNGRegistry, fallback to a default
         self.rng_registry = rng_registry if rng_registry is not None else RNGRegistry(None)
         # Use a named child generator for phi computations
-        try:
+        with guard_context(ctx='m3/m3_core.py:2250', catch_base=False) as __m3_guard_2248_8:
             self.rng = self.rng_registry.get('phi')
-        except Exception:
-            # Fallback to numpy's global RNG if registry fails
+
+        if __m3_guard_2248_8.error is not None:
             self.rng = np.random.default_rng()
         # Internal streaming state for sparse transitions
         self._last_state_idx: Optional[int] = None
@@ -2289,7 +2442,7 @@ class IITPhiCalculator:
 
     def _check_structural_health(self):
         """Sparse health proxy: flag revision only if no transitions observed."""
-        has_data = any(self.ces._rowsum.values()) if hasattr(self.ces, '_rowsum') else False
+        has_data = any(self.ces._rowsum.values()) if attr_has(self.ces, '_rowsum') else False
         self.requires_structural_revision = not has_data
         self.revision_reason = '' if has_data else 'no transitions observed'
 
@@ -2325,7 +2478,7 @@ class IITPhiCalculator:
             for sid, c in zip(cau_ids, cau_counts):
                 cau_vec[id_to_pos[sid]] = c
             # Dirichlet smoothing  
-            alpha = float(getattr(self.ces.cfg, 'alpha', 0.3))
+            alpha = float(attr_get_optional(self.ces.cfg, 'alpha', 0.3))
             V = max(1, len(support))
             effect_repertoire = (eff_vec + alpha) / (max(1e-12, eff_vec.sum() + alpha * V))
             cause_repertoire = (cau_vec + alpha) / (max(1e-12, cau_vec.sum() + alpha * V))
@@ -2382,12 +2535,12 @@ class IITPhiCalculator:
             st = pad
         elif st.size > self.n_elements:
             st = st[:self.n_elements]
-        try:
+        with guard_context(ctx='m3/m3_core.py:2403', catch_base=False) as __m3_guard_2399_8:
             h = hashlib.blake2b(st.tobytes(), digest_size=8, person=b'M3_IIT_idx')
             val = int.from_bytes(h.digest()[:4], 'little') & 0x7FFFFFFF  # 31-bit positive
             return int(val)
-        except Exception:
-            # Fallback: modulo-2**31 of bit-vector dot-product
+
+        if __m3_guard_2399_8.error is not None:
             vec = st.astype(np.int64)
             weights = (1 << np.arange(vec.size, dtype=np.int64))[::-1]
             return int(int(np.dot(vec, weights)) & 0x7FFFFFFF)
@@ -2402,8 +2555,8 @@ class IITPhiCalculator:
         """Compute incoming distribution into state dst by scanning CSR/Top with Top overriding CSR if overlap."""
         dst = int(dst)
         acc: Dict[int, int] = {}
-        topk_rows = getattr(self.ces.topk, 'rows', {})
-        csr_rows = getattr(self.ces.csr, 'rows', {})
+        topk_rows = attr_get_optional(self.ces.topk, 'rows', {})
+        csr_rows = attr_get_optional(self.ces.csr, 'rows', {})
         # First collect Top contributors (override)
         for src, rowmap in topk_rows.items():
             if dst in rowmap:
@@ -2469,7 +2622,7 @@ class IITPhiCalculator:
                 cau_vec[id_to_pos[sid]] = float(c)
             
             # Dirichlet smoothing: add pseudocounts to prevent zero probabilities
-            alpha = float(getattr(self.ces.cfg, 'alpha', 0.3))
+            alpha = float(attr_get_optional(self.ces.cfg, 'alpha', 0.3))
             V = max(1, len(support))
             
             effect_rep = (eff_vec + alpha) / max(1e-12, eff_vec.sum() + alpha * V)
@@ -3060,10 +3213,13 @@ class CauseEffectStructure:
         self.current_mip = None
         phi = max(0.0, float(full_integrated_info))
         norm_phi = self._normalize_phi(phi, cause_rep)
-        try:
+        with guard_context(ctx='m3/m3_core.py:3079', catch_base=False) as __m3_guard_3077_8:
             self.phi_history.append(float(norm_phi))
-        except Exception:
-            pass
+
+        if __m3_guard_3077_8.error is not None:
+            e = __m3_guard_3077_8.error
+            import logging
+            logging.debug(f"phi_history append failed: {e}")
         return norm_phi
 
     def _compute_phi_full(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:
@@ -3088,10 +3244,13 @@ class CauseEffectStructure:
         self.current_mip = None
         phi = max(0.0, float(full_integrated_info))
         norm_phi = self._normalize_phi(phi, cause_rep)
-        try:
+        with guard_context(ctx='m3/m3_core.py:3108', catch_base=False) as __m3_guard_3106_8:
             self.phi_history.append(float(norm_phi))
-        except Exception:
-            pass
+
+        if __m3_guard_3106_8.error is not None:
+            e = __m3_guard_3106_8.error
+            import logging
+            logging.debug(f"phi_history append failed: {e}")
         return norm_phi
 
     def _compute_phi_full(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:
@@ -3147,7 +3306,7 @@ class CauseEffectStructure:
 
         phi = max(0.0, float(full_integrated_info) - float(min_partitioned_info))
         self.current_mip = best_mip
-        try:
+        with guard_context(ctx='m3/m3_core.py:3177', catch_base=False) as __m3_guard_3166_8:
             self.mip_history.append(
                 {
                     "mip": best_mip,
@@ -3158,13 +3317,19 @@ class CauseEffectStructure:
                     "examined_partitions": num_partitions,
                 }
             )
-        except Exception:
-            pass
+
+        if __m3_guard_3166_8.error is not None:
+            e = __m3_guard_3166_8.error
+            import logging
+            logging.debug(f"mip_history append failed: {e}")
         norm_phi = self._normalize_phi(phi, cause_rep)
-        try:
+        with guard_context(ctx='m3/m3_core.py:3183', catch_base=False) as __m3_guard_3181_8:
             self.phi_history.append(float(norm_phi))
-        except Exception:
-            pass
+
+        if __m3_guard_3181_8.error is not None:
+            e = __m3_guard_3181_8.error
+            import logging
+            logging.debug(f"phi_history append failed: {e}")
         return norm_phi
     def _compute_phi_full_exhaustive(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:
         """
@@ -3212,7 +3377,7 @@ class CauseEffectStructure:
 
         phi = max(0.0, float(full_integrated_info) - float(min_partitioned_info))
         self.current_mip = best_mip
-        try:
+        with guard_context(ctx='m3/m3_core.py:3244', catch_base=False) as __m3_guard_3233_8:
             self.mip_history.append(
                 {
                     "mip": best_mip,
@@ -3223,13 +3388,19 @@ class CauseEffectStructure:
                     "examined_partitions": num_partitions,
                 }
             )
-        except Exception:
-            pass
+
+        if __m3_guard_3233_8.error is not None:
+            e = __m3_guard_3233_8.error
+            import logging
+            logging.debug(f"mip_history append failed: {e}")
         norm_phi = self._normalize_phi(phi, cause_rep)
-        try:
+        with guard_context(ctx='m3/m3_core.py:3250', catch_base=False) as __m3_guard_3248_8:
             self.phi_history.append(float(norm_phi))
-        except Exception:
-            pass
+
+        if __m3_guard_3248_8.error is not None:
+            e = __m3_guard_3248_8.error
+            import logging
+            logging.debug(f"phi_history append failed: {e}")
         return norm_phi
     def _compute_phi_cutset_sampling(self, cause_rep: np.ndarray, effect_rep: np.ndarray, state: Optional[np.ndarray]=None) -> float:
         n = self.n_elements
@@ -3260,10 +3431,13 @@ class CauseEffectStructure:
         self.current_mip = best_mip
         self.mip_history.append({'mip': best_mip, 'phi': phi, 'full_info': full_integrated_info, 'partitioned_info': min_partitioned_info, 'method': 'cutset_sampling', 'sampled_partitions': len(candidate_partitions)})
         norm_phi = self._normalize_phi(phi, cause_rep)
-        try:
+        with guard_context(ctx='m3/m3_core.py:3285', catch_base=False) as __m3_guard_3283_8:
             self.phi_history.append(float(norm_phi))
-        except Exception:
-            pass
+
+        if __m3_guard_3283_8.error is not None:
+            e = __m3_guard_3283_8.error
+            import logging
+            logging.debug(f"phi_history append failed: {e}")
         return norm_phi
 
     def _find_connected_component(self, start: int, excluded: Set[int], n: int) -> Set[int]:
@@ -3309,10 +3483,13 @@ class CauseEffectStructure:
         self.current_mip = best_mip
         self.mip_history.append({'mip': best_mip, 'phi': phi, 'full_info': full_integrated_info, 'partitioned_info': min_partitioned_info, 'method': 'community_cluster', 'num_communities': len(communities), 'community_sizes': [len(c) for c in communities]})
         norm_phi = self._normalize_phi(phi, cause_rep)
-        try:
+        with guard_context(ctx='m3/m3_core.py:3335', catch_base=False) as __m3_guard_3333_8:
             self.phi_history.append(float(norm_phi))
-        except Exception:
-            pass
+
+        if __m3_guard_3333_8.error is not None:
+            e = __m3_guard_3333_8.error
+            import logging
+            logging.debug(f"phi_history append failed: {e}")
         return norm_phi
 
     def _detect_communities_greedy(self, n: int) -> List[Set[int]]:
@@ -3370,10 +3547,11 @@ class CauseEffectStructure:
         if (n_elements > 1 and 
             np.any(np.abs(cause_rep) > 1e-08) and 
             np.any(np.abs(effect_rep) > 1e-08)):
-            try:
+            with guard_context(ctx='m3/m3_core.py:3398', catch_base=False) as __m3_guard_3395_12:
                 pol = _compute_phi_policy_from_history(list(self.phi_history), cfg=None)
                 phi_floor = float(pol.get("floor", 0.01))
-            except Exception:
+
+            if __m3_guard_3395_12.error is not None:
                 phi_floor = 0.01
             integrated_info = max(integrated_info, float(phi_floor))
         
@@ -3385,7 +3563,7 @@ class CauseEffectStructure:
         subset2_entropy = np.log2(2 ** n2) if n2 > 0 else 0.0
         cross_causal_loss = 0.0
         # If a causal graph is attached to this structure, incorporate cross-links
-        if hasattr(self, 'causal_graph'):
+        if attr_has(self, 'causal_graph'):
             for i in subset1:
                 for j in subset2:
                     if i < self.n_elements and j < self.n_elements:
@@ -3420,7 +3598,7 @@ class CauseEffectStructure:
         # Normalize to probability distribution
         p = repertoire / total
         
-        # Shannon entropy: H = -Σ p_i log2(p_i)
+        # Shannon entropy: H = -誇 p_i log2(p_i)
         # Only include non-negligible probabilities
         mask = p > epsilon
         if not np.any(mask):
@@ -3448,25 +3626,26 @@ class CauseEffectStructure:
         joint_prob = None
         
         # STRATEGY 1: Use empirical transition counts (most accurate)
-        if hasattr(self, 'transition_counts') and getattr(self, 'transition_counts') is not None:
+        if attr_has(self, 'transition_counts') and attr_get_optional(self, 'transition_counts') is not None:
             tc = np.asarray(self.transition_counts, dtype=float)
             if tc.shape == (n, n) and tc.sum() > 0:
                 joint_prob = tc / tc.sum()
         
         # STRATEGY 2: Use TPM with empirical state prior from history
-        if joint_prob is None and hasattr(self, 'tpm') and self.tpm is not None:
+        if joint_prob is None and attr_has(self, 'tpm') and self.tpm is not None:
             tpm = np.asarray(self.tpm, dtype=float)
             if tpm.shape[0] == n and tpm.shape[1] == n:
                 # Estimate prior distribution from state history
                 prior = None
-                if hasattr(self, 'state_history') and len(self.state_history) > 0:
+                if attr_has(self, 'state_history') and len(self.state_history) > 0:
                     counts = np.zeros(n, dtype=float)
                     for past_state in self.state_history:
-                        try:
+                        with guard_context(ctx='m3/m3_core.py:3491', catch_base=False) as __m3_guard_3487_24:
                             idx = self._state_to_index(past_state)
                             if 0 <= idx < n:
                                 counts[idx] += 1.0
-                        except Exception:
+
+                        if __m3_guard_3487_24.error is not None:
                             continue
                     
                     if counts.sum() > 0:
@@ -3485,7 +3664,7 @@ class CauseEffectStructure:
         # STRATEGY 3: Use repertoires to estimate joint distribution
         if joint_prob is None:
             # Estimate coupling strength from repertoire similarity
-            # More similar repertoires → stronger coupling → lower joint entropy
+            # More similar repertoires ??stronger coupling ??lower joint entropy
             cause_norm = cause_rep / (np.sum(cause_rep) + 1e-12)
             effect_norm = effect_rep / (np.sum(effect_rep) + 1e-12)
             
@@ -3497,9 +3676,9 @@ class CauseEffectStructure:
             independent_entropy = self._repertoire_entropy(cause_rep) + self._repertoire_entropy(effect_rep)
             max_marginal_entropy = max(self._repertoire_entropy(cause_rep), self._repertoire_entropy(effect_rep))
             
-            # High similarity → lower joint entropy (more mutual info)
-            # similarity=0 → independent_entropy
-            # similarity=1 → max_marginal_entropy
+            # High similarity ??lower joint entropy (more mutual info)
+            # similarity=0 ??independent_entropy
+            # similarity=1 ??max_marginal_entropy
             joint_entropy = independent_entropy * (1 - similarity) + max_marginal_entropy * similarity
             
             return float(np.clip(joint_entropy, 0.0, independent_entropy))
@@ -3533,9 +3712,10 @@ class CauseEffectStructure:
             return 'stable'
 
     def get_consciousness_level(self, phi: float) -> str:
-        try:
+        with guard_context(ctx='m3/m3_core.py:3560', catch_base=False) as __m3_guard_3558_8:
             pol = _compute_phi_policy_from_history(list(self.phi_history), cfg=None)
-        except Exception:
+
+        if __m3_guard_3558_8.error is not None:
             pol = _normalize_phi_policy(None)
         if phi < float(pol.get("floor", 0.01)):
             return '(unconscious)'
@@ -3552,9 +3732,7 @@ class CauseEffectStructure:
 
 class EvolutionVisualizer:
 
-    __old_update__: Optional[Callable] = None  # For method overriding in subclasses
-    _scope_wired: bool = False
-    _scope_gui_wired: bool = False
+    __old_update__: Optional[Callable] = None
 
     def __init__(self):
         self.neural_map = None
@@ -3576,11 +3754,6 @@ class EvolutionVisualizer:
         self.max_intensity = 0.1
         self.connection_history = deque(maxlen=100)
         self.scope_image = None  # SCOPE image
-        # Reuse a single Scope encoder instance for performance
-        try:
-            self.scope_encoder = Scope()
-        except Exception:
-            self.scope_encoder = None
 
     def update(self, system_state: Dict[str, Any]):
         self.generation += 1
@@ -3601,67 +3774,25 @@ class EvolutionVisualizer:
         meta_awareness = system_state.get('meta_awareness', 0.0)
         self.phi_value = system_state.get('phi', 0.0)
         old_level = self.consciousness_level
-        # SCOPE image update (prefer real retina when available)
+        # SCOPE image update from neural map only (no vision pipeline).
         try:
-            import cv2
-            # Prefer externally built retina passed via system_state
-            if isinstance(system_state.get('retina', None), np.ndarray):
-                rr = np.asarray(system_state['retina'], dtype=np.float32)
-                # ensure 0..1
-                if rr.max() > 1.0:
-                    rr = rr / max(1.0, float(rr.max()))
-                frame = cv2.resize(rr, (256, 256), interpolation=cv2.INTER_CUBIC)
-            elif self.neural_map is not None:
-                norm_map = (self.neural_map - np.min(self.neural_map)) / (np.ptp(self.neural_map) + 1e-8)
-                frame = cv2.resize(norm_map.astype(np.float32), (256,256), interpolation=cv2.INTER_CUBIC)
-            else:
-                frame = np.zeros((256,256), dtype=np.float32)
-            # Optional debug
-            if os.environ.get('M3_DEBUG_SCOPE', '0') in ('1', 'true', 'TRUE'):
-                print(f"[DEBUG] SCOPE input frame shape: {frame.shape}, dtype: {frame.dtype}, min: {frame.min()}, max: {frame.max()}")
-            arousal = float(system_state.get('arousal', 0.5))
-            drivers = {'arousal': arousal}
-            try:
-                if 'scope_one_bit' in system_state:
-                    drivers['one_bit'] = bool(system_state['scope_one_bit'])
-                # If vision source is external (camera/folder/push), bypass glitch effect for realism
-                if system_state.get('vision_mode', 'internal') in ('camera', 'folder', 'push'):
-                    drivers['bypass_glitch'] = True
-            except Exception:
-                pass
-            if getattr(self, 'scope_encoder', None) is None:
-                self.scope_encoder = Scope()
-            image, meta = self.scope_encoder.encode(frame, drivers)
-            if os.environ.get('M3_DEBUG_SCOPE', '0') in ('1', 'true', 'TRUE'):
-                print(f"[DEBUG] SCOPE output image shape: {image.shape}, dtype: {image.dtype}, min: {image.min()}, max: {image.max()}")
-            self.scope_image = image
-        except Exception as e:
-            print(f"[DEBUG] SCOPE encoding error: {e}")
-            # Fallback: avoid cv2 dependency. Try PIL or numpy-only upsample, then Scope encode.
-            try:
-                if self.neural_map is not None:
-                    base = (self.neural_map - np.min(self.neural_map)) / (np.ptp(self.neural_map) + 1e-8)
-                    base = base.astype(np.float32)
+            if self.neural_map is not None:
+                nm = np.asarray(self.neural_map, dtype=np.float32)
+                nmin = float(np.min(nm))
+                nmax = float(np.max(nm))
+                if nmax > nmin:
+                    norm = (nm - nmin) / (nmax - nmin)
                 else:
-                    base = np.zeros((30,80), dtype=np.float32)
-                try:
-                    from PIL import Image as _PIL_Image
-                    from PIL import Image as _PIL
-                    resample = getattr(_PIL, 'Resampling', _PIL)
-                    im = _PIL_Image.fromarray((base * 255).astype(np.uint8)).resize((256, 256), resample.BICUBIC)
-                    frame = (np.asarray(im).astype(np.float32) / 255.0)
-                except Exception:
-                    sh, sw = base.shape[:2]
-                    ry = max(1, int(np.ceil(256 / max(1, sh))))
-                    rx = max(1, int(np.ceil(256 / max(1, sw))))
-                    frame = np.kron(base, np.ones((ry, rx), dtype=np.float32))[:256, :256]
-                drivers = {'arousal': float(system_state.get('arousal', 0.5))}
-                if getattr(self, 'scope_encoder', None) is None:
-                    self.scope_encoder = Scope()
-                image, _ = self.scope_encoder.encode(frame, drivers)
-                self.scope_image = image
-            except Exception:
-                self.scope_image = np.zeros((256,256), dtype=np.uint8)
+                    norm = np.zeros_like(nm, dtype=np.float32)
+                sh, sw = norm.shape[:2]
+                ry = max(1, int(np.ceil(256 / max(1, sh))))
+                rx = max(1, int(np.ceil(256 / max(1, sw))))
+                up = np.kron(norm, np.ones((ry, rx), dtype=np.float32))[:256, :256]
+                self.scope_image = (np.clip(up, 0.0, 1.0) * 255.0).astype(np.uint8)
+            else:
+                self.scope_image = np.zeros((256, 256), dtype=np.uint8)
+        except Exception:
+            self.scope_image = np.zeros((256, 256), dtype=np.uint8)
         phi_policy = _normalize_phi_policy(system_state.get("phi_policy") if isinstance(system_state, dict) else None)
         if self.phi_value > float(phi_policy.get("high", 0.5)):
             self.consciousness_level = 4
@@ -3866,17 +3997,17 @@ class EvolutionVisualizer:
 
         Returns None if no image data is available.
         """
-        try:
-            if getattr(self, 'scope_image', None) is not None:
+        with guard_context(ctx='m3/m3_core.py:3914', catch_base=False) as __m3_guard_3891_8:
+            if attr_get_optional(self, 'scope_image', None) is not None:
                 img = self.scope_image
                 # ensure uint8
-                if img.dtype != getattr(__import__('numpy'), 'uint8'):
+                if img.dtype != attr_get_optional(__import__('numpy'), 'uint8'):
                     import numpy as _np
                     arr = _np.asarray(img)
                     arr = _np.clip(arr * 255.0, 0, 255).astype(_np.uint8) if arr.dtype in (_np.float32, _np.float64) else arr.astype(_np.uint8)
                     return arr
                 return img
-            if getattr(self, 'neural_map', None) is not None:
+            if attr_get_optional(self, 'neural_map', None) is not None:
                 import numpy as _np
                 nm = _np.asarray(self.neural_map, dtype=_np.float32)
                 if nm.size == 0:
@@ -3889,19 +4020,21 @@ class EvolutionVisualizer:
                     norm = _np.clip(nm, 0.0, 1.0)
                 img = (_np.clip(norm * 255.0, 0, 255)).astype(_np.uint8)
                 return img
-        except Exception:
+
+        if __m3_guard_3891_8.error is not None:
             return None
         return None
 
     def get_ascii(self, width: int = 100) -> str:
         """Return an ASCII/text visualization string. Defaults to render_full_display()."""
-        try:
-            if hasattr(self, 'render_full_display') and callable(self.render_full_display):
+        with guard_context(ctx='m3/m3_core.py:3926', catch_base=False) as __m3_guard_3920_8:
+            if attr_has(self, 'render_full_display') and callable(self.render_full_display):
                 return self.render_full_display()
             # fallback to brain growth
-            if hasattr(self, 'render_brain_growth') and callable(self.render_brain_growth):
+            if attr_has(self, 'render_brain_growth') and callable(self.render_brain_growth):
                 return self.render_brain_growth()
-        except Exception:
+
+        if __m3_guard_3920_8.error is not None:
             return '[visualizer error]'
         return ''
 
@@ -3972,29 +4105,6 @@ class ConceptualSpace:
     def _discover_new_prototypes(self):
         # Get the latest experience vector and system state
         experience_vector = self.experience_points[-1] if self.experience_points else np.zeros(5)
-        system_state = {'arousal': 0.5}  # Placeholder for actual system state
-        if len(self.experience_points) < self.min_cluster_size:
-            try:
-                # Deferred imports for optional SCOPE visualization
-                import cv2
-
-                if hasattr(self, 'neural_map') and self.neural_map is not None:
-                    norm_map = (self.neural_map - np.min(self.neural_map)) / (np.ptp(self.neural_map) + 1e-8)
-                    frame = cv2.resize(norm_map.astype(np.float32), (256, 256), interpolation=cv2.INTER_CUBIC)
-                else:
-                    frame = np.zeros((256, 256), dtype=np.float32)
-
-                print(f"[DEBUG] SCOPE input frame shape: {frame.shape}, dtype: {frame.dtype}, min: {frame.min()}, max: {frame.max()}")
-                arousal = float(system_state.get('arousal', 0.5))
-                drivers = {'arousal': arousal}
-                scope_encoder = Scope()
-                image, meta = scope_encoder.encode(frame, drivers)
-                print(f"[DEBUG] SCOPE output image shape: {image.shape}, dtype: {image.dtype}, min: {image.min()}, max: {image.max()}")
-                self.scope_image = image
-            except Exception as e:
-                # Keep exception handler aligned with the try block
-                print(f"[DEBUG] SCOPE encoding error: {e}")
-                self.scope_image = np.zeros((256, 256), dtype=np.uint8)
         current_coords = experience_vector
         distances = {}
         for key, proto in self.prototypes.items():
@@ -4148,22 +4258,26 @@ class GrowingSOM(EvolutionVisualizer):
         meta_awareness = system_state.get('meta_awareness', 0.0)
         self.phi_value = system_state.get('phi', 0.0)
         old_level = self.consciousness_level
-        # SCOPE image generation
+        # Render neural-map image directly without external vision pipeline.
         import numpy as _np
         try:
-            frame = None
             if self.neural_map is not None:
-                norm_map = (self.neural_map - _np.min(self.neural_map)) / (_np.ptp(self.neural_map) + 1e-8)
-                frame = norm_map.astype(_np.float32)
+                nm = _np.asarray(self.neural_map, dtype=_np.float32)
+                nmin = float(_np.min(nm))
+                nmax = float(_np.max(nm))
+                if nmax > nmin:
+                    norm = (nm - nmin) / (nmax - nmin)
+                else:
+                    norm = _np.zeros_like(nm, dtype=_np.float32)
+                sh, sw = norm.shape[:2]
+                ry = max(1, int(_np.ceil(256 / max(1, sh))))
+                rx = max(1, int(_np.ceil(256 / max(1, sw))))
+                up = _np.kron(norm, _np.ones((ry, rx), dtype=_np.float32))[:256, :256]
+                self.scope_image = (_np.clip(up, 0.0, 1.0) * 255.0).astype(_np.uint8)
             else:
-                frame = _np.zeros((30,80), dtype=_np.float32)
-            arousal = float(system_state.get('arousal', 0.5))
-            drivers = {'arousal': arousal}
-            scope_encoder = Scope()
-            image, meta = scope_encoder.encode(frame, drivers)
-            self.scope_image = image
-        except Exception as e:
-            self.scope_image = _np.zeros((256,256), dtype=_np.uint8)
+                self.scope_image = _np.zeros((256, 256), dtype=_np.uint8)
+        except Exception:
+            self.scope_image = _np.zeros((256, 256), dtype=_np.uint8)
         # consciousness/growth stage update
         phi_policy = _normalize_phi_policy(system_state.get("phi_policy") if isinstance(system_state, dict) else None)
         if self.phi_value > float(phi_policy.get("high", 0.5)):
@@ -4264,7 +4378,7 @@ class GrowingSOM(EvolutionVisualizer):
             input_variance = np.mean(np.var(recent_inputs, axis=0))
             if input_variance < 0.02:
                 return False
-        if self.total_activations - getattr(self, '_last_growth', 0) < 15:
+        if self.total_activations - attr_get_optional(self, '_last_growth', 0) < 15:
             return False
         return True
 
@@ -4486,7 +4600,7 @@ class QualiaState:
         
         msgs = self.message_bus.receive_all('qualia', max_msgs=30)
         for msg in msgs:
-            try:
+            with guard_context(ctx='m3/m3_core.py:4523', catch_base=False) as __m3_guard_4511_12:
                 if msg.type == 'workspace_update':
                     self.workspace_fullness = msg.payload.get('fullness', 0.0)
                     
@@ -4497,9 +4611,9 @@ class QualiaState:
                     
                 elif msg.type == 'energy_state':
                     self.energy_level = msg.payload.get('energy', 100.0)
-                    
-            except Exception:
-                pass
+
+            if __m3_guard_4511_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
     
     def _broadcast_qualia_state(self):
         """Broadcast qualia to all modules"""
@@ -4606,10 +4720,11 @@ class GlobalWorkspace:
         if param_name in self._policy_param_allowlist:
             self.policy_params[param_name] = value
             if param_name == 'exploration_bias':
-                try:
+                with guard_context(ctx='m3/m3_core.py:4633', catch_base=False) as __m3_guard_4631_16:
                     self.exploration_bias = float(value)
-                except Exception:
-                    pass
+
+                if __m3_guard_4631_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
             logging.debug(
                 '[GlobalWorkspace] policy param write: %s=%s (prev=%s, source=%s)',
                 param_name,
@@ -4641,12 +4756,13 @@ class GlobalWorkspace:
     def get_policy_param_shadow_writes(self, n: Optional[int] = None) -> List[Dict[str, Any]]:
         if n is None:
             return list(self._policy_param_shadow_writes)
-        try:
+        with guard_context(ctx='m3/m3_core.py:4671', catch_base=False) as __m3_guard_4666_8:
             n = int(n)
             if n <= 0:
                 return []
             return list(self._policy_param_shadow_writes)[-n:]
-        except Exception:
+
+        if __m3_guard_4666_8.error is not None:
             return list(self._policy_param_shadow_writes)
 
     def _offline_tune_policy(self):
@@ -4692,12 +4808,13 @@ class GlobalWorkspace:
                 if self._write_policy_param('learning_rate', new_lr, source='offline_tune'):
                     adjustments['learning_rate'] = new_lr - lr0
             if adjustments:
-                try:
+                with guard_context(ctx='m3/m3_core.py:4719', catch_base=False) as __m3_guard_4717_16:
                     self.policy_adjustments.append({'timestamp': self._get_current_timestamp(), 'adjustments': adjustments, 'reason': 'offline_tune', 'coef_lr': coef_lr, 'coef_eb': coef_eb})
-                except Exception:
-                    pass
+
+                if __m3_guard_4717_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def apply_system_health(self, health: Optional[Dict[str, float]], phi: float):
         """Adjust GlobalWorkspace policy parameters from health and phi.
@@ -4705,9 +4822,10 @@ class GlobalWorkspace:
         This is intentionally conservative: small adjustments are recorded and
         can be examined via self.policy_adjustments.
         """
-        try:
+        with guard_context(ctx='m3/m3_core.py:4732', catch_base=False) as __m3_guard_4730_8:
             overall = float(health.get('overall_health', 0.5)) if health else 0.5
-        except Exception:
+
+        if __m3_guard_4730_8.error is not None:
             overall = 0.5
         try:
             phi_val = float(phi)
@@ -4758,12 +4876,13 @@ class GlobalWorkspace:
                 'pre': {'learning_rate': base_lr, 'exploration_bias': eb0, 'attention_focus_strength': att0, 'connection_prune_threshold': prune0},
                 'post': {'learning_rate': new_lr, 'exploration_bias': eb, 'attention_focus_strength': att, 'connection_prune_threshold': prune},
             }
-            try:
+            with guard_context(ctx='m3/m3_core.py:4785', catch_base=False) as __m3_guard_4783_12:
                 self.policy_adjustments.append(record)
-            except Exception:
-                pass
+
+            if __m3_guard_4783_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             # Log coarse outcome signals (reward delta, -td_error) for offline estimation
-            try:
+            with guard_context(ctx='m3/m3_core.py:4804', catch_base=False) as __m3_guard_4788_12:
                 rew_hist = list(self.reward_history)
                 reward_delta = float(rew_hist[-1] - rew_hist[-2]) if len(rew_hist) >= 2 else 0.0
                 td_err = 0.0
@@ -4779,14 +4898,16 @@ class GlobalWorkspace:
                     'phi': phi_val,
                     'overall': overall,
                 })
-            except Exception:
-                pass
+
+            if __m3_guard_4788_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             # Periodically run offline tuner
-            try:
+            with guard_context(ctx='m3/m3_core.py:4810', catch_base=False) as __m3_guard_4807_12:
                 if len(self.policy_effects) % 25 == 0:
                     self._offline_tune_policy()
-            except Exception:
-                pass
+
+            if __m3_guard_4807_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
     def _process_incoming_messages(self):
         """
@@ -4799,7 +4920,7 @@ class GlobalWorkspace:
         msgs = self.message_bus.receive_all('workspace', max_msgs=50)
         
         for msg in msgs:
-            try:
+            with guard_context(ctx='m3/m3_core.py:4865', catch_base=False) as __m3_guard_4824_12:
                 if msg.type == 'qualia_state':
                     # Qualia influences salience weighting
                     arousal = msg.payload.get('arousal', 0.5)
@@ -4839,9 +4960,10 @@ class GlobalWorkspace:
                     if meta_awareness > 0.6:
                         # High meta-awareness increases attention persistence
                         self.attention_persistence = min(0.9, self.attention_persistence + 0.1)
-                        
-            except Exception as e:
-                pass  # Silently ignore malformed messages
+
+            if __m3_guard_4824_12.error is not None:
+                e = __m3_guard_4824_12.error
+                logging.getLogger(__name__).exception("Swallowed exception (%s)", e)
     
     def _send_focus_to_policy(self):
         """Send current attention focus to policy module"""
@@ -4917,7 +5039,7 @@ class GlobalWorkspace:
 
     def _calculate_semantic_similarity(self, content1: ConsciousContent, content2: ConsciousContent) -> float:
         type_similarity = 0.8 if content1.content_type == content2.content_type else 0.0
-        if hasattr(content1, 'semantic_meaning') and hasattr(content2, 'semantic_meaning'):
+        if attr_has(content1, 'semantic_meaning') and attr_has(content2, 'semantic_meaning'):
             meaning1_str = str(content1.semantic_meaning) if content1.semantic_meaning else ''
             meaning2_str = str(content2.semantic_meaning) if content2.semantic_meaning else ''
             meaning1_words = set(meaning1_str.lower().split())
@@ -4947,7 +5069,7 @@ class GlobalWorkspace:
         if self.attention_focus and self.attention_focus.content_type in associations:
             adjusted_salience *= 1.15
         try:
-            if hasattr(content, 'semantic_meaning') and 'uncertainty' in content.semantic_meaning.lower():
+            if attr_has(content, 'semantic_meaning') and 'uncertainty' in content.semantic_meaning.lower():
                 adjusted_salience *= 1.0 + self.policy_params['error_sensitivity'] * 0.3
         except (AttributeError, TypeError):
             pass
@@ -4964,7 +5086,7 @@ class GlobalWorkspace:
                 recent_types = [att.content_type for att in list(self.attention_history)[-3:]]
                 if content.content_type not in recent_types:
                     novelty_bonus += 0.3 * self.exploration_bias
-            content_str = str(content.content) if hasattr(content, 'content') and content.content else ''
+            content_str = str(content.content) if attr_has(content, 'content') and content.content else ''
             if any((word in content_str.lower() for word in ['uncertain', 'error', 'new', 'unknown'])):
                 novelty_bonus += 0.2 * self.exploration_bias
                 pass
@@ -4975,7 +5097,7 @@ class GlobalWorkspace:
                 recent_types = [att.content_type for att in list(self.attention_history)[-5:]]
                 if content.content_type in recent_types:
                     stability_bonus += 0.2 * (1.0 - self.exploration_bias)
-            content_str = str(content.content) if hasattr(content, 'content') and content.content else ''
+            content_str = str(content.content) if attr_has(content, 'content') and content.content else ''
             if any((word in content_str.lower() for word in ['confident', 'goal', 'stable', 'known'])):
                 stability_bonus += 0.15 * (1.0 - self.exploration_bias)
             base_salience *= 1.0 + stability_bonus
@@ -4994,7 +5116,7 @@ class GlobalWorkspace:
             self.content_associations[type2].append(type1)
 
     def _update_semantic_clusters(self, content: ConsciousContent):
-        if hasattr(content, 'semantic_meaning'):
+        if attr_has(content, 'semantic_meaning'):
             meaning_str = str(content.semantic_meaning) if content.semantic_meaning else ''
             words = meaning_str.lower().split()
         else:
@@ -5022,27 +5144,29 @@ class GlobalWorkspace:
             if isinstance(lbs, dict):
                 phi_val = float(lbs.get('phi', lbs.get('phi_value', 0.0) or 0.0))
             if health or phi_val:
-                try:
+                with guard_context(ctx='m3/m3_core.py:5049', catch_base=False) as __m3_guard_5047_16:
                     self.apply_system_health(health or {}, float(phi_val))
-                except Exception:
-                    pass
+
+                if __m3_guard_5047_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
 
         current_policy_bias = float(self.policy_params.get('exploration_bias', 0.5))
         # Avoid hard resets; nudge upward with a small, rate-limited step when too low
         if current_policy_bias < 0.4:
             new_eb = float(min(0.45, current_policy_bias + 0.05))
             if abs(new_eb - current_policy_bias) > 1e-6 and self._write_policy_param('exploration_bias', new_eb, source='maintain_exploration_soft_nudge'):
-                try:
+                with guard_context(ctx='m3/m3_core.py:5059', catch_base=False) as __m3_guard_5057_16:
                     self.policy_adjustments.append({'timestamp': self._get_current_timestamp(), 'adjustments': {'exploration_bias': new_eb - current_policy_bias}, 'reason': 'maintain_exploration_soft_nudge'})
-                except Exception:
-                    pass
+
+                if __m3_guard_5057_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
         self.exploration_bias = float(self.policy_params.get('exploration_bias', 0.5))
         if not self.competitors:
             return self.current_contents
         # If a ConceptualSpace is connected and a recent qualia vector exists in
         # last_broadcast_state, use grounding to bias exploration vs. exploitation.
         if self.concept_space and isinstance(self.last_broadcast_state, dict) and 'qualia' in self.last_broadcast_state:
-            try:
+            with guard_context(ctx='m3/m3_core.py:5096', catch_base=False) as __m3_guard_5067_12:
                 qual = self.last_broadcast_state.get('qualia')
                 grounded = None
                 if qual is not None:
@@ -5071,8 +5195,9 @@ class GlobalWorkspace:
                         float(np.clip(self.policy_params.get('attention_focus_strength', 0.85) * (1.0 + top_confidence * 0.2), 0.1, 2.0)),
                         source='concept_space_grounding',
                     )
-            except Exception:
-                pass
+
+            if __m3_guard_5067_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         exploration_factor = self.exploration_bias + np.random.normal(0, 0.05)
         exploration_mode = exploration_factor > 0.5
         base_threshold = self.policy_params.get('confidence_threshold', 0.4)
@@ -5306,7 +5431,7 @@ class GlobalWorkspace:
         temp_clusters = {}
         for competitor in self.competitors:
             try:
-                if hasattr(competitor, 'semantic_meaning'):
+                if attr_has(competitor, 'semantic_meaning'):
                     meaning_str = str(competitor.semantic_meaning) if competitor.semantic_meaning else ''
                     words = meaning_str.lower().split()
                     cluster_key = words[0] if words else 'misc'
@@ -5379,7 +5504,7 @@ class GlobalWorkspace:
         primary_focus = self._create_safe_focus_description()
         conscious_contents = self._create_safe_content_descriptions()
         workspace_metrics = self._calculate_safe_workspace_metrics()
-        explore_b_state = {'exploration_bias': self.policy_params.get('exploration_bias', 0.5), 'exploration_mode': self.exploration_bias > 0.5, 'last_selection_type': 'exploratory' if hasattr(self, '_last_selection_mode') and self._last_selection_mode else 'conservative', 'diversity_score': self._calculate_current_diversity(), 'novelty_score': self._calculate_current_novelty()}
+        explore_b_state = {'exploration_bias': self.policy_params.get('exploration_bias', 0.5), 'exploration_mode': self.exploration_bias > 0.5, 'last_selection_type': 'exploratory' if attr_has(self, '_last_selection_mode') and self._last_selection_mode else 'conservative', 'diversity_score': self._calculate_current_diversity(), 'novelty_score': self._calculate_current_novelty()}
         broadcast_msg = {'timestamp': current_timestamp, 'version': '2.0', 'primary_focus': primary_focus, 'conscious_contents': conscious_contents, 'workspace_fullness': len(self.current_contents) / self.capacity, 'explore_b': explore_b_state, 'policy_state': {'exploration_bias': self.policy_params.get('exploration_bias', 0.5), 'stability_bias': self.policy_params.get('stability_bias', 0.5), 'confidence_threshold': self.policy_params.get('confidence_threshold', 0.4), 'error_sensitivity': self.policy_params.get('error_sensitivity', 1.0), 'attention_focus_strength': self.policy_params.get('attention_focus_strength', 0.7), 'recent_reward': list(self.reward_history)[-1] if self.reward_history else 0.0, 'cumulative_reward': self.cumulative_reward}, 'workspace_metrics': workspace_metrics, 'attention_context': {'switching_threshold': self.attention_switching_threshold, 'persistence': self.attention_persistence, 'recent_switches': len(self.attention_history), 'focus_stability': self._calculate_focus_stability()}, 'world_state': world_state if world_state else {}, 'performance': {'response_time': time.perf_counter() - start_time, 'error_count': len(self.error_detection_buffer), 'adjustment_count': len(self.policy_adjustments), 'success_rate': self._calculate_success_rate()}}
         predictions = self._generate_safe_predictions(world_state)
         if predictions:
@@ -5388,30 +5513,32 @@ class GlobalWorkspace:
             broadcast_msg['semantic_clusters'] = {k: len(v) for k, v in self.semantic_clusters.items()}
         self.broadcast_history.append(broadcast_msg)
         self.last_broadcast_state = broadcast_msg.copy()
-        if hasattr(self, 'broadcast_hooks') and self.broadcast_hooks:
+        if attr_has(self, 'broadcast_hooks') and self.broadcast_hooks:
             hook_results = []
             for i, hook in enumerate(self.broadcast_hooks):
-                try:
+                with guard_context(ctx='m3/m3_core.py:5420', catch_base=False) as __m3_guard_5416_16:
                     result = hook(broadcast_msg)
                     if result:
                         hook_results.append({'hook_id': i, 'result': result, 'timestamp': self._get_current_timestamp()})
-                except Exception as e:
-                    pass
-            if hook_results:
-                broadcast_msg['hook_responses'] = hook_results
+
+                if __m3_guard_5416_16.error is not None:
+                    e = __m3_guard_5416_16.error
+                    logging.getLogger(__name__).exception("Swallowed exception (%s)", e)
+                    if hook_results:
+                        broadcast_msg['hook_responses'] = hook_results
         total_response_time = time.perf_counter() - start_time
-        if hasattr(self, 'performance_metrics'):
+        if attr_has(self, 'performance_metrics'):
             self.performance_metrics['response_time'].append(total_response_time)
         return broadcast_msg
 
     def _extract_safe_content_attrs(self, obj) -> Dict[str, Any]:
-        return {'type': getattr(obj, 'content_type', 'unknown'), 'salience': getattr(obj, 'salience', 0.0), 'meaning': str(getattr(obj, 'semantic_meaning', ''))[:100], 'timestamp': getattr(obj, 'timestamp', 0)}
+        return {'type': attr_get_optional(obj, 'content_type', 'unknown'), 'salience': attr_get_optional(obj, 'salience', 0.0), 'meaning': str(attr_get_optional(obj, 'semantic_meaning', ''))[:100], 'timestamp': attr_get_optional(obj, 'timestamp', 0)}
 
     def _get_current_timestamp(self) -> float:
         return time.perf_counter()
 
     def _calculate_age(self, obj) -> float:
-        timestamp = getattr(obj, 'timestamp', 0)
+        timestamp = attr_get_optional(obj, 'timestamp', 0)
         if timestamp == 0:
             return 0.0
         return time.perf_counter() - timestamp
@@ -5423,7 +5550,7 @@ class GlobalWorkspace:
             yield start_time
         finally:
             elapsed = time.perf_counter() - start_time
-            if metric_name and hasattr(self, 'performance_metrics'):
+            if metric_name and attr_has(self, 'performance_metrics'):
                 if metric_name not in self.performance_metrics:
                     self.performance_metrics[metric_name] = deque(maxlen=100)
                 self.performance_metrics[metric_name].append(elapsed)
@@ -5432,7 +5559,7 @@ class GlobalWorkspace:
         if not self.attention_focus:
             return {'active': False, 'type': 'none', 'salience': 0.0, 'meaning': '', 'content': None}
         attrs = self._extract_safe_content_attrs(self.attention_focus)
-        return {'active': True, **attrs, 'content': str(getattr(self.attention_focus, 'content', ''))[:100], 'persistence': self.attention_persistence}
+        return {'active': True, **attrs, 'content': str(attr_get_optional(self.attention_focus, 'content', ''))[:100], 'persistence': self.attention_persistence}
 
     def _create_safe_content_descriptions(self) -> List[Dict[str, Any]]:
         descriptions = []
@@ -5443,7 +5570,7 @@ class GlobalWorkspace:
         return descriptions
 
     def _calculate_safe_workspace_metrics(self) -> Dict[str, float]:
-        try:
+        with guard_context(ctx='m3/m3_core.py:5487', catch_base=False) as __m3_guard_5468_8:
             metrics = {'fullness': len(self.current_contents) / self.capacity, 'avg_salience': 0.0, 'diversity': 0.0, 'stability': 0.0}
             if self.current_contents:
                 saliences = [self._extract_safe_content_attrs(content)['salience'] for content in self.current_contents]
@@ -5462,21 +5589,22 @@ class GlobalWorkspace:
                         union = len(prev_types | current_types)
                         metrics['stability'] = intersection / union if union > 0 else 0.0
             return metrics
-        except Exception:
+
+        if __m3_guard_5468_8.error is not None:
             return {'fullness': 0.0, 'avg_salience': 0.0, 'diversity': 0.0, 'stability': 0.0}
 
     def _calculate_current_diversity(self) -> float:
         if len(self.current_contents) <= 1:
             return 0.0
-        types = [getattr(c, 'content_type', 'unknown') for c in self.current_contents]
+        types = [attr_get_optional(c, 'content_type', 'unknown') for c in self.current_contents]
         unique_types = len(set(types))
         return unique_types / len(types)
 
     def _calculate_current_novelty(self) -> float:
         if not self.current_contents or len(self.attention_history) < 5:
             return 0.5
-        current_types = {getattr(c, 'content_type', 'unknown') for c in self.current_contents}
-        recent_types = {getattr(att, 'content_type', 'unknown') for att in list(self.attention_history)[-5:]}
+        current_types = {attr_get_optional(c, 'content_type', 'unknown') for c in self.current_contents}
+        recent_types = {attr_get_optional(att, 'content_type', 'unknown') for att in list(self.attention_history)[-5:]}
         new_types = current_types - recent_types
         novelty = len(new_types) / len(current_types) if current_types else 0.0
         return min(1.0, novelty)
@@ -5484,13 +5612,14 @@ class GlobalWorkspace:
     def _calculate_focus_stability(self) -> float:
         if len(self.attention_history) < 3:
             return 1.0
-        try:
+        with guard_context(ctx='m3/m3_core.py:5515', catch_base=True) as __m3_guard_5509_8:
             recent_focuses = list(self.attention_history)[-3:]
-            if all((getattr(f, 'content_type', '') == getattr(recent_focuses[0], 'content_type', '') for f in recent_focuses)):
+            if all((attr_get_optional(f, 'content_type', '') == attr_get_optional(recent_focuses[0], 'content_type', '') for f in recent_focuses)):
                 return 1.0
             else:
                 return 0.3
-        except:
+
+        if __m3_guard_5509_8.error is not None:
             return 0.5
 
     def _calculate_success_rate(self) -> float:
@@ -5542,27 +5671,31 @@ class GlobalWorkspace:
     def _create_focus_description(self) -> Optional[Dict]:
         if not self.attention_focus:
             return None
-        try:
-            return {'type': getattr(self.attention_focus, 'content_type', 'unknown'), 'meaning': getattr(self.attention_focus, 'semantic_meaning', ''), 'salience': getattr(self.attention_focus, 'salience', 0.0), 'content': getattr(self.attention_focus, 'content', None), 'persistence': self.attention_persistence, 'switch_count': len(self.attention_history), 'associations': self.content_associations.get(getattr(self.attention_focus, 'content_type', 'unknown'), [])}
-        except Exception as e:
+        with guard_context(ctx='m3/m3_core.py:5569', catch_base=False) as __m3_guard_5567_8:
+            return {'type': attr_get_optional(self.attention_focus, 'content_type', 'unknown'), 'meaning': attr_get_optional(self.attention_focus, 'semantic_meaning', ''), 'salience': attr_get_optional(self.attention_focus, 'salience', 0.0), 'content': attr_get_optional(self.attention_focus, 'content', None), 'persistence': self.attention_persistence, 'switch_count': len(self.attention_history), 'associations': self.content_associations.get(attr_get_optional(self.attention_focus, 'content_type', 'unknown'), [])}
+
+        if __m3_guard_5567_8.error is not None:
+            e = __m3_guard_5567_8.error
             logging.error(f'Error in _create_focus_description: {str(e)[:50]}')
             return {'type': 'error', 'meaning': 'Failed to create focus description', 'salience': 0.0, 'content': None, 'persistence': 0.0, 'switch_count': 0, 'associations': []}
 
     def _create_content_descriptions(self) -> List[Dict]:
         descriptions = []
         for c in self.current_contents:
-            try:
+            with guard_context(ctx='m3/m3_core.py:5580', catch_base=False) as __m3_guard_5576_12:
                 attrs = self._extract_safe_content_attrs(c)
                 description = {**attrs, 'age': self._calculate_age(c), 'cluster': self._find_content_cluster(c)}
                 descriptions.append(description)
-            except Exception as e:
+
+            if __m3_guard_5576_12.error is not None:
+                e = __m3_guard_5576_12.error
                 print(f'Error in content description: {str(e)[:50]}')
                 descriptions.append({'type': 'error', 'meaning': 'Failed to describe content', 'salience': 0.0, 'age': 0.0, 'cluster': 'error'})
         return descriptions
 
     def _find_content_cluster(self, content: ConsciousContent) -> str:
-        try:
-            semantic_meaning = getattr(content, 'semantic_meaning', '')
+        with guard_context(ctx='m3/m3_core.py:5595', catch_base=False) as __m3_guard_5586_8:
+            semantic_meaning = attr_get_optional(content, 'semantic_meaning', '')
             if not semantic_meaning:
                 return 'empty'
             meaning_str = str(semantic_meaning) if semantic_meaning else ''
@@ -5570,7 +5703,8 @@ class GlobalWorkspace:
             if words and words[0] in self.semantic_clusters:
                 return words[0]
             return 'unclustered'
-        except Exception:
+
+        if __m3_guard_5586_8.error is not None:
             return 'error'
 
     def _calculate_workspace_metrics(self) -> Dict[str, float]:
@@ -5641,7 +5775,7 @@ class GlobalWorkspace:
 
     def detect_errors_from_broadcast(self, broadcast_msg: Dict, outcome: Dict) -> List[Dict]:
         errors = []
-        try:
+        with guard_context(ctx='m3/m3_core.py:5697', catch_base=False) as __m3_guard_5666_8:
             if broadcast_msg.get('primary_focus'):
                 focus_type = broadcast_msg['primary_focus'].get('type', '<unknown>')
                 if 'goal' in focus_type:
@@ -5672,7 +5806,9 @@ class GlobalWorkspace:
                     errors.append({'type': 'attention_mismatch', 'severity': world_urgency, 'description': 'high world urgency but low attention salience', 'timestamp': broadcast_msg.get('timestamp', 0)})
             for error in errors:
                 self.error_detection_buffer.append({'error': error, 'timestamp': self._get_current_timestamp()})
-        except Exception as e:
+
+        if __m3_guard_5666_8.error is not None:
+            e = __m3_guard_5666_8.error
             logging.error(f'Error in detect_errors_from_broadcast: {str(e)[:100]}')
             errors = []
         return errors
@@ -5826,7 +5962,7 @@ class GlobalWorkspace:
             dominant_error = max(error_counts.items(), key=lambda x: x[1])[0] if error_counts else None
             if dominant_error and error_counts[dominant_error] >= 3:
                 recommendations.append({'action': f'adjust_for_{dominant_error}', 'priority': 'high', 'reason': f'{dominant_error}        ', 'specific_adjustments': self._get_error_specific_adjustments(dominant_error), 'expected_impact': 'error_reduction'})
-        if hasattr(self, 'last_content') and self.last_content:
+        if attr_has(self, 'last_content') and self.last_content:
             content_density = len(self.last_content.get('content_items', []))
             if content_density > 15:
                 recommendations.append({'action': 'increase_selectivity', 'priority': 'medium', 'reason': 'workspace content density high', 'target_value': min(self.policy_params['confidence_threshold'] + 0.1, 0.9), 'expected_impact': 'load_reduction'})
@@ -6036,13 +6172,13 @@ class GlobalWorkspace:
         others = [c for c in self.current_contents if c != focus]
         try:
             if focus is not None:
-                summary = f"   : {(focus.semantic_meaning if hasattr(focus, 'semantic_meaning') else '')[:20]:<20} )"
+                summary = f"   : {(focus.semantic_meaning if attr_has(focus, 'semantic_meaning') else '')[:20]:<20} )"
             else:
                 summary = '  :   '
         except (AttributeError, TypeError):
             summary = '   :              )'
         if others:
-            valid_others = [c for c in others[:2] if hasattr(c, 'semantic_meaning')]
+            valid_others = [c for c in others[:2] if attr_has(c, 'semantic_meaning')]
             if valid_others:
                 summary += f" |    : {', '.join([c.semantic_meaning[:20] for c in valid_others])}"
         return summary
@@ -6057,10 +6193,10 @@ class GlobalWorkspace:
         """
         import numpy as _np
         from collections import deque
-        if not hasattr(self, "_reward_hist"): self._reward_hist = deque(maxlen=4096)
-        if not hasattr(self, "_success_hist"): self._success_hist = deque(maxlen=4096)
-        if not hasattr(self, "_kl_hist"): self._kl_hist = deque(maxlen=1024)
-        if not hasattr(self, "_ploss_hist"): self._ploss_hist = deque(maxlen=1024)
+        if not attr_has(self, "_reward_hist"): self._reward_hist = deque(maxlen=4096)
+        if not attr_has(self, "_success_hist"): self._success_hist = deque(maxlen=4096)
+        if not attr_has(self, "_kl_hist"): self._kl_hist = deque(maxlen=1024)
+        if not attr_has(self, "_ploss_hist"): self._ploss_hist = deque(maxlen=1024)
         def _tail(lst, w):
             x = _np.asarray(list(lst)[-w:], dtype=float)
             if x.size == 0: return _np.zeros((0,), dtype=float)
@@ -6151,7 +6287,7 @@ class GoalGenerator:
         urgency = 0.0
         if goal_type == GoalType.UNDERSTAND_SELF:
             entropy_z = (qualia.entropy - self.qualia_stats['entropy']['mean']) / self.qualia_stats['entropy']['std']
-            if hasattr(self_model, 'meta_confidence'):
+            if attr_has(self_model, 'meta_confidence'):
                 conf_deficit = max(0, 0.5 - self_model.meta_confidence)
             else:
                 conf_deficit = max(0, 0.5 - self_model.get('meta_confidence', 0.5)) if isinstance(self_model, dict) else 0.0
@@ -6161,7 +6297,7 @@ class GoalGenerator:
             urgency = np.tanh(arousal_z * 0.7)
         elif goal_type == GoalType.EXPLORE:
             valence_z = (qualia.valence - self.qualia_stats['valence']['mean']) / self.qualia_stats['valence']['std']
-            if hasattr(self_model, 'belief_stability'):
+            if attr_has(self_model, 'belief_stability'):
                 stability_boost = self_model.belief_stability
             else:
                 stability_boost = self_model.get('belief_stability', 0.5) if isinstance(self_model, dict) else 0.5
@@ -6204,9 +6340,9 @@ class GoalGenerator:
     # === DYNAMIC GOAL DISCOVERY METHODS ===
     
     def discover_goal_from_pattern(self, qualia: QualiaState, self_model, world_state: Dict) -> Optional[Dict[str, Any]]:
-        """내부 패턴에서 새로운 목표 발견"""
+        """?대? ?⑦꽩?먯꽌 ?덈줈??紐⑺몴 諛쒓껄"""
         
-        # Pattern 1: Frustration + Low Energy → Efficiency Goal
+        # Pattern 1: Frustration + Low Energy ??Efficiency Goal
         if qualia.frustration > 0.6 and world_state.get('energy_level', 0.5) < 0.3:
             goal_id = f"efficiency_{int(time.time())}"
             if goal_id not in self.discovered_goals:
@@ -6221,7 +6357,7 @@ class GoalGenerator:
                 }
                 return self.discovered_goals[goal_id]
         
-        # Pattern 2: High Entropy + Low Engagement → Focus Goal
+        # Pattern 2: High Entropy + Low Engagement ??Focus Goal
         if qualia.entropy > 0.7 and qualia.engagement < 0.4:
             goal_id = f"focus_{int(time.time())}"
             if goal_id not in self.discovered_goals:
@@ -6236,8 +6372,8 @@ class GoalGenerator:
                 }
                 return self.discovered_goals[goal_id]
         
-        # Pattern 3: Oscillating phi → Stabilization Goal
-        if hasattr(self_model, 'state_history') and len(self_model.state_history) > 20:
+        # Pattern 3: Oscillating phi ??Stabilization Goal
+        if attr_has(self_model, 'state_history') and len(self_model.state_history) > 20:
             recent = list(self_model.state_history)[-20:]
             if recent and 'phi' in recent[0]:
                 phi_values = [s.get('phi', 0.5) for s in recent]
@@ -6259,7 +6395,7 @@ class GoalGenerator:
         return None
     
     def compose_hierarchical_goal(self, sub_goal_types: List[GoalType]) -> Dict[str, Any]:
-        """기존 목표들을 조합하여 상위 목표 생성"""
+        """湲곗〈 紐⑺몴?ㅼ쓣 議고빀?섏뿬 ?곸쐞 紐⑺몴 ?앹꽦"""
         goal_id = f"composite_{'_'.join([g.value for g in sub_goal_types])}_{int(time.time())}"
         
         description_parts = [g.value for g in sub_goal_types]
@@ -6280,7 +6416,7 @@ class GoalGenerator:
         return composite_goal
     
     def evaluate_discovered_goal(self, goal_id: str, qualia: QualiaState, world_state: Dict) -> bool:
-        """발견된 목표의 달성 여부 평가"""
+        """諛쒓껄??紐⑺몴???ъ꽦 ?щ? ?됯?"""
         if goal_id not in self.discovered_goals:
             return False
         
@@ -6362,8 +6498,7 @@ class MetaCognitiveNetwork:
         
         N = len(self.meta_buffer)
         
-        try:
-        
+        with guard_context(ctx='m3/m3_core.py:6479', catch_base=False) as __m3_guard_6387_8:
             import numpy as _np
         
             b = float(globals().get('_GLOBAL_QUALIA_REPLAY_BIAS', 0.0))
@@ -6453,9 +6588,8 @@ class MetaCognitiveNetwork:
             p = _softmax(best_alpha)
         
             indices = np.random.choice(N, size=batch_size, replace=False, p=p)
-        
-        except Exception:
-        
+
+        if __m3_guard_6387_8.error is not None:
             indices = np.random.choice(len(self.meta_buffer), size=batch_size, replace=False)
         
         batch = [self.meta_buffer[i] for i in indices]
@@ -6552,7 +6686,7 @@ class RecursiveSelfModel:
         Returns only machine-usable signals with stable keys.
         """
         # Ensure rolling histories exist
-        if not hasattr(self, "_hist_stability"):
+        if not attr_has(self, "_hist_stability"):
             from collections import deque
             self._hist_stability = deque(maxlen=128)
             self._hist_adaptation = deque(maxlen=128)
@@ -6560,20 +6694,21 @@ class RecursiveSelfModel:
             self._hist_meta = deque(maxlen=128)
 
         # Current scalars with robust defaults
-        stability = float(getattr(self, "belief_stability", 0.5))
-        adaptation = float(getattr(self, "belief_adaptation", 0.5))
-        prediction = float(getattr(self, "belief_prediction", 0.5))
+        stability = float(attr_get_optional(self, "belief_stability", 0.5))
+        adaptation = float(attr_get_optional(self, "belief_adaptation", 0.5))
+        prediction = float(attr_get_optional(self, "belief_prediction", 0.5))
         # meta confidence: average over belief_about_beliefs if present, else meta_awareness, else 0.5
         meta_conf = 0.5
-        try:
-            bab = getattr(self, "belief_about_beliefs", None)
+        with guard_context(ctx='m3/m3_core.py:6598', catch_base=False) as __m3_guard_6590_8:
+            bab = attr_get_optional(self, "belief_about_beliefs", None)
             if isinstance(bab, dict) and len(bab) > 0:
                 vals = [float(v) for v in bab.values() if isinstance(v, (int, float))]
                 if vals:
                     meta_conf = float(sum(vals) / len(vals))
             else:
-                meta_conf = float(getattr(self, "meta_awareness", 0.5))
-        except Exception:
+                meta_conf = float(attr_get_optional(self, "meta_awareness", 0.5))
+
+        if __m3_guard_6590_8.error is not None:
             meta_conf = 0.5
 
         # Update histories
@@ -6609,13 +6744,15 @@ class RecursiveSelfModel:
         }
 
         # Optional hooks (graceful fallbacks)
-        try:
-            agency = float(getattr(self, "agency", 0.5))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:6636', catch_base=False) as __m3_guard_6634_8:
+            agency = float(attr_get_optional(self, "agency", 0.5))
+
+        if __m3_guard_6634_8.error is not None:
             agency = 0.5
-        try:
-            unity = float(getattr(self, "unity_score", 0.5))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:6640', catch_base=False) as __m3_guard_6638_8:
+            unity = float(attr_get_optional(self, "unity_score", 0.5))
+
+        if __m3_guard_6638_8.error is not None:
             unity = 0.5
 
         report = {
@@ -6645,10 +6782,11 @@ class RecursiveSelfModel:
 
     def _verbalize_level2(self) -> str:
         """Summarize confidence about beliefs (second-order)."""
-        try:
+        with guard_context(ctx='m3/m3_core.py:6673', catch_base=False) as __m3_guard_6670_8:
             vals = list(self.belief_about_beliefs.values())
             conf_avg = sum(vals) / len(vals) if vals else 0.5
-        except Exception:
+
+        if __m3_guard_6670_8.error is not None:
             conf_avg = 0.5
         return f"L2: confidence_in_beliefs={conf_avg:.2f}"
 
@@ -6749,7 +6887,7 @@ class RecursiveSelfModel:
             # Confidence tracks stability
             target_confidence = awareness_stability * 0.7 + self.meta_awareness * 0.3
             
-            # 더 빠른 업데이트
+            # ??鍮좊Ⅸ ?낅뜲?댄듃
             self.meta_confidence = 0.7 * self.meta_confidence + 0.3 * target_confidence
             self.meta_confidence = np.clip(self.meta_confidence, 0.1, 0.95)
         
@@ -6911,7 +7049,7 @@ class RecursiveSelfModel:
     
     def _do_meta_learning(self):
         """Trigger meta-learning update"""
-        if not hasattr(self, '_last_meta_experience'):
+        if not attr_has(self, '_last_meta_experience'):
             return
         
         # Compute target based on recent performance
@@ -7144,7 +7282,7 @@ class RecursiveSelfModel:
     # === AUTONOMOUS EXPANSION METHODS ===
     
     def detect_capability_gaps(self, internal_state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """내부 상태를 분석하여 능력 부족을 자동 감지"""
+        """?대? ?곹깭瑜?遺꾩꽍?섏뿬 ?λ젰 遺議깆쓣 ?먮룞 媛먯?"""
         gaps = []
         
         # 1. High meta-awareness but low action success
@@ -7159,7 +7297,7 @@ class RecursiveSelfModel:
                     'evidence': {'meta_awareness': self.meta_awareness, 'success_rate': recent_success}
                 })
         
-        # 2. High prediction error → need better world model
+        # 2. High prediction error ??need better world model
         if len(self.prediction_errors) >= 10:
             recent_errors = list(self.prediction_errors)[-10:]
             avg_error = sum(recent_errors) / len(recent_errors)
@@ -7172,7 +7310,7 @@ class RecursiveSelfModel:
                     'evidence': {'avg_prediction_error': avg_error}
                 })
         
-        # 3. Low belief stability → need stabilization mechanism
+        # 3. Low belief stability ??need stabilization mechanism
         if self.belief_stability < 0.3 and self.meta_confidence < 0.4:
             gaps.append({
                 'type': 'stability',
@@ -7201,7 +7339,7 @@ class RecursiveSelfModel:
         return gaps
     
     def generate_self_improvement_hypothesis(self, gap: Dict[str, Any]) -> Dict[str, Any]:
-        """능력 갭을 기반으로 자기 개선 가설 생성"""
+        """?λ젰 媛?쓣 湲곕컲?쇰줈 ?먭린 媛쒖꽑 媛???앹꽦"""
         hypothesis = {
             'id': f"hyp_{int(time.time() * 1000)}",
             'timestamp': time.time(),
@@ -7258,7 +7396,7 @@ class RecursiveSelfModel:
         return hypothesis
     
     def test_hypothesis(self, hypothesis: Dict[str, Any], test_env: Any) -> Dict[str, Any]:
-        """가설을 실제로 테스트하고 결과 기록"""
+        """媛?ㅼ쓣 ?ㅼ젣濡??뚯뒪?명븯怨?寃곌낵 湲곕줉"""
         hypothesis_id = hypothesis['id']
         action = hypothesis['proposed_action']
         
@@ -7338,7 +7476,7 @@ class RecursiveSelfModel:
         return result
     
     def _save_state(self) -> Dict[str, Any]:
-        """현재 상태 백업"""
+        """?꾩옱 ?곹깭 諛깆뾽"""
         return {
             'belief_stability': self.belief_stability,
             'belief_adaptation': self.belief_adaptation,
@@ -7350,7 +7488,7 @@ class RecursiveSelfModel:
         }
     
     def _restore_state(self, state: Dict[str, Any]):
-        """백업된 상태로 복원"""
+        """諛깆뾽???곹깭濡?蹂듭썝"""
         self.belief_stability = state['belief_stability']
         self.belief_adaptation = state['belief_adaptation']
         self.belief_prediction = state['belief_prediction']
@@ -7360,7 +7498,7 @@ class RecursiveSelfModel:
         self.max_safe_depth = state['max_safe_depth']
     
     def _apply_hypothesis_action(self, action: Dict[str, Any]):
-        """가설의 제안된 변경사항 적용"""
+        """媛?ㅼ쓽 ?쒖븞??蹂寃쎌궗???곸슜"""
         action_type = action.get('type', '')
         
         if action_type == 'add_planning_layer':
@@ -7381,7 +7519,7 @@ class RecursiveSelfModel:
             self.max_safe_depth = min(12, self.max_safe_depth + 1)
     
     def compose_skills(self, skill_names: List[str]) -> Callable:
-        """작은 스킬들을 조합하여 새로운 복합 스킬 생성"""
+        """?묒? ?ㅽ궗?ㅼ쓣 議고빀?섏뿬 ?덈줈??蹂듯빀 ?ㅽ궗 ?앹꽦"""
         def composed_skill(*args, **kwargs):
             results = []
             for skill_name in skill_names:
@@ -7393,12 +7531,12 @@ class RecursiveSelfModel:
         return composed_skill
     
     def register_skill(self, name: str, skill_fn: Callable):
-        """새로운 스킬을 라이브러리에 등록"""
+        """?덈줈???ㅽ궗???쇱씠釉뚮윭由ъ뿉 ?깅줉"""
         self.modular_skills[name] = skill_fn
         logging.info(f"Registered skill: {name}")
     
     def discover_skill_composition(self, task_context: Dict[str, Any]) -> Optional[str]:
-        """현재 태스크에 유용한 스킬 조합 탐색"""
+        """?꾩옱 ?쒖뒪?ъ뿉 ?좎슜???ㅽ궗 議고빀 ?먯깋"""
         if len(self.modular_skills) < 2:
             return None
         
@@ -7419,12 +7557,12 @@ class RecursiveSelfModel:
         return None
     
     def _evaluate_skill_composition(self, skill: Callable, context: Dict[str, Any]) -> float:
-        """스킬 조합의 유용성 평가 (간단한 휴리스틱)"""
+        """?ㅽ궗 議고빀???좎슜???됯? (媛꾨떒???대━?ㅽ떛)"""
         # Placeholder: actual evaluation would run skill and measure performance
         return np.random.random()  # Replace with actual evaluation
     
     def autonomous_expansion_step(self, current_time: float, internal_state: Dict[str, Any]) -> Dict[str, Any]:
-        """자율 확장 메인 루프 - 매 스텝마다 호출"""
+        """?먯쑉 ?뺤옣 硫붿씤 猷⑦봽 - 留??ㅽ뀦留덈떎 ?몄텧"""
         expansion_report = {
             'gaps_detected': [],
             'hypotheses_generated': [],
@@ -7516,9 +7654,10 @@ class EpisodicMemory:
         arousal = (qualia_vector[0] + qualia_vector[3]) / 2
         emb = None
         if embedding is not None:
-            try:
+            with guard_context(ctx='m3/m3_core.py:7543', catch_base=False) as __m3_guard_7541_12:
                 emb = np.asarray(embedding, dtype=np.float32).ravel()
-            except Exception:
+
+            if __m3_guard_7541_12.error is not None:
                 emb = None
         if not isinstance(context, dict):
             context = {'context': context}
@@ -7636,10 +7775,10 @@ class EpisodicMemory:
         }
         self.memories.sort(
             key=lambda m: (
-                kind_priority.get(getattr(m, 'kind', 'internal_state'), 0),
-                float(getattr(m, 'consolidation_level', 0.0)),
-                int(getattr(m, 'retrieval_count', 0)),
-                float(getattr(m, 'timestamp', 0.0)),
+                kind_priority.get(attr_get_optional(m, 'kind', 'internal_state'), 0),
+                float(attr_get_optional(m, 'consolidation_level', 0.0)),
+                int(attr_get_optional(m, 'retrieval_count', 0)),
+                float(attr_get_optional(m, 'timestamp', 0.0)),
             )
         )
         while len(self.memories) > self.max_memories:
@@ -7667,7 +7806,7 @@ class EpisodicMemory:
 
 
     def save(self, path: str) -> None:
-        try:
+        with guard_context(ctx='m3/m3_core.py:7719', catch_base=False) as __m3_guard_7692_8:
             meta = {
                 'total_encoded': int(self.total_encoded),
                 'total_retrieved': int(self.total_retrieved),
@@ -7686,16 +7825,17 @@ class EpisodicMemory:
                         'arousal': float(mem.arousal),
                         'context': mem.context,
                         'narrative': mem.narrative,
-                        'retrieval_count': int(getattr(mem, 'retrieval_count', 0)),
-                        'consolidation_level': float(getattr(mem, 'consolidation_level', 0.0)),
-                        'kind': str(getattr(mem, 'kind', 'internal_state')),
-                        'content': str(getattr(mem, 'content', '')),
-                        'embedding': np.asarray(getattr(mem, 'embedding', None), dtype=np.float32).tolist() if getattr(mem, 'embedding', None) is not None else None,
-                        'tags': list(getattr(mem, 'tags', []) or []),
+                        'retrieval_count': int(attr_get_optional(mem, 'retrieval_count', 0)),
+                        'consolidation_level': float(attr_get_optional(mem, 'consolidation_level', 0.0)),
+                        'kind': str(attr_get_optional(mem, 'kind', 'internal_state')),
+                        'content': str(attr_get_optional(mem, 'content', '')),
+                        'embedding': np.asarray(attr_get_optional(mem, 'embedding', None), dtype=np.float32).tolist() if attr_get_optional(mem, 'embedding', None) is not None else None,
+                        'tags': list(attr_get_optional(mem, 'tags', []) or []),
                     }
                     f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
-        except Exception:
-            pass
+
+        if __m3_guard_7692_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def load(self, path: str) -> None:
         try:
@@ -7720,9 +7860,10 @@ class EpisodicMemory:
                         emb = None
                         emb_obj = obj.get('embedding', None)
                         if isinstance(emb_obj, (list, tuple)):
-                            try:
+                            with guard_context(ctx='m3/m3_core.py:7747', catch_base=False) as __m3_guard_7745_28:
                                 emb = np.asarray(emb_obj, dtype=np.float32).ravel()
-                            except Exception:
+
+                            if __m3_guard_7745_28.error is not None:
                                 emb = None
                         tags_obj = obj.get('tags', [])
                         if isinstance(tags_obj, list):
@@ -7752,18 +7893,19 @@ class EpisodicMemory:
                         continue
             # restore meta
             if meta:
-                try:
+                with guard_context(ctx='m3/m3_core.py:7782', catch_base=False) as __m3_guard_7777_16:
                     self.total_encoded = int(meta.get('total_encoded', len(self.memories)))
                     self.total_retrieved = int(meta.get('total_retrieved', 0))
                     self.consolidation_cycles = int(meta.get('consolidation_cycles', 0))
                     self.max_memories = int(meta.get('max_memories', self.max_memories))
-                except Exception:
-                    pass
+
+                if __m3_guard_7777_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
             else:
                 self.total_encoded = len(self.memories)
             self._rebuild_indices()
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Swallowed exception")
 
 import copy
 import hashlib
@@ -8114,25 +8256,27 @@ class AutonomousExperimentDesigner:
             'measurements': hypothesis.dependent_vars,
             'protocol': 'bootstrap_ci'
         }
-        try:
+        with guard_context(ctx='m3/m3_core.py:8143', catch_base=False) as __m3_guard_8139_8:
             base_metrics = ['reward_mean', 'td_error', 'phi_median', 'stability']
             cur = list(experiment_design.get('measurements', []))
             experiment_design['measurements'] = list(set(cur) | set(base_metrics))
-        except Exception:
-            pass
+
+        if __m3_guard_8139_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         return experiment_design
 
     def execute_experiment(self, experiment_design: Dict, performance_evaluator: Callable, structure: Dict) -> Dict[str, Any]:
         # Try to decorrelate trials via lightweight reseeding of core RNG
-        core = getattr(performance_evaluator, '__self__', None)
-        orig_rng = getattr(core, 'rng', None) if core is not None else None
+        core = attr_get_optional(performance_evaluator, '__self__', None)
+        orig_rng = attr_get_optional(core, 'rng', None) if core is not None else None
         control_results = []
         for trial in range(experiment_design['control_group']['trials']):
-            try:
-                if core is not None and hasattr(core, 'rng'):
+            with guard_context(ctx='m3/m3_core.py:8156', catch_base=False) as __m3_guard_8153_12:
+                if core is not None and attr_has(core, 'rng'):
                     core.rng = np.random.default_rng((hash(experiment_design['hypothesis_id']) + trial) & 0xFFFFFFFF)
-            except Exception:
-                pass
+
+            if __m3_guard_8153_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             metrics = performance_evaluator(structure)
             control_results.append(metrics)
         treatment_results = []
@@ -8140,19 +8284,21 @@ class AutonomousExperimentDesigner:
             modified_structure = copy.deepcopy(structure)
             for operator, params in experiment_design['treatment_group']['operators']:
                 modified_structure, _ = self.operator_engine.apply_operator(operator, params, modified_structure, performance_before={}, hypothesis=experiment_design['hypothesis_id'])
-            try:
-                if core is not None and hasattr(core, 'rng'):
+            with guard_context(ctx='m3/m3_core.py:8168', catch_base=False) as __m3_guard_8165_12:
+                if core is not None and attr_has(core, 'rng'):
                     core.rng = np.random.default_rng((hash(experiment_design['hypothesis_id']) + 100000 + trial) & 0xFFFFFFFF)
-            except Exception:
-                pass
+
+            if __m3_guard_8165_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             metrics = performance_evaluator(modified_structure)
             treatment_results.append(metrics)
         # restore RNG
-        try:
+        with guard_context(ctx='m3/m3_core.py:8176', catch_base=False) as __m3_guard_8173_8:
             if core is not None and (orig_rng is not None):
                 core.rng = orig_rng
-        except Exception:
-            pass
+
+        if __m3_guard_8173_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         statistics = self._statistical_analysis(control_results, treatment_results, experiment_design['measurements'])
         results = {'hypothesis_id': experiment_design['hypothesis_id'], 'control_results': control_results, 'treatment_results': treatment_results, 'statistics': statistics, 'operators_applied': experiment_design['treatment_group']['operators']}
         self.experiment_history.append(results)
@@ -8240,7 +8386,7 @@ class AutonomousExperimentDesigner:
             hypothesis.effect_size = avg_effect_size
             print(f"Hypothesis {hypothesis_id} ACCEPTED")
             lb, ub = comp['ci_95']
-            print(f"  Composite ΔS CI95: [{lb:.4f}, {ub:.4f}]")
+            print(f"  Composite ?S CI95: [{lb:.4f}, {ub:.4f}]")
             return True
 
         # 2) Secondary (legacy) weighted significance rule
@@ -8290,7 +8436,7 @@ class AutonomousExperimentDesigner:
     # === SELF-EXPERIMENTATION METHODS ===
     
     def generate_self_hypothesis(self, core: Any) -> Dict[str, Any]:
-        """시스템 자신에 대한 가설 생성"""
+        """?쒖뒪???먯떊?????媛???앹꽦"""
         hypothesis = {
             'id': f"self_hyp_{int(time.time() * 1000)}",
             'timestamp': time.time(),
@@ -8301,7 +8447,7 @@ class AutonomousExperimentDesigner:
         }
         
         # Analyze current state and generate intervention
-        try:
+        with guard_context(ctx='m3/m3_core.py:8339', catch_base=False) as __m3_guard_8326_8:
             current_phi = core.phi_calculator.phi_history[-1] if core.phi_calculator.phi_history else 0.5
             current_meta = core.self_model.meta_awareness
             
@@ -8313,8 +8459,9 @@ class AutonomousExperimentDesigner:
                 }
                 hypothesis['expected_outcome'] = {'phi': 0.6}
                 hypothesis['rationale'] = 'High awareness needs better integration'
-        
-        except Exception as e:
+
+        if __m3_guard_8326_8.error is not None:
+            e = __m3_guard_8326_8.error
             logging.debug(f"Self-hypothesis generation error: {e}")
         
         if hypothesis['intervention']:
@@ -8967,12 +9114,12 @@ class UnifiedSubject:
         print(f"[BIND_EXPERIENCE] t={t}, workspace_contents={len(workspace_contents) if workspace_contents else 0}")
         if not isinstance(goals, list):
             goals = [goals]
-        unified_exp = {'subject': self.subject_id, 'unified_moment': {'what_i_feel': f'   ={qualia.arousal:.2f},    ={qualia.valence:.2f}', 'what_i_believe': f"   ={(beliefs.get('belief_stability', 0.5) if isinstance(beliefs, dict) else getattr(beliefs, 'belief_stability', 0.5)):.2f}", 'what_i_want': goals[0].type.value if goals and len(goals) > 0 and hasattr(goals[0], 'type') else 'none', 'what_i_attend': workspace_contents[0].semantic_meaning if workspace_contents and len(workspace_contents) > 0 and hasattr(workspace_contents[0], 'semantic_meaning') else 'nothing'}, 'gestalt': self._create_gestalt(qualia, beliefs, goals, workspace_contents), 'unity_achieved': self._check_unity(qualia, workspace_contents, t)}
+        unified_exp = {'subject': self.subject_id, 'unified_moment': {'what_i_feel': f'   ={qualia.arousal:.2f},    ={qualia.valence:.2f}', 'what_i_believe': f"   ={(beliefs.get('belief_stability', 0.5) if isinstance(beliefs, dict) else attr_get_optional(beliefs, 'belief_stability', 0.5)):.2f}", 'what_i_want': goals[0].type.value if goals and len(goals) > 0 and attr_has(goals[0], 'type') else 'none', 'what_i_attend': workspace_contents[0].semantic_meaning if workspace_contents and len(workspace_contents) > 0 and attr_has(workspace_contents[0], 'semantic_meaning') else 'nothing'}, 'gestalt': self._create_gestalt(qualia, beliefs, goals, workspace_contents), 'unity_achieved': self._check_unity(qualia, workspace_contents, t)}
         return unified_exp
 
     def _create_gestalt(self, qualia, beliefs, goals, workspace) -> str:
         dominant_qualia = qualia.dominant_feeling()
-        if hasattr(beliefs, 'belief_stability'):
+        if attr_has(beliefs, 'belief_stability'):
             beliefs_list = [beliefs.belief_stability, beliefs.belief_adaptation, beliefs.belief_prediction]
             if max(beliefs_list) == beliefs.belief_stability:
                 dominant_belief = '   '
@@ -9012,7 +9159,7 @@ class UnifiedSubject:
         # Workspace coherence
         if workspace_contents and len(workspace_contents) >= 2:
             try:
-                valid_contents = [c for c in workspace_contents if hasattr(c, 'salience')]
+                valid_contents = [c for c in workspace_contents if attr_has(c, 'salience')]
                 if valid_contents:
                     avg_salience = np.mean([c.salience for c in valid_contents])
                     unity_score += (avg_salience - 0.5) * 0.4
@@ -9053,7 +9200,7 @@ class MetaMetaMonitor:
         self.emergency_cooldown = 0
 
     def evaluate_model_quality(self, self_model: RecursiveSelfModel, t: int) -> Tuple[bool, float, int]:
-        if hasattr(self_model, 'prediction_errors') and len(self_model.prediction_errors) >= 10:
+        if attr_has(self_model, 'prediction_errors') and len(self_model.prediction_errors) >= 10:
             recent_errors = list(self_model.prediction_errors)[-10:]
             avg_error = np.mean(recent_errors)
             error_trend = np.mean(np.diff(recent_errors)) if len(recent_errors) > 1 else 0.0
@@ -9064,20 +9211,20 @@ class MetaMetaMonitor:
         else:
             avg_error = 0.5
             error_trend = 0.0
-        if hasattr(self_model, 'belief_stability'):
+        if attr_has(self_model, 'belief_stability'):
             beliefs = [self_model.belief_stability, self_model.belief_adaptation, self_model.belief_prediction]
         elif isinstance(self_model, dict):
             beliefs = [self_model.get('belief_stability', 0.5), self_model.get('belief_adaptation', 0.5), self_model.get('belief_prediction', 0.5)]
         else:
             beliefs = [0.5, 0.5, 0.5]
         belief_variance = np.var(np.array(beliefs))
-        if hasattr(self_model, 'action_outcomes') and len(self_model.action_outcomes) >= 10:
+        if attr_has(self_model, 'action_outcomes') and len(self_model.action_outcomes) >= 10:
             recent_success_rate = sum(list(self_model.action_outcomes)[-10:]) / 10.0
         elif isinstance(self_model, dict) and 'action_outcomes' in self_model and (len(self_model['action_outcomes']) >= 10):
             recent_success_rate = sum(list(self_model['action_outcomes'])[-10:]) / 10.0
         else:
             recent_success_rate = 0.5
-        if hasattr(self_model, 'meta_confidence'):
+        if attr_has(self_model, 'meta_confidence'):
             meta_confidence = self_model.meta_confidence
         elif isinstance(self_model, dict):
             meta_confidence = self_model.get('meta_confidence', 0.5)
@@ -9168,17 +9315,17 @@ class EnergyBasedController:
         self.energy_mean = 0.5
         self.energy_std = 0.2
         
-        # === CRITICAL FIX 1: 기초대사율 ===
+        # === CRITICAL FIX 1: 湲곗큹??ъ쑉 ===
         self.basal_metabolic_rate = 0.001
         
-        # === CRITICAL FIX 2: 회복률 ===
+        # === CRITICAL FIX 2: ?뚮났瑜?===
         self.recovery_rate_max = 0.70
         self.recovery_efficiency = 0.95
         
-        # === CRITICAL FIX 3: Activation 비용 ===
+        # === CRITICAL FIX 3: Activation 鍮꾩슜 ===
         self.activation_cost_multiplier = 0.15
         
-        # === NEW: 에너지 레벨별 적응형 회복 ===
+        # === NEW: ?먮꼫吏 ?덈꺼蹂??곸쓳???뚮났 ===
         self.adaptive_recovery_boost = True
         
         # Activation dynamics parameters
@@ -9248,7 +9395,7 @@ class EnergyBasedController:
         Returns: drive in range [-1, 1]
         """
         # Extract confidence
-        if hasattr(self_model, 'meta_confidence'):
+        if attr_has(self_model, 'meta_confidence'):
             confidence = float(self_model.meta_confidence)
         elif isinstance(self_model, dict):
             confidence = float(self_model.get('meta_confidence', 0.5))
@@ -9265,7 +9412,7 @@ class EnergyBasedController:
                 float(self_model.get('belief_adaptation', 0.5)),
                 float(self_model.get('belief_prediction', 0.5))
             ]
-        elif hasattr(self_model, 'belief_stability'):
+        elif attr_has(self_model, 'belief_stability'):
             beliefs = [
                 float(self_model.belief_stability),
                 float(self_model.belief_adaptation),
@@ -9279,7 +9426,7 @@ class EnergyBasedController:
         belief_imbalance = belief_variance * 2.0
         
         # High meta-awareness is satisfying
-        if hasattr(self_model, 'meta_awareness'):
+        if attr_has(self_model, 'meta_awareness'):
             meta = float(self_model.meta_awareness)
         elif isinstance(self_model, dict):
             meta = float(self_model.get('meta_awareness', 0.5))
@@ -9292,11 +9439,11 @@ class EnergyBasedController:
         return float(np.tanh(total))
 
     def update_activation(self, qualia: 'QualiaState', self_model, goal: Optional['Goal']):
-        """활성화 업데이트
+        """?쒖꽦???낅뜲?댄듃
         
-        Activation: 처리 강도
-        구동: qualia, self-model, goal, energy
-        제약: fatigue, energy
+        Activation: 泥섎━ 媛뺣룄
+        援щ룞: qualia, self-model, goal, energy
+        ?쒖빟: fatigue, energy
         """
         qualia_pressure = self.compute_qualia_pressure(qualia)
         self_drive = self.compute_self_model_drive(self_model)
@@ -9352,7 +9499,7 @@ class EnergyBasedController:
         self.activation_history.append(float(self.activation_level))
 
     def compute_cognitive_cost(self, action_plan: Dict[str, Any]) -> float:
-        """에너지 비용 계산"""
+        """?먮꼫吏 鍮꾩슜 怨꾩궛"""
         base_complexity = float(action_plan.get('complexity', 1.0))
         base_cost = max(0.3, base_complexity * 0.5)
         activation_multiplier = 1.0 + (self.activation_level ** 1.5) * self.activation_cost_multiplier
@@ -9361,12 +9508,12 @@ class EnergyBasedController:
         return float(total_cost)
 
     def update_energy(self, cost: float):
-        """에너지 업데이트
+        """?먮꼫吏 ?낅뜲?댄듃
         
-        에너지 소모: Action costs, Basal metabolic rate, Activation overhead
-        에너지 회복: Rest factor, Adaptive boost, Sleep bonus
+        ?먮꼫吏 ?뚮え: Action costs, Basal metabolic rate, Activation overhead
+        ?먮꼫吏 ?뚮났: Rest factor, Adaptive boost, Sleep bonus
         """
-        # === 1. 소모 계산 ===
+        # === 1. ?뚮え 怨꾩궛 ===
         basal_drain = self.basal_metabolic_rate
         action_cost = float(cost) * 0.3
         activation_overhead = (self.activation_level ** 2.5) * 0.05
@@ -9374,11 +9521,11 @@ class EnergyBasedController:
         total_expenditure = basal_drain + action_cost + activation_overhead
         self.cognitive_energy -= total_expenditure
         
-        # === 2. 회복 시스템 ===
+        # === 2. ?뚮났 ?쒖뒪??===
         rest_factor = (1.0 - self.activation_level) ** 1.8
         energy_ratio = self.cognitive_energy / self.energy_capacity
         
-        # === 3. 에너지 레벨별 회복 부스트 ===
+        # === 3. ?먮꼫吏 ?덈꺼蹂??뚮났 遺?ㅽ듃 ===
         if self.adaptive_recovery_boost:
             if energy_ratio < 0.15:
                 crisis_boost = 3.5 * (1.0 - energy_ratio / 0.15)
@@ -9394,7 +9541,7 @@ class EnergyBasedController:
         else:
             recovery_efficiency = self.recovery_efficiency
         
-        # === 4. 회복 계산 ===
+        # === 4. ?뚮났 怨꾩궛 ===
         base_recovery = self.recovery_rate_max * rest_factor * recovery_efficiency
         
         if self.activation_level < 0.2:
@@ -9407,24 +9554,24 @@ class EnergyBasedController:
         
         self.cognitive_energy += base_recovery
         
-        # === 5. 범위 제한 ===
+        # === 5. 踰붿쐞 ?쒗븳 ===
         self.cognitive_energy = np.clip(
             self.cognitive_energy, 
             -5.0,
             self.energy_capacity
         )
         
-        # === 6. 히스토리 기록 ===
+        # === 6. ?덉뒪?좊━ 湲곕줉 ===
         energy_ratio = self.cognitive_energy / self.energy_capacity
         self.energy_history.append(float(energy_ratio))
         
-        # === 7. 긴급 상황 대응 ===
+        # === 7. 湲닿툒 ?곹솴 ???===
         if energy_ratio < 0.15:
             self.activation_level *= 0.70
         elif energy_ratio < 0.25:
             self.activation_level *= 0.85
         
-        # === 8. 통계 업데이트 ===
+        # === 8. ?듦퀎 ?낅뜲?댄듃 ===
         self.total_energy_consumed += total_expenditure
         self.total_actions_taken += 1
         if self.cognitive_energy < 30:
@@ -9432,13 +9579,13 @@ class EnergyBasedController:
         if self.activation_level > 0.7:
             self.high_activation_count += 1
         
-        # 평균 업데이트
+        # ?됯퇏 ?낅뜲?댄듃
         if len(self.energy_history) > 0:
             self.avg_energy = float(np.mean(list(self.energy_history)[-100:])) * 100
         if len(self.activation_history) > 0:
             self.avg_activation = float(np.mean(list(self.activation_history)[-100:]))
         
-        # MULTI-LOOP 브로드캐스트
+        # MULTI-LOOP 釉뚮줈?쒖틦?ㅽ듃
         self._broadcast_energy_state()
     
     def _broadcast_energy_state(self):
@@ -9470,20 +9617,20 @@ class EnergyBasedController:
         Returns:
             (should_continue, processing_intensity)
         """
-        # Critical energy shutdown - 임계점 낮춤 (더 오래 버팀)
+        # Critical energy shutdown - ?꾧퀎????땄 (???ㅻ옒 踰꾪?)
         if self.cognitive_energy < -20.0:  # -5.0 -> -20.0
             return (False, 0.0)
         
-        # Very low activation - minimal processing - 임계점 낮춤
+        # Very low activation - minimal processing - ?꾧퀎????땄
         if self.activation_level < 0.01:  # 0.05 -> 0.01
-            return (True, 0.1)  # 최소 강도도 올림
+            return (True, 0.1)  # 理쒖냼 媛뺣룄???щ┝
         
         # Normal operation
         processing_intensity = float(self.activation_level)
         
-        # Reduce intensity if energy is critically low - 임계점 낮춤
+        # Reduce intensity if energy is critically low - ?꾧퀎????땄
         energy_ratio = self.cognitive_energy / self.energy_capacity
-        if energy_ratio < 0.05:  # 0.1 -> 0.05 (더 낮아도 버팀)
+        if energy_ratio < 0.05:  # 0.1 -> 0.05 (????븘??踰꾪?)
             processing_intensity *= (energy_ratio / 0.05)
         
         return (True, float(np.clip(processing_intensity, 0.0, 1.0)))
@@ -9633,13 +9780,14 @@ class MetaController:
         self.W += self.lr * self.m_W
         self.b += self.lr * self.m_b
         # hebbian update
-        try:
+        with guard_context(ctx='m3/m3_core.py:9661', catch_base=False) as __m3_guard_9658_8:
             act_scale = float(a) / max(1.0, float(self.max_delta))
             self.hebb.update(f * act_scale, scale=1.0)
-        except Exception:
-            pass
+
+        if __m3_guard_9658_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         # tiny hebbian regularization
-        try:
+        with guard_context(ctx='m3/m3_core.py:9672', catch_base=False) as __m3_guard_9664_8:
             hb = self.hebb.read()
             if hb is not None and hb.size > 0:
                 hb_seg = hb[:self.in_dim].astype(float)
@@ -9647,8 +9795,9 @@ class MetaController:
                 hb_norm = hb_seg / nrm
                 reg_alpha = 1e-4
                 self.W = (1.0 - reg_alpha) * self.W + reg_alpha * hb_norm
-        except Exception:
-            pass
+
+        if __m3_guard_9664_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         # synaptic scaling
         wn = np.linalg.norm(self.W) + 1e-12
         if wn > 0:
@@ -9679,30 +9828,35 @@ class MetaController:
         if not p or not os.path.exists(p):
             return
         d = np.load(p)
-        try:
+        with guard_context(ctx='m3/m3_core.py:9706', catch_base=False) as __m3_guard_9704_8:
             self.W = d['W'].astype(np.float32)
-        except Exception:
-            pass
-        try:
+
+        if __m3_guard_9704_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='m3/m3_core.py:9710', catch_base=False) as __m3_guard_9708_8:
             self.b = float(d['b'])
-        except Exception:
-            pass
-        try:
+
+        if __m3_guard_9708_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='m3/m3_core.py:9715', catch_base=False) as __m3_guard_9712_8:
             if 'slow_W' in d.files:
                 self.slow_W = d['slow_W'].astype(np.float32)
-        except Exception:
-            pass
-        try:
+
+        if __m3_guard_9712_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='m3/m3_core.py:9720', catch_base=False) as __m3_guard_9717_8:
             if 'sigma' in d.files:
                 self.sigma = float(d['sigma'])
-        except Exception:
-            pass
-        try:
+
+        if __m3_guard_9717_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='m3/m3_core.py:9726', catch_base=False) as __m3_guard_9722_8:
             if 'baseline' in d.files:
                 self.baseline.value = float(d['baseline'])
                 self.baseline.initialized = True
-        except Exception:
-            pass
+
+        if __m3_guard_9722_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def snapshot(self) -> Dict[str, Any]:
         return {
@@ -9750,22 +9904,44 @@ class ConsciousnessBus:
             "dropped": 0,
             "handler_errors": 0,
         }
+        os.environ.setdefault("M3_BUS_LOG_VALIDATE_STRICT", "1")
         self._log_path = None
+        self._log_lock = threading.Lock()
         if outdir is not None:
-            try:
+            with guard_context(ctx='m3/m3_core.py:9780', catch_base=False) as __m3_guard_9777_12:
                 os.makedirs(outdir, exist_ok=True)
                 self._log_path = os.path.join(outdir, 'bus.jsonl')
-            except Exception:
+
+            if __m3_guard_9777_12.error is not None:
                 self._log_path = None
+
+    def _normalize_log_record(self, obj: Dict[str, Any]) -> Dict[str, Any]:
+        rec = dict(obj or {})
+        if "ts" not in rec:
+            rec["ts"] = float(time.time())
+        else:
+            with guard_context(ctx='m3/m3_core.py:9786', catch_base=False) as __m3_guard_9783_12:
+                rec["ts"] = float(rec["ts"])
+
+            if __m3_guard_9783_12.error is not None:
+                rec["ts"] = float(time.time())
+        if "kind" not in rec or not str(rec.get("kind", "")).strip():
+            rec["kind"] = "bus_event"
+        has_event = bool(str(rec.get("event", "")).strip())
+        has_source_key = bool(str(rec.get("source", "")).strip()) and bool(str(rec.get("key", "")).strip())
+        if not has_event and not has_source_key:
+            rec["event"] = "record"
+        return rec
 
     def _log(self, obj: Dict[str, Any]) -> None:
         if not self._log_path:
             return
-        try:
-            with open(self._log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(obj, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
+        rec = self._normalize_log_record(obj)
+        with guard_context(ctx='m3/m3_core.py:9789', catch_base=False) as __m3_guard_9786_8:
+            append_jsonl(self._log_path, rec)
+
+        if __m3_guard_9786_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def _enqueue(self, event: Dict[str, Any]) -> bool:
         with self._lock:
@@ -9801,16 +9977,17 @@ class ConsciousnessBus:
         if self._min_dispatch_interval > 0:
             dt = float(time.time()) - float(self._last_dispatch_ts)
             if dt < self._min_dispatch_interval:
-                try:
+                with guard_context(ctx='m3/m3_core.py:9828', catch_base=False) as __m3_guard_9826_16:
                     time.sleep(self._min_dispatch_interval - dt)
-                except Exception:
-                    pass
+
+                if __m3_guard_9826_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
         self._last_dispatch_ts = float(time.time())
         topic = str(event.get("topic", self._default_topic))
         pri = float(event.get("priority", 0.0))
         payload = event.get("payload", {})
         for _, sub in list(self._subs.items()):
-            try:
+            with guard_context(ctx='m3/m3_core.py:9847', catch_base=False) as __m3_guard_9835_12:
                 st = sub.get("topic")
                 if st and str(st) != topic:
                     continue
@@ -9822,7 +9999,8 @@ class ConsciousnessBus:
                 handler = sub.get("handler")
                 if callable(handler):
                     handler(payload)
-            except Exception:
+
+            if __m3_guard_9835_12.error is not None:
                 self._stats["handler_errors"] += 1
                 self._log(
                     {
@@ -9911,10 +10089,11 @@ class ConsciousnessBus:
     def stop_async_worker(self) -> None:
         self._worker_running = False
         if self._worker is not None:
-            try:
+            with guard_context(ctx='m3/m3_core.py:9938', catch_base=False) as __m3_guard_9936_12:
                 self._worker.join(timeout=1.0)
-            except Exception:
-                pass
+
+            if __m3_guard_9936_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
     def drain(self, max_items: Optional[int] = None) -> int:
         dispatched = 0
@@ -9947,14 +10126,16 @@ class ConsciousnessBus:
         return out
 
     def push(self, source: str, key: str, vector: np.ndarray, salience: float, confidence: float = 1.0, ttl: int = 5) -> None:
-        try:
+        with guard_context(ctx='m3/m3_core.py:9987', catch_base=False) as __m3_guard_9972_8:
             tok = {
                 'ts': time.time(),
+                'kind': 'feature_signal',
                 'source': str(source),
                 'key': str(key),
                 'salience': float(salience),
                 'confidence': float(confidence),
                 'ttl': int(ttl),
+                'event': 'feature_push',
                 'vector_len': int(np.asarray(vector).size),
             }
             self.tokens.append(tok)
@@ -9962,8 +10143,9 @@ class ConsciousnessBus:
                 self.tokens = self.tokens[-self._max_queue:]
             self.publish(topic="token", payload=tok, priority=float(salience), async_dispatch=None)
             self._log(tok)
-        except Exception:
-            pass
+
+        if __m3_guard_9972_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
     def step(self) -> None:
         nxt = []
@@ -9993,30 +10175,32 @@ class AutoNamer:
 
     @staticmethod
     def _slug(text: str) -> str:
-        try:
+        with guard_context(ctx='m3/m3_core.py:10021', catch_base=False) as __m3_guard_10018_8:
             t = unicodedata.normalize('NFKD', str(text))
             t = t.encode('ascii', 'ignore').decode('ascii')
-        except Exception:
+
+        if __m3_guard_10018_8.error is not None:
             t = str(text)
         t = re.sub(r'[^A-Za-z0-9]+', '_', t).strip('_').lower()
         return t or 'x'
 
     @staticmethod
     def _hash(obj: Dict[str, Any], n: int = 10) -> str:
-        try:
+        with guard_context(ctx='m3/m3_core.py:10032', catch_base=False) as __m3_guard_10028_8:
             payload = json.dumps(obj, sort_keys=True, default=str).encode('utf-8')
             h = hashlib.blake2b(payload, digest_size=8).hexdigest()
             return h[:max(6, int(n))]
-        except Exception:
+
+        if __m3_guard_10028_8.error is not None:
             return '000000'
 
     def spec_name(self, spec: 'FeatureSpec') -> str:
-        src = self._slug(getattr(spec, 'source', 'src'))
-        pack = self._slug(getattr(spec, 'packer', 'p'))
-        dim = int(getattr(spec, 'produced_dim', 1) or 1)
-        h = self._hash({'source': str(getattr(spec, 'source', 'src')),
-                        'packer': str(getattr(spec, 'packer', 'p')),
-                        'params': getattr(spec, 'params', {}),
+        src = self._slug(attr_get_optional(spec, 'source', 'src'))
+        pack = self._slug(attr_get_optional(spec, 'packer', 'p'))
+        dim = int(attr_get_optional(spec, 'produced_dim', 1) or 1)
+        h = self._hash({'source': str(attr_get_optional(spec, 'source', 'src')),
+                        'packer': str(attr_get_optional(spec, 'packer', 'p')),
+                        'params': attr_get_optional(spec, 'params', {}),
                         'dim': dim})
         base = f"spec.{src}.{pack}.{h}"
         name = base
@@ -10039,7 +10223,7 @@ class AutoNamer:
             if clipped or kl > 0.02:
                 return 'policy.update_constrained'
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Swallowed exception")
         return 'policy.state'
 
 
@@ -10156,10 +10340,11 @@ if _TORCH_OK:
             a = x[:, self.z_dim:self.z_dim + self.a_dim]
             # apply shared repr if present
             if self.shared_repr is not None:
-                try:
+                with guard_context(ctx='m3/m3_core.py:10183', catch_base=False) as __m3_guard_10181_16:
                     z = self.shared_repr(z)
-                except Exception:
-                    pass
+
+                if __m3_guard_10181_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
             h = self.proj_z(z) + self.proj_a(a)
             lb = h.new_tensor(0.0)
             ent_sum = h.new_tensor(0.0)
@@ -10211,11 +10396,12 @@ if _TORCH_OK:
                                    shared_repr=shared_repr).to(dev)
             self.fsdp = bool(fsdp and _FSDP_OK)
             if self.fsdp and not _dist.is_initialized():
-                try:
+                with guard_context(ctx='m3/m3_core.py:10239', catch_base=False) as __m3_guard_10236_16:
                     backend = 'nccl' if dev.type == 'cuda' else 'gloo'
                     _dist.init_process_group(backend=backend, init_method='tcp://127.0.0.1:29502', rank=0, world_size=1)
-                except Exception:
-                    pass
+
+                if __m3_guard_10236_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
             if self.fsdp and _dist.is_initialized():
                 self.model = _FSDP(self.model, auto_wrap_policy=_fsdp_auto_wrap)
             wd = float(os.environ.get("M3_STABILITY_WEIGHT_DECAY", "0.01"))
@@ -10285,32 +10471,36 @@ if _TORCH_OK:
                         n = p.data.norm()
                         if _t.isfinite(n) and float(n.item()) > max_w:
                             p.data.mul_(max_w / (n + 1e-8))
-            try:
-                self._last_expert_usage_entropy = float(getattr(self.model, 'last_expert_usage_entropy', _t.tensor(0.0)).detach().item())
-            except Exception:
+            with guard_context(ctx='m3/m3_core.py:10312', catch_base=False) as __m3_guard_10310_12:
+                self._last_expert_usage_entropy = float(attr_get_optional(self.model, 'last_expert_usage_entropy', _t.tensor(0.0)).detach().item())
+
+            if __m3_guard_10310_12.error is not None:
                 self._last_expert_usage_entropy = 0.0
-            try:
-                self._last_max_expert_load = float(getattr(self.model, 'last_max_expert_load', _t.tensor(0.0)).detach().item())
-            except Exception:
+            with guard_context(ctx='m3/m3_core.py:10316', catch_base=False) as __m3_guard_10314_12:
+                self._last_max_expert_load = float(attr_get_optional(self.model, 'last_max_expert_load', _t.tensor(0.0)).detach().item())
+
+            if __m3_guard_10314_12.error is not None:
                 self._last_max_expert_load = 0.0
             return float(loss.detach().item())
 
         def save(self, path: str) -> None:
-            try:
+            with guard_context(ctx='m3/m3_core.py:10326', catch_base=False) as __m3_guard_10321_12:
                 p = path
                 if p.endswith('.npz'):
                     p = p[:-4] + '.pt'
                 _t.save({'in_dim': self.in_dim, 'z_dim': self.z_dim, 'state': self.model.state_dict()}, p)
-            except Exception:
-                pass
+
+            if __m3_guard_10321_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
         def load(self, path: str) -> bool:
-            try:
+            with guard_context(ctx='m3/m3_core.py:10335', catch_base=False) as __m3_guard_10330_12:
                 p = path[:-4] + '.pt' if path.endswith('.npz') else path
                 sd = _t.load(p, map_location=self.device)
                 self.model.load_state_dict(sd['state'])
                 return True
-            except Exception:
+
+            if __m3_guard_10330_12.error is not None:
                 return False
 
 
@@ -10332,6 +10522,7 @@ class M3ConsciousnessCore:
         if not os.path.isabs(resolved_outdir):
             resolved_outdir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", resolved_outdir))
         self.outdir = resolved_outdir
+        outdir = self.outdir
         self._adaptive_threshold_cfg: Dict[str, Any] = {
             "enabled": True,
             "warmup_steps": 256,
@@ -10357,17 +10548,18 @@ class M3ConsciousnessCore:
             "min_dispatch_interval_ms": 0,
             "default_topic": "bus",
         }
-        try:
+        with guard_context(ctx='m3/m3_core.py:10391', catch_base=False) as __m3_guard_10382_8:
             from llm_adapter.config import get_global_config as _llm_get_cfg
             _cfg = _llm_get_cfg()
             for _k in list(self._adaptive_threshold_cfg.keys()):
-                self._adaptive_threshold_cfg[_k] = getattr(getattr(_cfg, "adaptive_threshold", object()), _k, self._adaptive_threshold_cfg[_k])
+                self._adaptive_threshold_cfg[_k] = attr_get_optional(attr_get_optional(_cfg, "adaptive_threshold", object()), _k, self._adaptive_threshold_cfg[_k])
             for _k in list(self._observation_adapter_cfg.keys()):
-                self._observation_adapter_cfg[_k] = getattr(getattr(_cfg, "observation_adapter", object()), _k, self._observation_adapter_cfg[_k])
+                self._observation_adapter_cfg[_k] = attr_get_optional(attr_get_optional(_cfg, "observation_adapter", object()), _k, self._observation_adapter_cfg[_k])
             for _k in list(self._consciousness_bus_cfg.keys()):
-                self._consciousness_bus_cfg[_k] = getattr(getattr(_cfg, "consciousness_bus", object()), _k, self._consciousness_bus_cfg[_k])
-        except Exception:
-            pass
+                self._consciousness_bus_cfg[_k] = attr_get_optional(attr_get_optional(_cfg, "consciousness_bus", object()), _k, self._consciousness_bus_cfg[_k])
+
+        if __m3_guard_10382_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         self._phi_policy_last: Optional[Dict[str, float]] = None
         self._phi_policy_last_t: int = -10**9
         self._last_phi_announce_t: int = -10**9
@@ -10419,7 +10611,7 @@ class M3ConsciousnessCore:
         self.env = SimpleBanditEnv()
         self._prev_meta = 0.5
         # Consciousness Bus
-        try:
+        with guard_context(ctx='m3/m3_core.py:10459', catch_base=False) as __m3_guard_10444_8:
             if bool(self._consciousness_bus_cfg.get("enabled", True)):
                 self.bus = ConsciousnessBus(
                     top_k=int(os.environ.get("M3_BUS_TOPK", "4")),
@@ -10434,25 +10626,28 @@ class M3ConsciousnessCore:
                     self.bus.start_async_worker()
             else:
                 self.bus = None
-        except Exception:
+
+        if __m3_guard_10444_8.error is not None:
             self.bus = None
-        try:
+        with guard_context(ctx='m3/m3_core.py:10463', catch_base=False) as __m3_guard_10461_8:
             use_torch = os.environ.get('M3_TORCH', '0') in ('1', 'true', 'TRUE')
-        except Exception:
+
+        if __m3_guard_10461_8.error is not None:
             use_torch = False
         # Optional shared Torch representation (policy + SDM share)
         self._shared_repr_torch = None
-        try:
+        with guard_context(ctx='m3/m3_core.py:10477', catch_base=False) as __m3_guard_10467_8:
             if os.environ.get('M3_SHARED_REPR_TORCH', '0') in ('1','true','TRUE'):
                 from m3.torch_policy import TorchSharedRepr  # type: ignore
-                fb_dim = getattr(self, 'feature_bank', None).max_dim if getattr(self, 'feature_bank', None) else 12
+                fb_dim = attr_get_optional(self, 'feature_bank', None).max_dim if attr_get_optional(self, 'feature_bank', None) else 12
                 self._shared_repr_torch = TorchSharedRepr(dim=int(fb_dim),
                                                          d_hidden=int(os.environ.get('M3_SHR_DH','512')),
                                                          n_layers=int(os.environ.get('M3_SHR_LAYERS','2')),
                                                          d_ff=int(os.environ.get('M3_SHR_DFF','2048')),
                                                          n_experts=int(os.environ.get('M3_SHR_EXP','8')),
                                                          top_k=int(os.environ.get('M3_SHR_TOPK','2')))
-        except Exception:
+
+        if __m3_guard_10467_8.error is not None:
             self._shared_repr_torch = None
         try:
             if os.environ.get('M3_TORCH_BR', '0') in ('1', 'true', 'TRUE'):
@@ -10460,27 +10655,29 @@ class M3ConsciousnessCore:
                     from m3.torch_policy import BRPolicy, TorchSharedRepr  # type: ignore
                     # Optional shared Torch repr
                     shared_mod = None
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:10488', catch_base=False) as __m3_guard_10485_20:
                         if os.environ.get('M3_SHARED_REPR_TORCH', '0') in ('1','true','TRUE'):
-                            shared_mod = TorchSharedRepr(dim=(getattr(self, 'feature_bank', None).max_dim if getattr(self, 'feature_bank', None) else 12), d_hidden=int(os.environ.get('M3_SHR_DH','512')), n_layers=int(os.environ.get('M3_SHR_LAYERS','2')), d_ff=int(os.environ.get('M3_SHR_DFF','2048')), n_experts=int(os.environ.get('M3_SHR_EXP','8')), top_k=int(os.environ.get('M3_SHR_TOPK','2')))
-                    except Exception:
+                            shared_mod = TorchSharedRepr(dim=(attr_get_optional(self, 'feature_bank', None).max_dim if attr_get_optional(self, 'feature_bank', None) else 12), d_hidden=int(os.environ.get('M3_SHR_DH','512')), n_layers=int(os.environ.get('M3_SHR_LAYERS','2')), d_ff=int(os.environ.get('M3_SHR_DFF','2048')), n_experts=int(os.environ.get('M3_SHR_EXP','8')), top_k=int(os.environ.get('M3_SHR_TOPK','2')))
+
+                    if __m3_guard_10485_20.error is not None:
                         shared_mod = None
-                    in_dim = getattr(self, 'feature_bank', None).max_dim if getattr(self, 'feature_bank', None) else 12
+                    in_dim = attr_get_optional(self, 'feature_bank', None).max_dim if attr_get_optional(self, 'feature_bank', None) else 12
                     self.policy = BRPolicy(in_dim=in_dim, out_dim=12, trunk_dim=int(os.environ.get('M3_BR_TRUNK', '512')), shared_repr=self._shared_repr_torch)
                     use_torch = False  # skip TorchPolicy path
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).exception("Swallowed exception")
             if use_torch:
                 try:
                     from m3.torch_policy import TorchPolicy, TorchSharedRepr  # type: ignore
                     # Optional shared Torch repr
                     shared_mod = None
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:10503', catch_base=False) as __m3_guard_10500_20:
                         if os.environ.get('M3_SHARED_REPR_TORCH', '0') in ('1','true','TRUE'):
-                            shared_mod = TorchSharedRepr(dim=(getattr(self, 'feature_bank', None).max_dim if getattr(self, 'feature_bank', None) else 12), d_hidden=int(os.environ.get('M3_SHR_DH','512')), n_layers=int(os.environ.get('M3_SHR_LAYERS','2')), d_ff=int(os.environ.get('M3_SHR_DFF','2048')), n_experts=int(os.environ.get('M3_SHR_EXP','8')), top_k=int(os.environ.get('M3_SHR_TOPK','2')))
-                    except Exception:
+                            shared_mod = TorchSharedRepr(dim=(attr_get_optional(self, 'feature_bank', None).max_dim if attr_get_optional(self, 'feature_bank', None) else 12), d_hidden=int(os.environ.get('M3_SHR_DH','512')), n_layers=int(os.environ.get('M3_SHR_LAYERS','2')), d_ff=int(os.environ.get('M3_SHR_DFF','2048')), n_experts=int(os.environ.get('M3_SHR_EXP','8')), top_k=int(os.environ.get('M3_SHR_TOPK','2')))
+
+                    if __m3_guard_10500_20.error is not None:
                         shared_mod = None
-                    in_dim = getattr(self, 'feature_bank', None).max_dim if getattr(self, 'feature_bank', None) else 12
+                    in_dim = attr_get_optional(self, 'feature_bank', None).max_dim if attr_get_optional(self, 'feature_bank', None) else 12
                     # Default biggish MoE; tune via env if needed
                     d_model = int(os.environ.get('M3_TORCH_DMODEL', '2048'))
                     n_layers = int(os.environ.get('M3_TORCH_LAYERS', '8'))
@@ -10497,12 +10694,13 @@ class M3ConsciousnessCore:
                         if 'theta' in data.files:
                             # adopt linear into MLP with out_dim=12
                             in_dim = int(data['theta'].shape[1])
-                            self.policy = PolicyMLP(in_dim=in_dim if getattr(self, 'feature_bank', None) is None else self.feature_bank.max_dim, out_dim=12, hidden=max(128, in_dim), rng=self.rngr.get('policy'))
+                            self.policy = PolicyMLP(in_dim=in_dim if attr_get_optional(self, 'feature_bank', None) is None else self.feature_bank.max_dim, out_dim=12, hidden=max(128, in_dim), rng=self.rngr.get('policy'))
                             self.policy.adopt_linear(data['theta'].astype(np.float32))
-                            try:
+                            with guard_context(ctx='m3/m3_core.py:10526', catch_base=False) as __m3_guard_10524_28:
                                 self.policy.spectral_clip(c=2.0, c_v=1.0)
-                            except Exception:
-                                pass
+
+                            if __m3_guard_10524_28.error is not None:
+                                logging.getLogger(__name__).exception("Swallowed exception")
                         elif 'W1' in data.files and 'W2' in data.files:
                             in_dim = int(data['W1'].shape[1])
                             out_dim = int(data['W2'].shape[0])
@@ -10511,26 +10709,29 @@ class M3ConsciousnessCore:
                             self.policy.W2 = data['W2'].astype(np.float32); self.policy.b2 = data['b2'].astype(np.float32)
                             if 'Wv' in data.files and 'bv' in data.files:
                                 self.policy.Wv = data['Wv'].astype(np.float32); self.policy.bv = data['bv'].astype(np.float32)
-                            try:
+                            with guard_context(ctx='m3/m3_core.py:10538', catch_base=False) as __m3_guard_10536_28:
                                 self.policy.spectral_clip(c=2.0, c_v=1.0)
-                            except Exception:
-                                pass
+
+                            if __m3_guard_10536_28.error is not None:
+                                logging.getLogger(__name__).exception("Swallowed exception")
                         else:
                             raise RuntimeError('Unknown policy snapshot format')
                 else:
-                    in_dim = getattr(self, 'feature_bank', None).max_dim if getattr(self, 'feature_bank', None) else 12
+                    in_dim = attr_get_optional(self, 'feature_bank', None).max_dim if attr_get_optional(self, 'feature_bank', None) else 12
                     self.policy = PolicyMLP(in_dim=in_dim, out_dim=12, hidden=max(128, in_dim), rng=self.rngr.get('policy'))
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:10547', catch_base=False) as __m3_guard_10545_20:
                         self.policy.spectral_clip(c=2.0, c_v=1.0)
-                    except Exception:
-                        pass
+
+                    if __m3_guard_10545_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
         except Exception:
-            in_dim = getattr(self, 'feature_bank', None).max_dim if getattr(self, 'feature_bank', None) else 12
+            in_dim = attr_get_optional(self, 'feature_bank', None).max_dim if attr_get_optional(self, 'feature_bank', None) else 12
             self.policy = PolicyMLP(in_dim=in_dim, out_dim=12, hidden=max(128, in_dim), rng=self.rngr.get('policy'))
-            try:
+            with guard_context(ctx='m3/m3_core.py:10554', catch_base=False) as __m3_guard_10552_12:
                 self.policy.spectral_clip(c=2.0, c_v=1.0)
-            except Exception:
-                pass
+
+            if __m3_guard_10552_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         # Policy snapshots & stats (single best checkpoint policy.npz)
         from collections import deque as _deque
         self.policy_reward_history = _deque(maxlen=1000)
@@ -10539,20 +10740,22 @@ class M3ConsciousnessCore:
             # Initialize best score from existing policy.npz if present
             pol_last = os.path.join(self.outdir, 'policy.npz')
             if os.path.exists(pol_last):
-                try:
+                with guard_context(ctx='m3/m3_core.py:10567', catch_base=False) as __m3_guard_10564_16:
                     with np.load(pol_last) as _npz:
                         self._best_policy_score = float(_npz.get('recent_avg', float('-inf')))
-                except Exception:
-                    pass
+
+                if __m3_guard_10564_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
             # Remove legacy best file if it exists
             legacy_best = os.path.join(self.outdir, 'policy_best.npz')
             if os.path.exists(legacy_best):
-                try:
+                with guard_context(ctx='m3/m3_core.py:10574', catch_base=False) as __m3_guard_10572_16:
                     os.remove(legacy_best)
-                except Exception:
-                    pass
+
+                if __m3_guard_10572_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Swallowed exception")
         self.reward_scheduler = GlobalRewardBudgetScheduler(initial_budgets={ResourceType.COMPUTE: 1000.0, ResourceType.MEMORY: 500.0, ResourceType.EXPERIMENTS: 100.0, ResourceType.REVISIONS: 50.0, ResourceType.TIME: 3600.0})
         self.visualizer = EvolutionVisualizer()
         self.network_visualizer = None
@@ -10567,58 +10770,54 @@ class M3ConsciousnessCore:
         # Learned meta-feature proposer (initialized on demand)
         self.meta_feature_controller = None
         # Running EMAs for normalizing sandbox metrics used in meta-reward
-        try:
+        with guard_context(ctx='m3/m3_core.py:10599', catch_base=False) as __m3_guard_10592_8:
             self._meta_metric_ema = {
                 'reward_mean': RunningBaseline(alpha=0.02),
                 'td_error': RunningBaseline(alpha=0.02),
                 'phi_median': RunningBaseline(alpha=0.02),
                 'stability': RunningBaseline(alpha=0.02),
             }
-        except Exception:
+
+        if __m3_guard_10592_8.error is not None:
             self._meta_metric_ema = {}
         # Growth trigger policy (learn when to run meta-proposals)
         try:
             self.growth_trigger = GrowthTrigger(in_dim=64, hidden=64, rng=self.rngr.get('growth_trigger'), lr=1e-3)
         except Exception:
-            try:
+            with guard_context(ctx='m3/m3_core.py:10607', catch_base=False) as __m3_guard_10605_12:
                 self.growth_trigger = GrowthTrigger()
-            except Exception:
+
+            if __m3_guard_10605_12.error is not None:
                 self.growth_trigger = None
         # Feature bank for high-dimensional observations
-        try:
-            self.feature_bank = FeatureBank(max_dim=128, embed_dim=32)
-            try:
-                self.feature_bank.use_bus_gating = os.environ.get('M3_BUS_GATING', '0') in ('1', 'true', 'TRUE')
-            except Exception:
-                pass
-            try:
-                self.feature_bank.set_log_paths(self.outdir)
-                self.feature_bank._core_for_prune = self
-            except Exception:
-                pass
-            # Skills manager (bus patterns -> gating priors)
-            try:
-                self.skills = SkillsManager(window=256, bias=0.2)
-            except Exception:
-                self.skills = None
-            # Shared representation (optional)
-            try:
-                if os.environ.get('M3_SHARED_REPR', '0') in ('1', 'true', 'TRUE'):
-                    self.shared_repr = SharedRepresentation(dim=self.feature_bank.max_dim)
-                else:
-                    self.shared_repr = None
-            except Exception:
+        self.feature_bank = FeatureBank(max_dim=128, embed_dim=32)
+        _validate_feature_bank_contract(self.feature_bank, "M3ConsciousnessCore.__init__/initial")
+        self.feature_bank.use_bus_gating = os.environ.get('M3_BUS_GATING', '0') in ('1', 'true', 'TRUE')
+        self.feature_bank.set_log_paths(self.outdir)
+        self.feature_bank._core_for_prune = self
+        # Skills manager (bus patterns -> gating priors)
+        with guard_context(ctx='m3/m3_core.py:10624', catch_base=False) as __m3_guard_10622_12:
+            self.skills = SkillsManager(window=256, bias=0.2)
+
+        if __m3_guard_10622_12.error is not None:
+            self.skills = None
+        # Shared representation (optional)
+        with guard_context(ctx='m3/m3_core.py:10632', catch_base=False) as __m3_guard_10627_12:
+            if os.environ.get('M3_SHARED_REPR', '0') in ('1', 'true', 'TRUE'):
+                self.shared_repr = SharedRepresentation(dim=self.feature_bank.max_dim)
+            else:
                 self.shared_repr = None
-        except Exception:
-            self.feature_bank = None
+
+        if __m3_guard_10627_12.error is not None:
+            self.shared_repr = None
         # Self-dynamics predictor (TorchSDM when enabled) with snapshot
         try:
             act_dim = 5  # [lr, gate, kd, explore, complexity]
-            fb_dim = getattr(self, 'feature_bank').max_dim if getattr(self, 'feature_bank', None) else 12
+            fb_dim = attr_get_optional(self, 'feature_bank').max_dim if attr_get_optional(self, 'feature_bank', None) else 12
             self._sdm_in_dim = int(fb_dim + act_dim)
             use_torch_sdm = os.environ.get('M3_TORCH_SDM', '0') in ('1', 'true', 'TRUE')
             if use_torch_sdm and _TORCH_OK:
-                try:
+                with guard_context(ctx='m3/m3_core.py:10653', catch_base=False) as __m3_guard_10643_16:
                     d_model = int(os.environ.get('M3_SDM_DMODEL', '2048'))
                     n_layers = int(os.environ.get('M3_SDM_LAYERS', '16'))
                     d_ff = int(os.environ.get('M3_SDM_DFF', '8192'))
@@ -10628,9 +10827,10 @@ class M3ConsciousnessCore:
                     self.sdm = TorchSDM(in_dim=self._sdm_in_dim, z_dim=fb_dim, d_model=d_model, n_layers=n_layers,
                                         d_ff=d_ff, n_experts=n_experts, top_k=top_k, fsdp=use_fsdp,
                                         a_dim=5, shared_repr=self._shared_repr_torch)
-                except Exception:
+
+                if __m3_guard_10643_16.error is not None:
                     self.sdm = None
-            if getattr(self, 'sdm', None) is None:
+            if attr_get_optional(self, 'sdm', None) is None:
                 self.sdm = SelfDynamicsModel(in_dim=self._sdm_in_dim, hidden=max(128, fb_dim), rng=self.rngr.get('sdm'), z_dim=fb_dim)
         except Exception:
             self.sdm = None
@@ -10692,113 +10892,111 @@ class M3ConsciousnessCore:
                 os.remove(self.event_log_path)
             self.t = 0
 
-        try:
+        with guard_context(ctx='m3/m3_core.py:10720', catch_base=False) as __m3_guard_10717_8:
             if os.path.exists(self.episodic_memory_path):
                 self.episodic_memory.load(self.episodic_memory_path)
-        except Exception:
-            pass
-        try:
+
+        if __m3_guard_10717_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='m3/m3_core.py:10725', catch_base=False) as __m3_guard_10722_8:
             if os.path.exists(self.chat_history_path):
                 self._load_chat_history(self.chat_history_path)
-        except Exception:
-            pass
+
+        if __m3_guard_10722_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         self.log_buffer: List[Dict] = []
         self.event_log_buffer: List[Dict] = []
-        if not hasattr(self, 't'):
+        if not attr_has(self, 't'):
             self.t = 0
         self.world_state = self._get_current_world_state()
-        # Self-vision (retina) state (Phase 1)
-        self._vision_prev = None
         # Reward shaping coefficient (keep small; external real rewards should dominate when present)
         self.reward_shape_lambda = 0.2
         # Visualizer preferences (can be overridden by environment)
         # Overlay (attention crosshair / goal ring) off by default
-        try:
+        with guard_context(ctx='m3/m3_core.py:10740', catch_base=False) as __m3_guard_10738_8:
             self.show_spatial_overlay = os.environ.get('M3_SHOW_SPATIAL_OVERLAY', '0') in ('1', 'true', 'TRUE')
-        except Exception:
+
+        if __m3_guard_10738_8.error is not None:
             self.show_spatial_overlay = False
-        # Scope encoder one-bit mode (chessboard pattern)
-        try:
+        # One-bit neural-map rendering mode (chessboard pattern)
+        with guard_context(ctx='m3/m3_core.py:10745', catch_base=False) as __m3_guard_10743_8:
             self.scope_one_bit = os.environ.get('M3_SCOPE_ONE_BIT', '0') in ('1', 'true', 'TRUE')
-        except Exception:
+
+        if __m3_guard_10743_8.error is not None:
             self.scope_one_bit = False
-        # External vision source controls
-        self.vision_mode = 'internal'  # 'internal'|'folder'|'camera'|'push'
-        self._vision_frames: list[str] = []
-        self._vision_idx = 0
-        self._vision_camera = None
-        self._pushed_frame = None
-        self._vision_loop = True
-        self._vision_shuffle = False
         # Spatial field: normalized attention point and optional goal in [0,1]^3
         self.attn_xy = (0.5, 0.5)
         self.attn_xyz = (0.5, 0.5, 0.5)
         self.spatial_goal = None  # e.g., {'xyz': (0.8,0.2,0.6), 'radius': 0.08}
         self.space_size = 256
-        if hasattr(self, 'long_term_planner') and self.long_term_planner.current_goal is None:
+        if attr_has(self, 'long_term_planner') and self.long_term_planner.current_goal is None:
             initial_goal = self.long_term_planner.create_goal(description='Achieve Basic Consciousness', mode=PlanningMode.EXPLORATION, success_criteria={'phi': 0.1, 'consciousness': 0.3, 'growth_rate': 0.01, 'memory_count': 10, 'spatial_goal_dist': 0.15}, max_duration=10000.0)
             # assign initial spatial goal to hottest region
-            try:
+            with guard_context(ctx='m3/m3_core.py:10773', catch_base=False) as __m3_guard_10763_12:
                 pem = self._scope_build_pred_err_map()
                 gy, gx = divmod(int(np.argmax(pem)), pem.shape[1])
                 gx_n = gx / max(1, pem.shape[1]-1)
                 gy_n = gy / max(1, pem.shape[0]-1)
-                # depth from initial contrast proxy
-                retina0 = self._vision_build_retina(size=(64,64), foveate=False)
-                _, _, _, depth0 = self._vision_features(retina0)
-                gz_n = float(np.mean(depth0)) if depth0 is not None else 0.5
+                # Vision pipeline is removed; keep neutral z-depth.
+                gz_n = 0.5
                 self.set_spatial_goal3d(gx_n, gy_n, gz_n, radius=0.12)
-            except Exception:
-                pass
+
+            if __m3_guard_10763_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             self.t = 0
 
-        # Auto-attach LLM adapter (자체 모델용 - 대화 학습 데이터 기록)
-        try:
+        # Auto-attach LLM adapter (?먯껜 紐⑤뜽??- ????숈뒿 ?곗씠??湲곕줉)
+        with guard_context(ctx='m3/m3_core.py:10780', catch_base=False) as __m3_guard_10778_8:
             auto_attach = os.getenv('M3_AUTO_ATTACH_LLM', '1').lower() in ('1', 'true', 'yes', 'on')
-        except Exception:
+
+        if __m3_guard_10778_8.error is not None:
             auto_attach = True
         if auto_attach:
             try:
                 from llm_adapter import attach_llm_to_core
                 attach_llm_to_core(self, adapter=None, record=True)
-                print("[M3] 자체 LLM 어댑터 연결됨 (대화 학습 데이터 기록 활성화)")
+                print("[M3] ?먯껜 LLM ?대뙌???곌껐??(????숈뒿 ?곗씠??湲곕줉 ?쒖꽦??")
                 
                 # Register llm_adapter module with MessageBus for credit assignment
-                try:
+                with guard_context(ctx='m3/m3_core.py:10792', catch_base=False) as __m3_guard_10789_16:
                     self.message_bus.register_module('llm_adapter')
                     print("[M3] LLM adapter registered with MessageBus for temporal credit assignment")
-                except Exception as e:
+
+                if __m3_guard_10789_16.error is not None:
+                    e = __m3_guard_10789_16.error
                     print(f"[M3] Failed to register llm_adapter with MessageBus: {e}")
             except Exception as e:
                 # non-fatal; core still works without adapter
-                print(f"[M3] LLM 어댑터 연결 실패 (비필수): {e}")
+                print(f"[M3] LLM ?대뙌???곌껐 ?ㅽ뙣 (鍮꾪븘??: {e}")
 
     def _get_current_world_state(self) -> Dict[str, Union[int, float, bool]]:
         """Compute a compact world-state summary for controller heuristics."""
         if len(self.P_obs_history) > 0:
-            try:
+            with guard_context(ctx='m3/m3_core.py:10804', catch_base=False) as __m3_guard_10801_12:
                 P_obs = self.P_obs_history[-1]
                 delta_hat = float(0.5 * np.sum(np.abs(P_obs - self.base_vec)))
-            except Exception:
+
+            if __m3_guard_10801_12.error is not None:
                 delta_hat = 1.0
         else:
             delta_hat = 1.0
 
         if len(self.stability_window) >= 10:
-            try:
+            with guard_context(ctx='m3/m3_core.py:10814', catch_base=False) as __m3_guard_10810_12:
                 recent_deltas = list(self.stability_window)[-10:]
                 variance = np.var(recent_deltas)
                 stability = float(1.0 - min(1.0, variance * 20.0))
-            except Exception:
+
+            if __m3_guard_10810_12.error is not None:
                 stability = 0.5
         else:
             stability = 0.5
 
         # spatial metrics
-        try:
-            ax, ay = getattr(self, 'attn_xy', (0.5, 0.5))
-            az = getattr(self, 'attn_xyz', (ax, ay, 0.5))[2]
-            if getattr(self, 'spatial_goal', None) and ('xy' in self.spatial_goal or 'xyz' in self.spatial_goal):
+        with guard_context(ctx='m3/m3_core.py:10832', catch_base=False) as __m3_guard_10820_8:
+            ax, ay = attr_get_optional(self, 'attn_xy', (0.5, 0.5))
+            az = attr_get_optional(self, 'attn_xyz', (ax, ay, 0.5))[2]
+            if attr_get_optional(self, 'spatial_goal', None) and ('xy' in self.spatial_goal or 'xyz' in self.spatial_goal):
                 if 'xyz' in self.spatial_goal:
                     gx, gy, gz = self.spatial_goal['xyz']
                 else:
@@ -10807,19 +11005,21 @@ class M3ConsciousnessCore:
                 d = float(np.sqrt((ax - gx) ** 2 + (ay - gy) ** 2 + (az - gz) ** 2))
             else:
                 d = None
-        except Exception:
+
+        if __m3_guard_10820_8.error is not None:
             ax, ay, az, d = 0.5, 0.5, 0.5, None
 
         energy_level = 0.0
         activation_level = 0.0
         meta_confidence = 0.0
         adaptation_success = False
-        try:
+        with guard_context(ctx='m3/m3_core.py:10843', catch_base=False) as __m3_guard_10839_8:
             energy_level = float(self.energy_ctrl.cognitive_energy / self.energy_ctrl.energy_capacity)
             activation_level = float(self.energy_ctrl.activation_level)
             meta_confidence = float(self.self_model.meta_confidence)
-        except Exception:
-            pass
+
+        if __m3_guard_10839_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
 
         return {
             't': int(self.t),
@@ -10829,7 +11029,7 @@ class M3ConsciousnessCore:
             'energy_level': energy_level,
             'activation_level': activation_level,
             'meta_confidence': float(meta_confidence),
-            'qualia_valence': float(getattr(self.qualia, 'valence', 0.0)),
+            'qualia_valence': float(attr_get_optional(self.qualia, 'valence', 0.0)),
             'adaptation_success': bool(adaptation_success),
             'spatial_attn_x': float(ax),
             'spatial_attn_y': float(ay),
@@ -10838,34 +11038,38 @@ class M3ConsciousnessCore:
         }
 
     def _collect_affect_state_for_llm(self):
-        try:
-            if hasattr(self, 'rewards') and getattr(self.rewards, 'last_affect', None) is not None:
+        with guard_context(ctx='m3/m3_core.py:10871', catch_base=False) as __m3_guard_10863_8:
+            if attr_has(self, 'rewards') and attr_get_optional(self.rewards, 'last_affect', None) is not None:
                 return self.rewards.last_affect
-            if hasattr(self, 'affect_kernel'):
+            if attr_has(self, 'affect_kernel'):
                 for name in ('get_state', 'get_state_vector'):
-                    fn = getattr(self.affect_kernel, name, None)
+                    fn = attr_get_optional(self.affect_kernel, name, None)
                     if callable(fn):
                         return fn()
-        except Exception:
-            pass
+
+        if __m3_guard_10863_8.error is not None:
+            e = __m3_guard_10863_8.error
+            import logging
+            logging.debug(f"[_collect_affect_state_for_llm] Failed to collect affect state: {e}")
         return None
 
     def _collect_llm_memory(self, adapter, affect_state=None):
         mem = None
         panels_output = None
-        if hasattr(self, 'feature_bank') and hasattr(self.feature_bank, 'panels'):
-            try:
+        if attr_has(self, 'feature_bank') and attr_has(self.feature_bank, 'panels'):
+            with guard_context(ctx='m3/m3_core.py:10882', catch_base=False) as __m3_guard_10880_12:
                 panels_output = self.feature_bank.panels(self)
-            except Exception:
+
+            if __m3_guard_10880_12.error is not None:
                 panels_output = None
 
         if panels_output is None:
             return None
 
-        try:
-            if hasattr(adapter, 'build_m3_memory'):
+        with guard_context(ctx='m3/m3_core.py:10900', catch_base=False) as __m3_guard_10888_8:
+            if attr_has(adapter, 'build_m3_memory'):
                 mem_tokens = adapter.build_m3_memory(core=self, panels=panels_output, affect_state=affect_state)
-            elif hasattr(adapter, 'model') and hasattr(adapter.model, 'm3_encoder') and adapter.model.m3_encoder is not None:
+            elif attr_has(adapter, 'model') and attr_has(adapter.model, 'm3_encoder') and adapter.model.m3_encoder is not None:
                 mem_tokens = adapter.model.m3_encoder(panels_output, affect_state=affect_state)
             else:
                 mem_tokens = None
@@ -10874,15 +11078,17 @@ class M3ConsciousnessCore:
             if torch.is_tensor(mem_tokens):  # type: ignore
                 return mem_tokens.detach().cpu().numpy()
             return np.asarray(mem_tokens)
-        except Exception:
+
+        if __m3_guard_10888_8.error is not None:
             return None
 
     def _build_llm_prompt(self, fallback_text: str = "") -> str:
         prompt = ""
-        if hasattr(self, '_chat_history'):
-            try:
+        if attr_has(self, '_chat_history'):
+            with guard_context(ctx='m3/m3_core.py:10908', catch_base=False) as __m3_guard_10906_12:
                 turns = int(os.getenv('M3_CHAT_HISTORY_TURNS', '3'))
-            except Exception:
+
+            if __m3_guard_10906_12.error is not None:
                 turns = 3
             recent = list(self._chat_history)[-max(1, 2 * turns):]
             for msg in recent:
@@ -10895,30 +11101,44 @@ class M3ConsciousnessCore:
         return prompt
 
     def _meaning_pipeline_enabled(self) -> bool:
-        try:
+        with guard_context(ctx='m3/m3_core.py:10928', catch_base=False) as __m3_guard_10921_8:
             return str(os.getenv("M3_MEANING_PIPELINE_ENABLED", "1")).strip().lower() in (
                 "1",
                 "true",
                 "yes",
                 "on",
             )
-        except Exception:
+
+        if __m3_guard_10921_8.error is not None:
             return True
 
     def _meaning_pipeline_cfg(self) -> Dict[str, Any]:
         # Keep minimal runtime knobs in core to avoid hard dependency on config plumbing
         # before adapter initialization.
         def _to_float(name: str, default: float) -> float:
-            try:
+            with guard_context(ctx='m3/m3_core.py:10937', catch_base=False) as __m3_guard_10935_12:
                 return float(os.getenv(name, str(default)))
-            except Exception:
+
+            if __m3_guard_10935_12.error is not None:
                 return float(default)
 
         def _to_int(name: str, default: int) -> int:
-            try:
+            with guard_context(ctx='m3/m3_core.py:10943', catch_base=False) as __m3_guard_10941_12:
                 return int(os.getenv(name, str(default)))
-            except Exception:
+
+            if __m3_guard_10941_12.error is not None:
                 return int(default)
+
+        def _to_bool(name: str, default: bool) -> bool:
+            with guard_context(ctx='m3/m3_core.py:10947', catch_base=False) as __m3_guard_10945_12:
+                raw = str(os.getenv(name, "1" if default else "0")).strip().lower()
+                return raw in {"1", "true", "yes", "on"}
+
+            if __m3_guard_10945_12.error is not None:
+                return bool(default)
+
+        os.environ.setdefault("M3_MEANING_DYNAMIC_UNCERTAINTY", "1")
+        os.environ.setdefault("M3_PLAN_EVIDENCE_COUNT_MODE", "source_based")
 
         return {
             "candidate_entities_limit": _to_int("M3_MEANING_ENTITY_LIMIT", 12),
@@ -10930,27 +11150,37 @@ class M3ConsciousnessCore:
                 "M3_MEANING_FORCE_CLARIFY_GROUNDING_UNCERTAINTY_THRESHOLD",
                 0.50,
             ),
+            "dynamic_uncertainty": _to_bool("M3_MEANING_DYNAMIC_UNCERTAINTY", True),
+            "hysteresis_enter": _to_float("M3_MEANING_HYSTERESIS_ENTER", 0.58),
+            "hysteresis_exit": _to_float("M3_MEANING_HYSTERESIS_EXIT", 0.42),
+            "plan_evidence_count_mode": str(
+                os.getenv("M3_PLAN_EVIDENCE_COUNT_MODE", "source_based") or "source_based"
+            ).strip().lower(),
+            "max_key_points": _to_int("M3_PLAN_MAX_KEY_POINTS", 5),
         }
 
     def _collect_core_state_for_meaning(self) -> Dict[str, Any]:
         summary: Dict[str, Any] = {}
-        try:
+        with guard_context(ctx='m3/m3_core.py:10962', catch_base=False) as __m3_guard_10960_8:
             world_state = self._get_current_world_state()
-        except Exception:
+
+        if __m3_guard_10960_8.error is not None:
             world_state = {"stability": 0.0, "delta_hat": 0.0, "energy_level": 0.0}
         summary.update({
             "stability": float(world_state.get("stability", 0.0) or 0.0),
             "delta_hat": float(world_state.get("delta_hat", 0.0) or 0.0),
             "energy_level": float(world_state.get("energy_level", 0.0) or 0.0),
-            "meta_awareness": float(getattr(self.self_model, "meta_awareness", 0.0) or 0.0),
+            "meta_awareness": float(attr_get_optional(self.self_model, "meta_awareness", 0.0) or 0.0),
         })
-        try:
-            summary["meta_confidence"] = float(getattr(self.self_model, "meta_confidence", 0.5) or 0.5)
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:10972', catch_base=False) as __m3_guard_10970_8:
+            summary["meta_confidence"] = float(attr_get_optional(self.self_model, "meta_confidence", 0.5) or 0.5)
+
+        if __m3_guard_10970_8.error is not None:
             summary["meta_confidence"] = 0.5
-        try:
+        with guard_context(ctx='m3/m3_core.py:10976', catch_base=False) as __m3_guard_10974_8:
             summary["belief_summary"] = str(self.self_model.introspect())[:240]
-        except Exception:
+
+        if __m3_guard_10974_8.error is not None:
             summary["belief_summary"] = ""
         return summary
 
@@ -11017,18 +11247,49 @@ class M3ConsciousnessCore:
         if not meaning_state:
             return
         paths = self._meaning_artifact_paths()
+        uncertainty = meaning_state.get("uncertainty", {}) if isinstance(meaning_state, dict) else {}
+        evidence_sources: List[str] = []
+        if grounding_evidence is not None:
+            try:
+                for item in list(grounding_evidence):
+                    if isinstance(item, dict):
+                        src = str(item.get("source") or item.get("id") or "").strip()
+                    else:
+                        src = str(item or "").strip()
+                    if src:
+                        evidence_sources.append(src)
+            except Exception:
+                evidence_sources = []
+        evidence_sources = list(dict.fromkeys(evidence_sources))
         _write_jsonl_safe(paths["meaning_state"], {
             "ts": float(time.time()),
             "turn_id": meaning_state.get("turn_id"),
             "intent": meaning_state.get("intent"),
             "uncertainty": meaning_state.get("uncertainty"),
             "entities": meaning_state.get("entities", []),
+            "intent_confidence": float(meaning_state.get("intent_confidence", 0.0) or 0.0),
+            "grounding_confidence": float(meaning_state.get("grounding_confidence", 0.0) or 0.0),
+            "history_conflict": float(meaning_state.get("history_conflict", 0.0) or 0.0),
+            "entity_density": float(meaning_state.get("entity_density", 0.0) or 0.0),
             "answer_type": (response_plan or {}).get("answer_type", "direct"),
         })
         if response_plan:
             rec_plan = dict(response_plan)
-            if grounding_evidence is not None:
-                rec_plan["grounded_evidence_count"] = len(list(grounding_evidence))
+            rec_plan.setdefault("evidence_sources", list(evidence_sources))
+            rec_plan.setdefault("decision_trace", [
+                f"intent={meaning_state.get('intent', 'unknown')}",
+                f"overall_uncertainty={float(uncertainty.get('overall', 0.0) or 0.0):.3f}",
+                f"answer_type={rec_plan.get('answer_type', 'direct')}",
+            ])
+            count_mode = str(
+                rec_plan.get("evidence_count_mode")
+                or self._meaning_pipeline_cfg().get("plan_evidence_count_mode", "source_based")
+                or "source_based"
+            ).strip().lower()
+            if count_mode == "source_based":
+                rec_plan["grounded_evidence_count"] = int(len(evidence_sources))
+            elif grounding_evidence is not None:
+                rec_plan["grounded_evidence_count"] = int(len(list(grounding_evidence)))
             _write_jsonl_safe(paths["response_plan"], rec_plan)
 
     def _emit_llm_response_with_plan(
@@ -11041,12 +11302,12 @@ class M3ConsciousnessCore:
         affect_state=None,
         max_len: int = 100,
     ):
-        adapter = getattr(self, 'llm_adapter', None) or getattr(self, 'llm', None)
+        adapter = attr_get_optional(self, 'llm_adapter', None) or attr_get_optional(self, 'llm', None)
         if adapter is None:
             return None, "[System: LLM Adapter not connected]"
 
         contract = generation_contract or _pipeline_build_generation_contract(response_plan, meaning_state=meaning_state)
-        try:
+        with guard_context(ctx='m3/m3_core.py:11083', catch_base=False) as __m3_guard_11072_8:
             response = adapter.generate(
                 prompt,
                 mem=mem,
@@ -11057,7 +11318,9 @@ class M3ConsciousnessCore:
                 generation_contract=contract,
             )
             response = self._postprocess_llm_response(response)
-        except Exception as e:
+
+        if __m3_guard_11072_8.error is not None:
+            e = __m3_guard_11072_8.error
             if generation_contract is None:
                 logging.debug(f"LLM generate(pipeline) failed: {e}")
             return None, str(e)
@@ -11068,21 +11331,26 @@ class M3ConsciousnessCore:
         response = response.strip()
         if self._is_disallowed_llm_response(response):
             return None, response
-        self._chat_history.append({'role': 'assistant', 'text': response, 't': int(getattr(self, 't', 0))})
-        if getattr(self, 'bus', None) is not None:
-            try:
-                vec_resp = self.feature_bank._hash_embed(response, self.feature_bank.embed_dim) if getattr(self, 'feature_bank', None) else np.zeros((32,), np.float32)
+        self._chat_history.append({'role': 'assistant', 'text': response, 't': int(attr_get_optional(self, 't', 0))})
+        if attr_get_optional(self, 'bus', None) is not None:
+            with guard_context(ctx='m3/m3_core.py:11099', catch_base=False) as __m3_guard_11096_12:
+                vec_resp = self.feature_bank._hash_embed(response, self.feature_bank.embed_dim) if attr_get_optional(self, 'feature_bank', None) else np.zeros((32,), np.float32)
                 self.bus.push('system', 'utter.self', vec_resp.astype(np.float32), salience=0.8, confidence=1.0, ttl=10)
-            except Exception:
-                pass
+
+            if __m3_guard_11096_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         return response, None
 
     def _postprocess_llm_response(self, text: str) -> str:
         if not text:
             return text
-        try:
+        with guard_context(ctx='m3/m3_core.py:11108', catch_base=False) as __m3_guard_11106_8:
             norm = str(text).replace("\r\n", "\n").replace("\r", "\n").strip()
-        except Exception:
+
+        if __m3_guard_11106_8.error is not None:
+            e = __m3_guard_11106_8.error
+            import logging
+            logging.error(f"Error normalizing LLM response: {e}")
             return text
         if not norm:
             return norm
@@ -11111,16 +11379,20 @@ class M3ConsciousnessCore:
         cleaned = "\n\n".join(paras).strip()
 
         # Collapse repeated "M3:" prefixes.
-        try:
+        with guard_context(ctx='m3/m3_core.py:11141', catch_base=False) as __m3_guard_11139_8:
             cleaned = cleaned.replace("M3: M3:", "M3:")
-        except Exception:
-            pass
+
+        if __m3_guard_11139_8.error is not None:
+            e = __m3_guard_11139_8.error
+            import logging
+            logging.warning(f"Error collapsing M3 prefix: {e}")
         return cleaned
 
     def _is_backend_or_error_response(self, text: str) -> bool:
-        try:
+        with guard_context(ctx='m3/m3_core.py:11149', catch_base=False) as __m3_guard_11147_8:
             s = str(text or "").strip()
-        except Exception:
+
+        if __m3_guard_11147_8.error is not None:
             return True
         if not s:
             return True
@@ -11133,9 +11405,9 @@ class M3ConsciousnessCore:
             "[Error:",
             "Local Error:",
             "Generation is in safe mode",
-            "현재 생성 경로에 장애가 있어 안전 모드로 전환했습니다.",
-            "当前生成路径出现故障，已切换到安全模式。",
-            "Обнаружен сбой генерации, включен безопасный режим.",
+            "Generation path issue detected, switched to safe mode.",
+            "Safe mode response from backend.",
+            "Fallback response due to generation backend issue.",
             "[System: LLM Adapter not connected]",
         )
         if s.startswith(prefixes):
@@ -11150,29 +11422,29 @@ class M3ConsciousnessCore:
         return any(m in sl for m in markers)
 
     def _is_disallowed_llm_response(self, text: str) -> bool:
-        try:
+        with guard_context(ctx='m3/m3_core.py:11181', catch_base=False) as __m3_guard_11179_8:
             s = str(text or "").strip()
-        except Exception:
+
+        if __m3_guard_11179_8.error is not None:
             return True
         if not s:
             return True
         if self._is_backend_or_error_response(s):
             return True
-        adapter = getattr(self, 'llm_adapter', None) or getattr(self, 'llm', None)
-        try:
-            if adapter is not None and hasattr(adapter, '_is_refusal_disclaimer'):
+        adapter = attr_get_optional(self, 'llm_adapter', None) or attr_get_optional(self, 'llm', None)
+        with guard_context(ctx='m3/m3_core.py:11192', catch_base=False) as __m3_guard_11188_8:
+            if adapter is not None and attr_has(adapter, '_is_refusal_disclaimer'):
                 if bool(adapter._is_refusal_disclaimer(s)):
                     return True
-        except Exception:
-            pass
+
+        if __m3_guard_11188_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         patterns = (
             "i am currently untrained",
             "please use the train button",
-            "현재 생성 경로에 장애가 있어",
-            "현재 생성 경로가 불안정",
+            "generation path issue",
+            "safe mode",
             "training data",
-            "현재 생성 경로가",
-            "세션을 재시작",
             "train button",
             "i am an ai",
             "i'm an ai",
@@ -11187,14 +11459,15 @@ class M3ConsciousnessCore:
         return False
 
     def _verifier_tokens(self, text: str) -> List[str]:
-        try:
+        with guard_context(ctx='m3/m3_core.py:11218', catch_base=False) as __m3_guard_11216_8:
             s = str(text or "").lower()
-        except Exception:
+
+        if __m3_guard_11216_8.error is not None:
             return []
-        tokens = re.findall(r"[a-z0-9_]+|[가-힣]+", s)
+        tokens = re.findall(r"[a-z0-9_]+", s)
         stop = {
             "the", "a", "an", "is", "are", "to", "and", "or", "of", "in", "on", "for", "with",
-            "이", "그", "저", "은", "는", "이야", "그리고", "또는", "에서", "으로", "를", "을",
+            "this", "that", "it", "as", "at", "be", "by", "from",
         }
         return [t for t in tokens if len(t) > 1 and t not in stop]
 
@@ -11219,13 +11492,13 @@ class M3ConsciousnessCore:
             "ready for the next query",
             "please resend a short request",
             "i am currently untrained",
-            "안전 모드",
-            "짧게 다시 보내",
+            "safe mode",
+            "resend a short request",
         )
         if any(p in low_resp for p in generic_phrases):
             penalty += 0.45
         asks_question = ("?" in str(user_msg or "")) or any(
-            k in low_user for k in ("what", "why", "how", "explain", "무엇", "왜", "어떻게", "설명")
+            k in low_user for k in ("what", "why", "how", "explain")
         )
         if asks_question and overlap < 0.15:
             penalty += 0.25
@@ -11240,12 +11513,12 @@ class M3ConsciousnessCore:
             reward = float((score - 0.5) * 2.0 * scale)
             self._last_dialog_verifier_score = score
             self._last_dialog_verifier_reward = reward
-            if hasattr(self, 'reward_history'):
+            if attr_has(self, 'reward_history'):
                 self.reward_history.append(reward)
-            if hasattr(self, 'cumulative_reward'):
+            if attr_has(self, 'cumulative_reward'):
                 self.cumulative_reward += reward
-            if hasattr(self, 'reward_scheduler') and self.reward_scheduler is not None:
-                try:
+            if attr_has(self, 'reward_scheduler') and self.reward_scheduler is not None:
+                with guard_context(ctx='m3/m3_core.py:11286', catch_base=False) as __m3_guard_11274_16:
                     self.reward_scheduler.receive_reward(
                         RewardSignal(
                             source='dialog_accuracy_verifier',
@@ -11257,17 +11530,21 @@ class M3ConsciousnessCore:
                             },
                         )
                     )
-                except Exception:
-                    pass
-        except Exception:
-            pass
+
+                if __m3_guard_11274_16.error is not None:
+                    e = __m3_guard_11274_16.error
+                    import logging
+                    logging.warning(f"[_apply_dialog_verifier_reward] Reward scheduler failed: {e}")
+        except Exception as e:
+            import logging
+            logging.error(f"[_apply_dialog_verifier_reward] Overall evaluation failed: {e}")
 
     def _emit_llm_response(self, prompt: str, mem=None, affect_state=None, max_len: int = 100, default_on_error: bool = False):
-        adapter = getattr(self, 'llm_adapter', None) or getattr(self, 'llm', None)
+        adapter = attr_get_optional(self, 'llm_adapter', None) or attr_get_optional(self, 'llm', None)
         if adapter is None:
             return None, "[System: LLM Adapter not connected]"
 
-        try:
+        with guard_context(ctx='m3/m3_core.py:11306', catch_base=False) as __m3_guard_11298_8:
             response = adapter.generate(
                 prompt,
                 mem=mem,
@@ -11275,7 +11552,9 @@ class M3ConsciousnessCore:
                 max_len=max_len,
             )
             response = self._postprocess_llm_response(response)
-        except Exception as e:
+
+        if __m3_guard_11298_8.error is not None:
+            e = __m3_guard_11298_8.error
             if default_on_error:
                 logging.debug(f"LLM adapter error: {e}")
             return None, str(e)
@@ -11288,55 +11567,62 @@ class M3ConsciousnessCore:
         response = response.strip()
         if self._is_disallowed_llm_response(response):
             return None, response
-        self._chat_history.append({'role': 'assistant', 'text': response, 't': int(getattr(self, 't', 0))})
-        if getattr(self, 'bus', None) is not None:
-            try:
-                vec_resp = self.feature_bank._hash_embed(response, self.feature_bank.embed_dim) if getattr(self, 'feature_bank', None) else np.zeros((32,), np.float32)
+        self._chat_history.append({'role': 'assistant', 'text': response, 't': int(attr_get_optional(self, 't', 0))})
+        if attr_get_optional(self, 'bus', None) is not None:
+            with guard_context(ctx='m3/m3_core.py:11324', catch_base=False) as __m3_guard_11321_12:
+                vec_resp = self.feature_bank._hash_embed(response, self.feature_bank.embed_dim) if attr_get_optional(self, 'feature_bank', None) else np.zeros((32,), np.float32)
                 self.bus.push('system', 'utter.self', vec_resp.astype(np.float32), salience=0.8, confidence=1.0, ttl=10)
-            except Exception:
-                pass
+
+            if __m3_guard_11321_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         return response, None
 
     def _memory_semantic_prefix(self) -> str:
-        try:
+        with guard_context(ctx='m3/m3_core.py:11331', catch_base=False) as __m3_guard_11329_8:
             enabled = os.getenv('M3_EMBED_PERSPECTIVE', '0').lower() in ('1', 'true', 'yes', 'on')
-        except Exception:
+
+        if __m3_guard_11329_8.error is not None:
             enabled = False
         if not enabled:
             return ""
-        try:
-            subj = getattr(self, 'unified_subject', None)
-            if subj is None or not hasattr(subj, 'reflect_on_self'):
+        with guard_context(ctx='m3/m3_core.py:11343', catch_base=False) as __m3_guard_11335_8:
+            subj = attr_get_optional(self, 'unified_subject', None)
+            if subj is None or not attr_has(subj, 'reflect_on_self'):
                 return ""
             summary = str(subj.reflect_on_self()).strip()
             if not summary:
                 return ""
             return f"Perspective: {summary}\n\n"
-        except Exception:
+
+        if __m3_guard_11335_8.error is not None:
             return ""
 
     def _semantic_text_for_embedding(self, text: str) -> str:
         return self._memory_semantic_prefix() + str(text or "")
 
     def _current_memory_qualia_vector(self) -> np.ndarray:
-        try:
+        with guard_context(ctx='m3/m3_core.py:11358', catch_base=False) as __m3_guard_11350_8:
             return np.asarray([
-                float(getattr(self.qualia, 'arousal', 0.0)),
-                float(getattr(self.qualia, 'valence', 0.0)),
-                float(getattr(self.qualia, 'entropy', 0.0)),
-                float(getattr(self.qualia, 'engagement', 0.0)),
-                float(getattr(self.qualia, 'frustration', 0.0)),
+                float(attr_get_optional(self.qualia, 'arousal', 0.0)),
+                float(attr_get_optional(self.qualia, 'valence', 0.0)),
+                float(attr_get_optional(self.qualia, 'entropy', 0.0)),
+                float(attr_get_optional(self.qualia, 'engagement', 0.0)),
+                float(attr_get_optional(self.qualia, 'frustration', 0.0)),
             ], dtype=np.float32)
-        except Exception:
+
+        if __m3_guard_11350_8.error is not None:
             return np.zeros((5,), dtype=np.float32)
 
     def _current_memory_phi(self) -> float:
-        try:
-            phi_hist = getattr(self.phi_calculator, 'phi_history', None)
+        with guard_context(ctx='m3/m3_core.py:11366', catch_base=False) as __m3_guard_11362_8:
+            phi_hist = attr_get_optional(self.phi_calculator, 'phi_history', None)
             if phi_hist:
                 return float(phi_hist[-1])
-        except Exception:
-            pass
+
+        if __m3_guard_11362_8.error is not None:
+            e = __m3_guard_11362_8.error
+            import logging
+            logging.debug(f"[_current_memory_phi] Failed to get phi, defaulting to 0.0: {e}")
         return 0.0
 
     def _encode_semantic_memory_trace(
@@ -11348,11 +11634,11 @@ class M3ConsciousnessCore:
         tags: Optional[List[str]] = None,
         extra_context: Optional[Dict[str, Any]] = None,
     ) -> None:
-        try:
-            if not hasattr(self, 'episodic_memory') or self.episodic_memory is None:
+        with guard_context(ctx='m3/m3_core.py:11402', catch_base=False) as __m3_guard_11380_8:
+            if not attr_has(self, 'episodic_memory') or self.episodic_memory is None:
                 return
             context = {
-                'iteration': int(getattr(self, 't', 0)),
+                'iteration': int(attr_get_optional(self, 't', 0)),
                 'source': str(kind),
             }
             if isinstance(extra_context, dict):
@@ -11370,18 +11656,21 @@ class M3ConsciousnessCore:
                 embedding=embedding,
                 tags=list(tags) if tags else [],
             )
-        except Exception:
-            pass
+
+        if __m3_guard_11380_8.error is not None:
+            e = __m3_guard_11380_8.error
+            import logging
+            logging.error(f"Failed to encode semantic memory trace '{experience_name}': {e}", exc_info=True)
 
     def _record_dialog_trace(self, adapter, user_msg: str, response: str, prompt_for_embedding: str) -> None:
         if not response:
             return
         if self._is_disallowed_llm_response(response):
             return
-        try:
+        with guard_context(ctx='m3/m3_core.py:11425', catch_base=False) as __m3_guard_11411_8:
             content = f"User: {user_msg}\nM3: {response}"
             emb = None
-            if adapter is not None and hasattr(adapter, 'embed_text'):
+            if adapter is not None and attr_has(adapter, 'embed_text'):
                 emb_text = self._semantic_text_for_embedding(prompt_for_embedding)
                 emb = adapter.embed_text(emb_text, sys_identity="")
             self._encode_semantic_memory_trace(
@@ -11392,24 +11681,13 @@ class M3ConsciousnessCore:
                 tags=['dialog'],
                 extra_context={'channel': 'handle_user_message'},
             )
-        except Exception:
-            pass
+
+        if __m3_guard_11411_8.error is not None:
+            e = __m3_guard_11411_8.error
+            import logging
+            logging.error(f"[_record_dialog_trace] Encoding semantic trace failed: {e}")
 
     def _llm_fallback_text(self, prompt: str = "") -> str:
-        lang = "en"
-        adapter = getattr(self, 'llm_adapter', None) or getattr(self, 'llm', None)
-        try:
-            if adapter is not None and hasattr(adapter, '_detect_language'):
-                lang = adapter._detect_language(prompt) or "en"
-        except Exception:
-            lang = "en"
-
-        if lang == "ko":
-            return "현재 생성 경로가 일시적으로 안전 모드입니다. 잠시 뒤 다시 질문해 주세요."
-        if lang == "zh":
-            return "当前生成路径处于安全模式。请稍后再发送请求。"
-        if lang == "ru":
-            return "Сейчас режим генерации переведен в безопасный режим. Пожалуйста, повторите запрос позже."
         return "Generation is in safe mode. Please retry your request in a moment."
 
     def handle_user_message(self, text: str) -> str:
@@ -11417,12 +11695,12 @@ class M3ConsciousnessCore:
         if not msg:
             return ""
 
-        self._chat_history.append({'role': 'user', 'text': msg, 't': int(getattr(self, 't', 0))})
-        if getattr(self, 'bus', None) is not None:
-            vec = self.feature_bank._hash_embed(msg, self.feature_bank.embed_dim) if getattr(self, 'feature_bank', None) else np.zeros((32,), np.float32)
+        self._chat_history.append({'role': 'user', 'text': msg, 't': int(attr_get_optional(self, 't', 0))})
+        if attr_get_optional(self, 'bus', None) is not None:
+            vec = self.feature_bank._hash_embed(msg, self.feature_bank.embed_dim) if attr_get_optional(self, 'feature_bank', None) else np.zeros((32,), np.float32)
             self.bus.push('user', 'utter.user', vec.astype(np.float32), salience=0.7, confidence=0.9, ttl=8)
 
-        adapter = getattr(self, 'llm_adapter', None) or getattr(self, 'llm', None)
+        adapter = attr_get_optional(self, 'llm_adapter', None) or attr_get_optional(self, 'llm', None)
         prompt = self._build_llm_prompt()
         if adapter is None:
             response = self._generate_utterance()
@@ -11441,16 +11719,16 @@ class M3ConsciousnessCore:
         generation_contract: Optional[Any] = None
 
         if apply_meaning:
-            try:
+            with guard_context(ctx='m3/m3_core.py:11495', catch_base=False) as __m3_guard_11475_12:
                 core_state = self._collect_core_state_for_meaning()
                 meaning_state = self._build_meaning_state(
                     user_text=msg,
-                    chat_history=list(getattr(self, '_chat_history', [])),
+                    chat_history=list(attr_get_optional(self, '_chat_history', [])),
                     core_state=core_state,
                 )
                 meaning_state, grounded_evidence = self._ground_meaning_state(
                     meaning_state=meaning_state,
-                    chat_history=list(getattr(self, '_chat_history', [])),
+                    chat_history=list(attr_get_optional(self, '_chat_history', [])),
                     core_state=core_state,
                 )
                 response_plan = self._build_response_plan(
@@ -11461,13 +11739,14 @@ class M3ConsciousnessCore:
                 self._last_meaning_state = meaning_state
                 self._last_response_plan = response_plan
                 self._log_meaning_pipeline_artifacts(meaning_state, response_plan, grounded_evidence)
-            except Exception:
+
+            if __m3_guard_11475_12.error is not None:
                 apply_meaning = False
 
         affect = self._collect_affect_state_for_llm()
         mem = self._collect_llm_memory(adapter, affect_state=affect)
         if apply_meaning:
-            try:
+            with guard_context(ctx='m3/m3_core.py:11511', catch_base=False) as __m3_guard_11501_12:
                 response, err = self._emit_llm_response_with_plan(
                     prompt,
                     meaning_state=meaning_state,
@@ -11477,7 +11756,9 @@ class M3ConsciousnessCore:
                     affect_state=affect,
                     max_len=100,
                 )
-            except Exception as e:
+
+            if __m3_guard_11501_12.error is not None:
+                e = __m3_guard_11501_12.error
                 err = str(e)
                 response = None
         if response is None:
@@ -11504,81 +11785,98 @@ class M3ConsciousnessCore:
         if err and err != "EMPTY":
             logging.debug(f"_generate_utterance fallback due to error: {err}")
         self._last_utterance = fallback
-        self._chat_history.append({'role': 'assistant', 'text': fallback, 't': int(getattr(self, 't', 0))})
+        self._chat_history.append({'role': 'assistant', 'text': fallback, 't': int(attr_get_optional(self, 't', 0))})
         return fallback
 
     def _save_checkpoint(self):
         beliefs_dict = {}
-        if hasattr(self.self_model, 'belief_stability'):
+        if attr_has(self.self_model, 'belief_stability'):
             beliefs_dict['stability'] = float(self.self_model.belief_stability)
-        if hasattr(self.self_model, 'belief_adaptation'):
+        if attr_has(self.self_model, 'belief_adaptation'):
             beliefs_dict['adaptation'] = float(self.self_model.belief_adaptation)
-        if hasattr(self.self_model, 'belief_prediction'):
+        if attr_has(self.self_model, 'belief_prediction'):
             beliefs_dict['prediction'] = float(self.self_model.belief_prediction)
-        checkpoint = {'t': int(self.t), 'seed': int(self.seed), 'strange_loop_active': int(hasattr(self.self_model, 'knows_it_knows') and self.self_model.knows_it_knows), 'meta_awareness': float(hasattr(self.self_model, 'meta_awareness') and self.self_model.meta_awareness or 0.0), 'unity_score': float(self.unified_subject.unity_score), 'energy': float(self.energy_ctrl.cognitive_energy), 'activation': float(self.energy_ctrl.activation_level), 'beliefs': beliefs_dict, 'qualia': {'arousal': float(self.qualia.arousal), 'valence': float(self.qualia.valence), 'entropy': float(self.qualia.entropy), 'engagement': float(self.qualia.engagement), 'frustration': float(self.qualia.frustration)}}
+        checkpoint = {'t': int(self.t), 'seed': int(self.seed), 'strange_loop_active': int(attr_has(self.self_model, 'knows_it_knows') and self.self_model.knows_it_knows), 'meta_awareness': float(attr_has(self.self_model, 'meta_awareness') and self.self_model.meta_awareness or 0.0), 'unity_score': float(self.unified_subject.unity_score), 'energy': float(self.energy_ctrl.cognitive_energy), 'activation': float(self.energy_ctrl.activation_level), 'beliefs': beliefs_dict, 'qualia': {'arousal': float(self.qualia.arousal), 'valence': float(self.qualia.valence), 'entropy': float(self.qualia.entropy), 'engagement': float(self.qualia.engagement), 'frustration': float(self.qualia.frustration)}}
         with open(self.checkpoint_path, 'w') as f:
             json.dump(checkpoint, f, indent=2)
         # Also snapshot self-dynamics model
-        try:
-            if getattr(self, 'sdm', None) is not None:
+        with guard_context(ctx='m3/m3_core.py:11556', catch_base=False) as __m3_guard_11553_8:
+            if attr_get_optional(self, 'sdm', None) is not None:
                 self.sdm.save(os.path.join(self.outdir, 'self_model.npz'))
-        except Exception:
-            pass
+
+        if __m3_guard_11553_8.error is not None:
+            e = __m3_guard_11553_8.error
+            import logging
+            logging.error(f"[_save_checkpoint] Failed to save sdm snapshot: {e}")
         
 
         try:
-            if hasattr(self, 'episodic_memory'):
-                try:
+            if attr_has(self, 'episodic_memory'):
+                with guard_context(ctx='m3/m3_core.py:11565', catch_base=False) as __m3_guard_11563_16:
                     self.episodic_memory.consolidate()
-                except Exception:
-                    pass
-                if hasattr(self, 'episodic_memory_path'):
+
+                if __m3_guard_11563_16.error is not None:
+                    e = __m3_guard_11563_16.error
+                    import logging
+                    logging.warning(f"[_save_checkpoint] Episodic memory consolidation failed: {e}")
+                if attr_has(self, 'episodic_memory_path'):
                     self.episodic_memory.save(self.episodic_memory_path)
-        except Exception:
-            pass
-        try:
+        except Exception as e:
+            import logging
+            logging.error(f"[_save_checkpoint] Episodic memory save failed: {e}")
+        with guard_context(ctx='m3/m3_core.py:11575', catch_base=False) as __m3_guard_11573_8:
             self._save_chat_history()
-        except Exception:
-            pass
+
+        if __m3_guard_11573_8.error is not None:
+            e = __m3_guard_11573_8.error
+            import logging
+            logging.error(f"[_save_checkpoint] Save chat history failed: {e}")
 
         # Also save LLM adapter if available
-        try:
-            if hasattr(self, 'llm_adapter') and self.llm_adapter is not None:
+        with guard_context(ctx='m3/m3_core.py:11589', catch_base=False) as __m3_guard_11580_8:
+            if attr_has(self, 'llm_adapter') and self.llm_adapter is not None:
                 llm_path = os.path.join(self.outdir, 'llm_checkpoint.pt')
-                if hasattr(self.llm_adapter, 'save_model'):
-                    if getattr(self.llm_adapter, '_hf_circuit_open', False):
+                if attr_has(self.llm_adapter, 'save_model'):
+                    if attr_get_optional(self.llm_adapter, '_hf_circuit_open', False):
                         print(f"Skipping LLM checkpoint save due to HF circuit breaker: {llm_path}")
                     else:
                         self.llm_adapter.save_model(llm_path)
                         print(f"LLM checkpoint saved to {llm_path}")
-        except Exception as e:
+
+        if __m3_guard_11580_8.error is not None:
+            e = __m3_guard_11580_8.error
             print(f"Failed to save LLM checkpoint: {e}")
 
     def _load_checkpoint(self):
-        try:
+        with guard_context(ctx='m3/m3_core.py:11598', catch_base=False) as __m3_guard_11593_8:
             with open(self.checkpoint_path, 'r') as f:
                 checkpoint = json.load(f)
             self.t = checkpoint['t']
             print(f'Checkpoint loaded: resuming from t={self.t:,}')
-        except Exception as e:
+
+        if __m3_guard_11593_8.error is not None:
+            e = __m3_guard_11593_8.error
             print(f'Checkpoint load failed: {e}')
             self.t = 0
 
 
     def _save_chat_history(self, path: Optional[str] = None) -> None:
-        try:
-            p = path or getattr(self, 'chat_history_path', None)
+        with guard_context(ctx='m3/m3_core.py:11611', catch_base=False) as __m3_guard_11604_8:
+            p = path or attr_get_optional(self, 'chat_history_path', None)
             if not p:
                 return
             with open(p, 'w', encoding='utf-8') as f:
-                for item in list(getattr(self, '_chat_history', [])):
+                for item in list(attr_get_optional(self, '_chat_history', [])):
                     f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
+
+        if __m3_guard_11604_8.error is not None:
+            e = __m3_guard_11604_8.error
+            import logging
+            logging.error(f"[_save_chat_history] Saving chat history to {p} failed: {e}")
 
     def _load_chat_history(self, path: Optional[str] = None) -> None:
         try:
-            p = path or getattr(self, 'chat_history_path', None)
+            p = path or attr_get_optional(self, 'chat_history_path', None)
             if not p or not os.path.exists(p):
                 return
             hist = []
@@ -11587,18 +11885,23 @@ class M3ConsciousnessCore:
                     line = line.strip()
                     if not line:
                         continue
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:11630', catch_base=False) as __m3_guard_11626_20:
                         obj = json.loads(line)
                         if isinstance(obj, dict) and 'role' in obj and 'text' in obj:
                             hist.append(obj)
-                    except Exception:
+
+                    if __m3_guard_11626_20.error is not None:
+                        e = __m3_guard_11626_20.error
+                        import logging
+                        logging.warning(f"[_load_chat_history] Invalid JSON in chat history: {e}")
                         continue
-            if hasattr(self, '_chat_history'):
+            if attr_has(self, '_chat_history'):
                 self._chat_history.clear()
                 for item in hist:
                     self._chat_history.append(item)
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.error(f"[_load_chat_history] Failed to load chat history: {e}")
 
     def run_autonomous(self):
         start_msg = f'M3 Consciousness System - Infinite Evolution\n'
@@ -11626,7 +11929,7 @@ class M3ConsciousnessCore:
                         # --- Reward System Hook ---
                         # Calculate viability cost (e.g. based on energy depletion or stability)
                         viability_cost = 0.0
-                        if hasattr(self.energy_ctrl, 'cognitive_energy') and hasattr(self.energy_ctrl, 'energy_capacity'):
+                        if attr_has(self.energy_ctrl, 'cognitive_energy') and attr_has(self.energy_ctrl, 'energy_capacity'):
                             # Cost increases as energy drops
                             energy_ratio = self.energy_ctrl.cognitive_energy / max(1.0, self.energy_ctrl.energy_capacity)
                             viability_cost = max(0.0, 1.0 - energy_ratio)
@@ -11652,37 +11955,44 @@ class M3ConsciousnessCore:
                              ))
                         # --------------------------
 
-                        if self.t % 50 == 0 and hasattr(self, 'long_term_planner'):
-                            current_performance = {'phi': self.phi_calculator.phi_history[-1] if self.phi_calculator.phi_history else 0.0, 'consciousness': self.self_model.meta_awareness, 'growth_rate': len(self.growing_som.neurons) / max(1, self.t // 100) if hasattr(self.growing_som, 'neurons') else 0.0, 'memory_count': len(self.episodic_memory.memories)}
+                        if self.t % 50 == 0 and attr_has(self, 'long_term_planner'):
+                            current_performance = {'phi': self.phi_calculator.phi_history[-1] if self.phi_calculator.phi_history else 0.0, 'consciousness': self.self_model.meta_awareness, 'growth_rate': len(self.growing_som.neurons) / max(1, self.t // 100) if attr_has(self.growing_som, 'neurons') else 0.0, 'memory_count': len(self.episodic_memory.memories)}
                             # Include spatial performance (distance to goal)
                             try:
                                 current_performance['spatial_goal_dist'] = float(self.world_state.get('spatial_goal_dist')) if self.world_state.get('spatial_goal_dist') is not None else None
-                            except Exception:
+                            except (ValueError, TypeError) as e:
+                                import logging
+                                logging.debug(f"[run_autonomous] Could not parse spatial_goal_dist: {e}")
                                 current_performance['spatial_goal_dist'] = None
                             if self.long_term_planner.current_goal:
                                 self.long_term_planner.current_goal.update_progress(current_performance)
                                 if self.long_term_planner.current_goal.is_completed(current_performance):
                                     self.long_term_planner.total_goals_completed += 1
                                     # assign new spatial target to next hottest region
-                                    try:
+                                    with guard_context(ctx='m3/m3_core.py:11717', catch_base=False) as __m3_guard_11708_36:
                                         pem = self._scope_build_pred_err_map()
                                         gy, gx = divmod(int(np.argmax(pem)), pem.shape[1])
                                         gx_n = gx / max(1, pem.shape[1]-1)
                                         gy_n = gy / max(1, pem.shape[0]-1)
-                                        retina0 = self._vision_build_retina(size=(64,64), foveate=False)
-                                        _, _, _, depth0 = self._vision_features(retina0)
-                                        gz_n = float(np.mean(depth0)) if depth0 is not None else 0.5
+                                        gz_n = 0.5
                                         self.set_spatial_goal3d(gx_n, gy_n, gz_n, radius=0.1)
-                                    except Exception:
-                                        pass
+
+                                    if __m3_guard_11708_36.error is not None:
+                                        e = __m3_guard_11708_36.error
+                                        import logging
+                                        logging.error(f"[run_autonomous] Spatial target assignment failed: {e}", exc_info=True)
                         should_continue, processing_intensity = self.energy_ctrl.should_continue()
                         if not should_continue:
                             # --- Energy deadlock prevention: passive recovery even when halted ---
                             # Without this, energy stays below critical threshold forever
                             # because update_energy is never called in the halted path.
-                            try:
-                                self.energy_ctrl.update_energy(0.0)  # zero cost → pure recovery
-                            except Exception:
+                            with guard_context(ctx='m3/m3_core.py:11727', catch_base=False) as __m3_guard_11725_28:
+                                self.energy_ctrl.update_energy(0.0)
+
+                            if __m3_guard_11725_28.error is not None:
+                                e = __m3_guard_11725_28.error
+                                import logging
+                                logging.error(f"[run_autonomous] update_energy failed during passive recovery: {e}")
                                 # Manual minimum recovery as ultimate fallback
                                 self.energy_ctrl.cognitive_energy += max(
                                     0.5, self.energy_ctrl.recovery_rate_max * 0.3
@@ -11757,8 +12067,7 @@ class M3ConsciousnessCore:
                         
                         # === AUTONOMOUS EXPANSION INTEGRATION ===
                         if self.t % 50 == 0:
-                            try:
-                                # 1. RecursiveSelfModel autonomous expansion
+                            with guard_context(ctx='m3/m3_core.py:11837', catch_base=False) as __m3_guard_11804_28:
                                 internal_state = {
                                     'phi': self.phi_calculator.phi_history[-1] if self.phi_calculator.phi_history else 0.5,
                                     'meta_awareness': self.self_model.meta_awareness,
@@ -11771,7 +12080,7 @@ class M3ConsciousnessCore:
                                 if expansion_report.get('expansions_applied'):
                                     print(f"\n[t={self.t}] SELF-MODEL EXPANSION:")
                                     for exp in expansion_report['expansions_applied']:
-                                        print(f"  ✓ {exp['action']['type']}: {exp['action']['details']}")
+                                        print(f"  ??{exp['action']['type']}: {exp['action']['details']}")
                                         print(f"    Improvement: {exp['improvement']}")
                                 
                                 # 2. GoalGenerator dynamic goal discovery
@@ -11781,7 +12090,7 @@ class M3ConsciousnessCore:
                                     print(f"  {discovered_goal['description']}")
                                 
                                 # 3. FeatureBank adaptive growth
-                                if hasattr(self, 'feature_bank'):
+                                if attr_has(self, 'feature_bank'):
                                     growth_result = self._maybe_adaptive_feature_bank_growth()
                                     if growth_result:
                                         print(f"\n[t={self.t}] FEATURE BANK GROWTH:")
@@ -11789,8 +12098,9 @@ class M3ConsciousnessCore:
                                         print(f"  Reason: {growth_result.get('reason', 'n/a')}")
                                         if not bool(growth_result.get("applied", False)):
                                             print("  Growth proposal rejected by synchronized grow path.")
-                            
-                            except Exception as e:
+
+                            if __m3_guard_11804_28.error is not None:
+                                e = __m3_guard_11804_28.error
                                 logging.debug(f"Autonomous expansion error: {e}")
                         
                         self.self_model.update_meta_awareness(conscious_contents)
@@ -11800,8 +12110,8 @@ class M3ConsciousnessCore:
                         self._last_growth_event = growth_event
                         if growth_event:
                             self.event_queue.append(Event(type=EventType.GOAL_ACHIEVED, timestamp=self.t, importance=0.7, payload={'reason': 'neuron_growth', 'neuron_count': som_result['neuron_count']}))
-                        unified_exp = self.unified_subject.bind_experience(qualia=self.qualia, beliefs=self.self_model.to_dict() if hasattr(self, 'self_model') else {}, goals=[self.long_term_planner.current_goal] if hasattr(self, 'long_term_planner') and self.long_term_planner.current_goal else [], workspace_contents=conscious_contents, t=self.t)
-                        if self.t % 200 == 0 and hasattr(self, 'experiment_designer'):
+                        unified_exp = self.unified_subject.bind_experience(qualia=self.qualia, beliefs=self.self_model.to_dict() if attr_has(self, 'self_model') else {}, goals=[self.long_term_planner.current_goal] if attr_has(self, 'long_term_planner') and self.long_term_planner.current_goal else [], workspace_contents=conscious_contents, t=self.t)
+                        if self.t % 200 == 0 and attr_has(self, 'experiment_designer'):
                             error_profile = ErrorProfile()
                             if detected_errors:
                                 for error in detected_errors:
@@ -11817,11 +12127,12 @@ class M3ConsciousnessCore:
                                 modified, applied = self.experiment_designer.apply_if_accepted(exp_results, structure)
                                 if applied:
                                     self._apply_structure_snapshot(modified)
-                                    try:
+                                    with guard_context(ctx='m3/m3_core.py:11866', catch_base=False) as __m3_guard_11864_36:
                                         self._save_checkpoint()
-                                    except Exception:
-                                        pass
-                        if hasattr(self, 'reward_scheduler'):
+
+                                    if __m3_guard_11864_36.error is not None:
+                                        logging.getLogger(__name__).exception("Swallowed exception")
+                        if attr_has(self, 'reward_scheduler'):
                             computational_cost = processing_intensity * 10
                             memory_cost = len(self.episodic_memory.memories) * 0.1
                             reward_signal = RewardSignal(source='consciousness_processing', value=self.self_model.meta_awareness * 10, metadata={'resource_costs': {ResourceType.COMPUTE: computational_cost, ResourceType.MEMORY: memory_cost}})
@@ -11834,19 +12145,20 @@ class M3ConsciousnessCore:
                         try:
                             shaped_reward = float(-delta_hat + 0.5 * (self.self_model.meta_awareness - self._prev_meta))
                             # Surprise/Agency scheduler update
-                            try:
+                            with guard_context(ctx='m3/m3_core.py:11883', catch_base=False) as __m3_guard_11881_28:
                                 sched = self._scheduler_update(delta_hat)
-                            except Exception:
+
+                            if __m3_guard_11881_28.error is not None:
                                 sched = None
                             self._last_shaped_reward = shaped_reward
                             self._prev_meta = float(self.self_model.meta_awareness)
-                            if hasattr(self, '_last_policy_obs') and hasattr(self, '_last_policy_action'):
+                            if attr_has(self, '_last_policy_obs') and attr_has(self, '_last_policy_action'):
                                 self.env.step(self._last_policy_action, shaped_reward)
                                 # Counterfactual advantages via BRPolicy diagnostics (optional)
                                 try:
                                     cda_bonus = 0.0
                                     self._last_cda_biases = {}
-                                    if hasattr(self.policy, 'diagnose'):
+                                    if attr_has(self.policy, 'diagnose'):
                                         diag = self.policy.diagnose(self._last_policy_obs)
                                         g = np.asarray(diag.get('g'), dtype=np.float32) if diag.get('g') is not None else None
                                         contribs = diag.get('contribs')
@@ -11857,96 +12169,101 @@ class M3ConsciousnessCore:
                                                 norm = float(np.sqrt(np.mean((np.asarray(c, dtype=np.float32) ** 2))))
                                                 r_vals.append(float(g[i] * norm))
                                             cda_bonus = float(0.1 * np.sum(r_vals))
-                                        try:
-                                            if getattr(self, 'sdm', None) is not None and g is not None and order:
+                                        with guard_context(ctx='m3/m3_core.py:11911', catch_base=False) as __m3_guard_11904_40:
+                                            if attr_get_optional(self, 'sdm', None) is not None and g is not None and order:
                                                 H = int(os.environ.get('M3_CDA_H', '3')) if 'os' in globals() else 3
                                                 credits = self._cda_rollout_advantages(self._last_policy_obs, action_plan, order, g, H=H, gamma=0.95)
                                                 if credits:
                                                     m = max(1e-6, max(credits.values()))
                                                     self._last_cda_biases = {k: 0.2 * (v / m) for k, v in credits.items()}
-                                        except Exception:
-                                            pass
+
+                                        if __m3_guard_11904_40.error is not None:
+                                            logging.getLogger(__name__).exception("Swallowed exception")
                                 except Exception:
                                     cda_bonus = 0.0
                                 total_reward = float(shaped_reward + cda_bonus)
-                                self.policy.record(self._last_policy_obs, self._last_policy_action, getattr(self, '_last_policy_logp', 0.0), getattr(self, '_last_policy_mu', self.policy.forward(self._last_policy_obs)), total_reward)
+                                self.policy.record(self._last_policy_obs, self._last_policy_action, attr_get_optional(self, '_last_policy_logp', 0.0), attr_get_optional(self, '_last_policy_mu', self.policy.forward(self._last_policy_obs)), total_reward)
                                 # Bus token push (policy state)
                                 try:
-                                    if getattr(self, 'bus', None) is not None:
-                                        mu_vec = getattr(self, '_last_policy_mu', self.policy.forward(self._last_policy_obs)[0])
+                                    if attr_get_optional(self, 'bus', None) is not None:
+                                        mu_vec = attr_get_optional(self, '_last_policy_mu', self.policy.forward(self._last_policy_obs)[0])
                                         mu_vec = np.asarray(mu_vec, dtype=np.float32)
                                         H = 0.5 * mu_vec.size * (1.0 + float(np.log(2.0 * np.pi * (self.policy.sigma ** 2))))
                                         target_H = float(1.5) * mu_vec.size
-                                        dH = float(abs(H - getattr(self, '_prev_policy_entropy', H)))
+                                        dH = float(abs(H - attr_get_optional(self, '_prev_policy_entropy', H)))
                                         self._prev_policy_entropy = H
                                         # bounded variance to avoid initial spikes
-                                        var_a = float(np.var(np.tanh(np.asarray(self._last_policy_action, dtype=np.float32)))) if hasattr(self, '_last_policy_action') else 0.0
+                                        var_a = float(np.var(np.tanh(np.asarray(self._last_policy_action, dtype=np.float32)))) if attr_has(self, '_last_policy_action') else 0.0
                                         sal = 0.5 * abs(float(delta_hat)) + 0.3 * var_a + 0.2 * dH
                                         # derive confidence from KL budget adherence and entropy proximity
-                                        kl = float(getattr(self.policy, '_last_kl', 0.0))
+                                        kl = float(attr_get_optional(self.policy, '_last_kl', 0.0))
                                         conf_k = 1.0 / (1.0 + max(0.0, kl))
                                         conf_h = float(np.exp(- (abs(H - target_H) / (target_H + 1e-6))))
                                         conf = 0.5 * conf_k + 0.5 * conf_h
-                                        if bool(getattr(self.policy, '_last_clipped', False)):
+                                        if bool(attr_get_optional(self.policy, '_last_clipped', False)):
                                             conf *= 0.8
                                         conf = float(np.clip(conf, 0.2, 1.0))
                                         # push generic policy token
                                         self.bus.push('policy', 'policy', mu_vec, salience=sal, confidence=conf, ttl=5)
                                         # also push a semantically named policy token
-                                        try:
-                                            name = getattr(self.feature_bank, '_namer', AutoNamer()).token_name_policy(float(delta_hat), float(var_a), float(dH), float(kl), bool(getattr(self.policy, '_last_clipped', False)))
+                                        with guard_context(ctx='m3/m3_core.py:11943', catch_base=False) as __m3_guard_11940_40:
+                                            name = attr_get_optional(self.feature_bank, '_namer', AutoNamer()).token_name_policy(float(delta_hat), float(var_a), float(dH), float(kl), bool(attr_get_optional(self.policy, '_last_clipped', False)))
                                             self.bus.push('policy', name, mu_vec, salience=sal, confidence=conf, ttl=5)
-                                        except Exception:
-                                            pass
+
+                                        if __m3_guard_11940_40.error is not None:
+                                            logging.getLogger(__name__).exception("Swallowed exception")
                                         self.bus.step()
-                                        try:
+                                        with guard_context(ctx='m3/m3_core.py:11948', catch_base=False) as __m3_guard_11946_40:
                                             _ = self._generate_utterance()
-                                        except Exception:
-                                            pass
-                                        try:
-                                            if hasattr(self, 'skills') and self.skills is not None:
+
+                                        if __m3_guard_11946_40.error is not None:
+                                            logging.getLogger(__name__).exception("Swallowed exception")
+                                        with guard_context(ctx='m3/m3_core.py:11953', catch_base=False) as __m3_guard_11950_40:
+                                            if attr_has(self, 'skills') and self.skills is not None:
                                                 self.skills.observe(list(self.bus.top_keys()))
-                                        except Exception:
-                                            pass
+
+                                        if __m3_guard_11950_40.error is not None:
+                                            logging.getLogger(__name__).exception("Swallowed exception")
                                 except Exception:
-                                    pass
+                                    logging.getLogger(__name__).exception("Swallowed exception")
                                 # Track recent policy rewards for persistence/selection
-                                try:
+                                with guard_context(ctx='m3/m3_core.py:11960', catch_base=False) as __m3_guard_11958_32:
                                     self.policy_reward_history.append(shaped_reward)
-                                except Exception:
-                                    pass
+
+                                if __m3_guard_11958_32.error is not None:
+                                    logging.getLogger(__name__).exception("Swallowed exception")
                                 # AB online update for FeatureBank trials
-                                try:
-                                    if getattr(self, 'feature_bank', None) is not None:
-                                        applied = list(getattr(self.feature_bank, '_last_applied_specs', []))
-                                        self.feature_bank.ab_update(shaped_reward, applied_names=applied, kl=float(getattr(self.policy, '_last_kl', 0.0)), clipped=bool(getattr(self.policy, '_last_clipped', False)))
-                                except Exception:
-                                    pass
+                                with guard_context(ctx='m3/m3_core.py:11967', catch_base=False) as __m3_guard_11963_32:
+                                    if attr_get_optional(self, 'feature_bank', None) is not None:
+                                        applied = list(attr_get_optional(self.feature_bank, '_last_applied_specs', []))
+                                        self.feature_bank.ab_update(shaped_reward, applied_names=applied, kl=float(attr_get_optional(self.policy, '_last_kl', 0.0)), clipped=bool(attr_get_optional(self.policy, '_last_clipped', False)))
+
+                                if __m3_guard_11963_32.error is not None:
+                                    logging.getLogger(__name__).exception("Swallowed exception")
                                 # every 50 steps, run a batch update with KL regularization (scheduler-applied)
                                 if self.t % 50 == 0:
-                                    try:
-                                        target_kl = float(getattr(self, '_sched_target_kl', 0.02))
+                                    with guard_context(ctx='m3/m3_core.py:11978', catch_base=False) as __m3_guard_11971_36:
+                                        target_kl = float(attr_get_optional(self, '_sched_target_kl', 0.02))
                                         # PolicyMLP path uses kl_budget; Torch policies use target_kl
                                         try:
                                             self.policy.end_batch(gamma=0.97, kl_coeff=0.02, lr=0.01 * processing_intensity, kl_budget=target_kl)
                                         except TypeError:
                                             self.policy.end_batch(gamma=0.97, kl_coeff=0.02, lr=0.01 * processing_intensity, target_kl=target_kl)
-                                    except Exception:
+
+                                    if __m3_guard_11971_36.error is not None:
                                         self.policy.end_batch(gamma=0.97, kl_coeff=0.02, lr=0.01 * processing_intensity)
                                 if self.t % 200 == 0:
-                                    try:
+                                    with guard_context(ctx='m3/m3_core.py:11983', catch_base=False) as __m3_guard_11981_36:
                                         self._save_policy_snapshots()
-                                    except Exception:
-                                        pass
+
+                                    if __m3_guard_11981_36.error is not None:
+                                        logging.getLogger(__name__).exception("Swallowed exception")
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).exception("Swallowed exception")
                         cost = self.energy_ctrl.compute_cognitive_cost(action_plan)
                         self.energy_ctrl.update_energy(cost)
                         if self.t % 10 == 0:
                             self._log_state(delta_hat, current_goal)
-                        # Update visualization more frequently for smoother frames
-                        if self.t % 2 == 0:
-                            self._update_visualization()
                         if len(self.log_buffer) >= 1000:
                             self._flush_logs()
                         if self.t - last_save >= 10000:
@@ -11960,23 +12277,26 @@ class M3ConsciousnessCore:
                         try:
                             _tb.print_exc()
                             # Print a few helpful shapes for troubleshooting
-                            try:
-                                print(f"[DEBUG] K={self.K}, n={self.n}, U.shape={getattr(self,'U', None).shape if hasattr(self,'U') else None}")
-                            except Exception:
-                                pass
+                            with guard_context(ctx='m3/m3_core.py:12009', catch_base=False) as __m3_guard_12007_28:
+                                print(f"[DEBUG] K={self.K}, n={self.n}, U.shape={attr_get_optional(self,'U', None).shape if attr_has(self,'U') else None}")
+
+                            if __m3_guard_12007_28.error is not None:
+                                logging.getLogger(__name__).exception("Swallowed exception")
                         except Exception:
-                            pass
-                        try:
+                            logging.getLogger(__name__).exception("Swallowed exception")
+                        with guard_context(ctx='m3/m3_core.py:12016', catch_base=True) as __m3_guard_12013_24:
                             self._save_checkpoint()
                             print('Emergency checkpoint saved')
-                        except:
+
+                        if __m3_guard_12013_24.error is not None:
                             print('Emergency checkpoint failed')
-                        try:
+                        with guard_context(ctx='m3/m3_core.py:12023', catch_base=True) as __m3_guard_12018_24:
                             self.qualia = QualiaState()
                             self.energy_ctrl.cognitive_energy = max(30.0, self.energy_ctrl.cognitive_energy)
                             self.t += 1
                             continue
-                        except:
+
+                        if __m3_guard_12018_24.error is not None:
                             break
         except KeyboardInterrupt:
             print('\nInterrupted - Saving checkpoint...')
@@ -11988,27 +12308,10 @@ class M3ConsciousnessCore:
 
     def _decide_action(self, goal: Goal, processing_intensity: float) -> Dict[str, Any]:
         action = {'strategy': 'adaptive', 'gate_adjust': 1.0, 'kd_adjust': 1.0, 'learning_rate': 0.25 * processing_intensity, 'exploration_factor': 2.0 * processing_intensity, 'complexity': 0.05, 'reasoning': ''}
-        # Self-vision coupling: use vision summary to bias policy
-        try:
-            vs = getattr(self, '_vision_summary', None)
-            if isinstance(vs, dict) and vs:
-                g_mean = float(vs.get('g_mean', 0.0))  # surprise/change
-                b_mean = float(vs.get('b_mean', 0.0))  # structure/depth cue
-                edge_d = float(vs.get('edge_density', 0.0))
-                def _lim(f, m=0.1):
-                    return float(np.clip(f, 1.0 - m, 1.0 + m))
-                # More surprise -> explore a bit more
-                action['exploration_factor'] *= _lim(1.0 + 0.1 * g_mean)
-                # More structure -> slightly stabilize gates
-                action['gate_adjust'] *= _lim(1.0 - 0.1 * b_mean)
-                action['kd_adjust'] *= _lim(1.0 + 0.1 * b_mean)
-                # Rich edges -> learn a touch faster
-                action['learning_rate'] *= _lim(1.0 + 0.1 * edge_d)
-                action['reasoning'] += f" [vision g={g_mean:.2f} b={b_mean:.2f} e={edge_d:.2f}]"
-        except Exception:
-            pass
+        def _lim(f, m=0.1):
+            return float(np.clip(f, 1.0 - m, 1.0 + m))
         # Spatial coupling: distance to spatial goal biases exploration vs. stabilization
-        try:
+        with guard_context(ctx='m3/m3_core.py:12063', catch_base=False) as __m3_guard_12055_8:
             d = self.world_state.get('spatial_goal_dist', None)
             if isinstance(d, (int, float)):
                 d = float(max(0.0, min(1.0, d)))
@@ -12016,9 +12319,10 @@ class M3ConsciousnessCore:
                 action['gate_adjust'] *= _lim(1.0 - 0.1 * (1.0 - d))
                 action['kd_adjust'] *= _lim(1.0 + 0.1 * (1.0 - d))
                 action['reasoning'] += f" [space d={d:.2f}]"
-        except Exception:
-            pass
-        if hasattr(self, '_last_policy_recommendations') and self._last_policy_recommendations:
+
+        if __m3_guard_12055_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        if attr_has(self, '_last_policy_recommendations') and self._last_policy_recommendations:
             policy = self._last_policy_recommendations
             action['exploration_factor'] *= policy.get('exploration_factor', 1.0)
             stability_pref = policy.get('stability_preference', 0.5)
@@ -12040,14 +12344,14 @@ class M3ConsciousnessCore:
         if processing_intensity < 0.4:
             action.update({'strategy': 'minimal', 'gate_adjust': 0.95, 'kd_adjust': 1.05, 'complexity': 0.02, 'reasoning': f'intensity={processing_intensity:.2f} ' + action.get('reasoning', '')})
             return action
-        if hasattr(self.self_model, 'belief_stability'):
+        if attr_has(self.self_model, 'belief_stability'):
             beliefs = [self.self_model.belief_stability, self.self_model.belief_adaptation, self.self_model.belief_prediction]
         else:
             beliefs = [0.5, 0.5, 0.5]
         beliefs_array = np.array(beliefs)
         belief_mean = np.mean(beliefs_array)
         belief_std = max(0.1, np.std(beliefs_array))
-        if hasattr(self.self_model, 'belief_adaptation'):
+        if attr_has(self.self_model, 'belief_adaptation'):
             adapt_z = (self.self_model.belief_adaptation - belief_mean) / belief_std
         else:
             adapt_z = 0.0
@@ -12070,86 +12374,94 @@ class M3ConsciousnessCore:
         # Learned policy override (policy-first, heuristic fallback)
         obs = self._policy_obs_adapted()
         # ensure policy exists and input dim matches
-        if not hasattr(self, 'policy') or self.policy is None:
+        if not attr_has(self, 'policy') or self.policy is None:
             self.policy = PolicyMLP(in_dim=obs.size, out_dim=12, hidden=max(128, obs.size), rng=self.rngr.get('policy'))
         else:
-            try:
-                pol_in = int(getattr(self.policy, 'in_dim', obs.size))
-            except Exception:
+            with guard_context(ctx='m3/m3_core.py:12122', catch_base=False) as __m3_guard_12120_12:
+                pol_in = int(attr_get_optional(self.policy, 'in_dim', obs.size))
+
+            if __m3_guard_12120_12.error is not None:
                 pol_in = int(obs.size)
             if pol_in > 0 and int(obs.size) != pol_in:
                 obs = self._project_obs_to_dim(obs, target_dim=pol_in)
             try:
-                if hasattr(self.policy, 'resize_input') and int(getattr(self.policy, 'in_dim', obs.size)) != int(obs.size):
+                if attr_has(self.policy, 'resize_input') and int(attr_get_optional(self.policy, 'in_dim', obs.size)) != int(obs.size):
                     self.policy.resize_input(obs.size)
             except Exception:
                 allow_recreate = bool(self._observation_adapter_cfg.get("allow_policy_recreate", False))
                 if allow_recreate:
-                    out_dim = int(getattr(getattr(self, 'policy', None), 'out_dim', 12))
+                    out_dim = int(attr_get_optional(attr_get_optional(self, 'policy', None), 'out_dim', 12))
                     self._recreate_policy_with_transfer(in_dim=int(obs.size), out_dim=out_dim)
                 else:
-                    try:
-                        obs = self._project_obs_to_dim(obs, target_dim=int(getattr(self.policy, 'in_dim', obs.size)))
-                    except Exception:
-                        pass
+                    with guard_context(ctx='m3/m3_core.py:12137', catch_base=False) as __m3_guard_12135_20:
+                        obs = self._project_obs_to_dim(obs, target_dim=int(attr_get_optional(self.policy, 'in_dim', obs.size)))
+
+                    if __m3_guard_12135_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
         # Provide Bus-routed active specs to BRPolicy if available
         try:
-            if hasattr(self, 'feature_bank') and getattr(self, 'feature_bank', None) is not None and hasattr(self.feature_bank, '_ranges'):
-                ranges = dict(getattr(self.feature_bank, '_ranges', {}))
+            if attr_has(self, 'feature_bank') and attr_get_optional(self, 'feature_bank', None) is not None and attr_has(self.feature_bank, '_ranges'):
+                ranges = dict(attr_get_optional(self.feature_bank, '_ranges', {}))
                 active = []
-                try:
-                    topk = list(self.bus.top_keys()) if getattr(self, 'bus', None) is not None else []
+                with guard_context(ctx='m3/m3_core.py:12147', catch_base=False) as __m3_guard_12144_16:
+                    topk = list(self.bus.top_keys()) if attr_get_optional(self, 'bus', None) is not None else []
                     active = [k for k in topk if k in ranges]
-                except Exception:
+
+                if __m3_guard_12144_16.error is not None:
                     active = []
                 if not active:
-                    try:
-                        active = [s.name for s in getattr(self.feature_bank, 'specs', [])[:4] if s.active and s.name in ranges]
-                    except Exception:
+                    with guard_context(ctx='m3/m3_core.py:12152', catch_base=False) as __m3_guard_12150_20:
+                        active = [s.name for s in attr_get_optional(self.feature_bank, 'specs', [])[:4] if s.active and s.name in ranges]
+
+                    if __m3_guard_12150_20.error is not None:
                         active = []
-                if hasattr(self.policy, 'set_active_specs') and callable(getattr(self.policy, 'set_active_specs')):
+                if attr_has(self.policy, 'set_active_specs') and callable(attr_get_optional(self.policy, 'set_active_specs')):
                     self.policy.set_active_specs(active, ranges)
                 # Gate bias: merge skills + CDA credits
                 try:
-                    if hasattr(self.policy, 'set_gate_bias'):
+                    if attr_has(self.policy, 'set_gate_bias'):
                         merged: Dict[str, float] = {}
-                        try:
-                            if hasattr(self, 'skills') and self.skills is not None:
+                        with guard_context(ctx='m3/m3_core.py:12163', catch_base=False) as __m3_guard_12160_24:
+                            if attr_has(self, 'skills') and self.skills is not None:
                                 merged.update(self.skills.get_gate_biases(active))
-                        except Exception:
-                            pass
-                        try:
-                            for k, v in dict(getattr(self, '_last_cda_biases', {}) or {}).items():
+
+                        if __m3_guard_12160_24.error is not None:
+                            logging.getLogger(__name__).exception("Swallowed exception")
+                        with guard_context(ctx='m3/m3_core.py:12168', catch_base=False) as __m3_guard_12165_24:
+                            for k, v in dict(attr_get_optional(self, '_last_cda_biases', {}) or {}).items():
                                 merged[k] = merged.get(k, 0.0) + float(v)
-                        except Exception:
-                            pass
+
+                        if __m3_guard_12165_24.error is not None:
+                            logging.getLogger(__name__).exception("Swallowed exception")
                         self.policy.set_gate_bias(merged)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).exception("Swallowed exception")
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Swallowed exception")
         # sample from policy
-        if hasattr(self.policy, 'sample'):
+        if attr_has(self.policy, 'sample'):
             # Pass affect state if available (for M3-Binary Brain/Plasticity)
             # Wiring updated: Inject Affect + Phi + Energy for comprehensive neuromodulation
             mod_state = []
             
             # 1. Affect (Emotion)
-            if hasattr(self, 'rewards') and hasattr(self.rewards, 'last_affect') and self.rewards.last_affect is not None:
+            if attr_has(self, 'rewards') and attr_has(self.rewards, 'last_affect') and self.rewards.last_affect is not None:
                  mod_state.extend(list(np.ravel(self.rewards.last_affect)))
             
             # 2. Phi (Consciousness)
-            try:
-                current_phi = self.phi_calculator.phi_history[-1] if hasattr(self, 'phi_calculator') and self.phi_calculator.phi_history else 0.0
+            with guard_context(ctx='m3/m3_core.py:12189', catch_base=False) as __m3_guard_12186_12:
+                current_phi = self.phi_calculator.phi_history[-1] if attr_has(self, 'phi_calculator') and self.phi_calculator.phi_history else 0.0
                 mod_state.append(float(current_phi))
-            except Exception:
+
+            if __m3_guard_12186_12.error is not None:
                 mod_state.append(0.0)
                 
             # 3. Energy (Fatigue)
-            try:
-                 mod_state.append(float(self.energy_ctrl.activation_level))
-            except Exception:
-                 mod_state.append(1.0)
+            with guard_context(ctx='m3/m3_core.py:12195', catch_base=False) as __m3_guard_12193_12:
+                mod_state.append(float(self.energy_ctrl.activation_level))
+
+            if __m3_guard_12193_12.error is not None:
+                mod_state.append(1.0)
 
             affect_state = np.array(mod_state, dtype=np.float32) if mod_state else None
             
@@ -12163,7 +12475,7 @@ class M3ConsciousnessCore:
             mu = self.policy.forward(obs); raw_ctrl = mu; _lp = 0.0; _mu = mu; _v = 0.0
         ctrl = np.tanh(raw_ctrl)
         # Optional CEM short planning (use first 5 dims mapping)
-        ctrl_plan = self._plan_action_cem(obs, init=ctrl[:5]) if getattr(self, 'sdm', None) is not None else None
+        ctrl_plan = self._plan_action_cem(obs, init=ctrl[:5]) if attr_get_optional(self, 'sdm', None) is not None else None
         if ctrl_plan is not None:
             beta = 0.3
             m = min(5, ctrl.size)
@@ -12177,14 +12489,12 @@ class M3ConsciousnessCore:
         action['exploration_factor'] = float(np.clip(1.5 * (1.0 + 0.5 * _get(3, 0.0)), 0.0, 5.0))
         # increase complexity scale so energy cost is meaningful
         action['complexity'] = float(np.clip(0.8 * (1.0 + 0.5 * _get(4, 0.0)), 0.2, 2.5))
-        # additional heads (7..11) as structural/vision/stability gains
+        # additional heads (7..11) as structural/stability gains
         # structural gains
         action['sparsify_gain'] = float(np.clip((1.0 + _get(7, 0.0)) * 0.5, 0.0, 1.0))
         action['reconnect_gain'] = float(np.clip((1.0 + _get(8, 0.0)) * 0.5, 0.0, 1.0))
         action['prune_gain'] = float(np.clip((1.0 + _get(9, 0.0)) * 0.5, 0.0, 1.0))
-        # vision mix beta (0.2..0.8)
-        vb_raw = _get(10, 0.0)
-        self._vision_mix_beta = float(np.clip(0.5 + 0.3 * vb_raw, 0.2, 0.8))
+        # index 10 reserved (legacy vision mix beta removed)
         # stability gain affects state decay strength
         action['stability_gain'] = float(np.clip((1.0 + _get(11, 0.0)) * 0.5, 0.0, 1.0))
         # attention nudge
@@ -12205,8 +12515,8 @@ class M3ConsciousnessCore:
         # expose latest shaped reward to SDM target later
         # set in run loop when computed; here no-op
         # Apply synthesized policy rules, if any (small weight + TTL)
-        try:
-            if getattr(self, '_policy_rules', None):
+        with guard_context(ctx='m3/m3_core.py:12270', catch_base=False) as __m3_guard_12252_8:
+            if attr_get_optional(self, '_policy_rules', None):
                 sigs = self._policy_signals()
                 kept = []
                 for rule in list(self._policy_rules):
@@ -12223,55 +12533,62 @@ class M3ConsciousnessCore:
                         rule['ttl'] = ttl
                         kept.append(rule)
                 self._policy_rules = kept
-        except Exception:
-            pass
+
+        if __m3_guard_12252_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         return action
 
     # --- UI snapshot for GUI ---
     def snapshot(self) -> Dict[str, Any]:
         try:
             phi = 0.0
-            if hasattr(self.phi_calculator, 'phi_history') and self.phi_calculator.phi_history:
+            if attr_has(self.phi_calculator, 'phi_history') and self.phi_calculator.phi_history:
                 phi = float(self.phi_calculator.phi_history[-1])
-            energy = float(getattr(self.energy_ctrl, 'cognitive_energy', 0.0))
-            activation = float(getattr(self.energy_ctrl, 'activation_level', 0.0))
-            unity = float(getattr(self.unified_subject, 'unity_score', 0.0))
-            lr = float(getattr(self, '_last_policy_lr', 0.0))
-            steps = int(getattr(self, 't', 0))
+            energy = float(attr_get_optional(self.energy_ctrl, 'cognitive_energy', 0.0))
+            activation = float(attr_get_optional(self.energy_ctrl, 'activation_level', 0.0))
+            unity = float(attr_get_optional(self.unified_subject, 'unity_score', 0.0))
+            lr = float(attr_get_optional(self, '_last_policy_lr', 0.0))
+            steps = int(attr_get_optional(self, 't', 0))
             # attach a fixed-size embedding for visualization/analysis
-            try:
+            with guard_context(ctx='m3/m3_core.py:12288', catch_base=False) as __m3_guard_12286_12:
                 emb = self.extract_embedding(target_dim=128, normalize=True)
-            except Exception:
+
+            if __m3_guard_12286_12.error is not None:
                 emb = np.zeros((128,), dtype=np.float32)
             return {'phi': phi, 'energy': energy, 'activation': activation, 'unity': unity, 'policy_lr': lr, 'steps': steps, 'embeddings': emb}
         except Exception:
-            try:
+            with guard_context(ctx='m3/m3_core.py:12294', catch_base=False) as __m3_guard_12292_12:
                 emb = self.extract_embedding(target_dim=128, normalize=True)
-            except Exception:
+
+            if __m3_guard_12292_12.error is not None:
                 emb = np.zeros((128,), dtype=np.float32)
-            return {'phi': 0.0, 'energy': 0.0, 'activation': 0.0, 'unity': 0.0, 'policy_lr': 0.0, 'steps': int(getattr(self, 't', 0)), 'embeddings': emb}
+            return {'phi': 0.0, 'energy': 0.0, 'activation': 0.0, 'unity': 0.0, 'policy_lr': 0.0, 'steps': int(attr_get_optional(self, 't', 0)), 'embeddings': emb}
 
 
     def export_state_vector(self, include_panels: bool = True) -> np.ndarray:
         """Export a vector that encodes all module states (no omissions)."""
-        try:
+        with guard_context(ctx='m3/m3_core.py:12303', catch_base=False) as __m3_guard_12301_8:
             dim = int(os.getenv('M3_VEC_HASH_DIM', '256'))
-        except Exception:
+
+        if __m3_guard_12301_8.error is not None:
             dim = 256
         if dim <= 0:
             dim = 256
         vec = np.zeros((dim,), dtype=np.float32)
-        try:
+        with guard_context(ctx='m3/m3_core.py:12310', catch_base=False) as __m3_guard_12308_8:
             max_depth = int(os.getenv('M3_EXPORT_MAX_DEPTH', '2'))
-        except Exception:
+
+        if __m3_guard_12308_8.error is not None:
             max_depth = 2
-        try:
+        with guard_context(ctx='m3/m3_core.py:12314', catch_base=False) as __m3_guard_12312_8:
             max_items = int(os.getenv('M3_EXPORT_MAX_ITEMS', '64'))
-        except Exception:
+
+        if __m3_guard_12312_8.error is not None:
             max_items = 64
-        try:
+        with guard_context(ctx='m3/m3_core.py:12318', catch_base=False) as __m3_guard_12316_8:
             max_samples = int(os.getenv('M3_EXPORT_ARRAY_SAMPLES', '32'))
-        except Exception:
+
+        if __m3_guard_12316_8.error is not None:
             max_samples = 32
 
         seen = set()
@@ -12297,14 +12614,15 @@ class M3ConsciousnessCore:
                 vec[idx] += _hash_to_val(str(value))
 
         def _walk(obj, path: str, depth: int):
-            try:
+            with guard_context(ctx='m3/m3_core.py:12350', catch_base=False) as __m3_guard_12344_12:
                 oid = id(obj)
                 if oid in seen:
                     _add(path + ".__cycle__", 1.0, True)
                     return
                 seen.add(oid)
-            except Exception:
-                pass
+
+            if __m3_guard_12344_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             if depth > max_depth:
                 _add(path + ".__repr__", repr(obj)[:256], False)
                 return
@@ -12322,26 +12640,28 @@ class M3ConsciousnessCore:
                     _add(path + ".min", float(arr.min()), True)
                     _add(path + ".max", float(arr.max()), True)
                     if max_samples > 0:
-                        try:
+                        with guard_context(ctx='m3/m3_core.py:12373', catch_base=False) as __m3_guard_12369_24:
                             idxs = np.linspace(0, arr.size - 1, num=min(max_samples, arr.size)).astype(int)
                             for i, idx in enumerate(idxs.tolist()):
                                 _add(f"{path}.s{i}", float(arr[idx]), True)
-                        except Exception:
-                            pass
+
+                        if __m3_guard_12369_24.error is not None:
+                            logging.getLogger(__name__).exception("Swallowed exception")
                 else:
                     _add(path + ".empty", 1.0, True)
                 return
             try:
                 import torch
                 if torch.is_tensor(obj):
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:12385', catch_base=False) as __m3_guard_12381_20:
                         arr = obj.detach().float().cpu().numpy()
                         _walk(arr, path, depth)
                         return
-                    except Exception:
-                        pass
+
+                    if __m3_guard_12381_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
             except Exception:
-                pass
+                logging.getLogger(__name__).exception("Swallowed exception")
             if isinstance(obj, dict):
                 _add(path + ".len", len(obj), True)
                 count = 0
@@ -12360,22 +12680,24 @@ class M3ConsciousnessCore:
                 if len(seq) > max_items:
                     _add(path + ".__trunc__", len(seq) - max_items, True)
                 return
-            if hasattr(obj, 'snapshot') and callable(getattr(obj, 'snapshot')):
-                try:
+            if attr_has(obj, 'snapshot') and callable(attr_get_optional(obj, 'snapshot')):
+                with guard_context(ctx='m3/m3_core.py:12412', catch_base=False) as __m3_guard_12408_16:
                     snap = obj.snapshot()
                     _walk(snap, path + ".snapshot", depth + 1)
                     return
-                except Exception:
-                    pass
-            if hasattr(obj, 'get_state') and callable(getattr(obj, 'get_state')):
-                try:
+
+                if __m3_guard_12408_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
+            if attr_has(obj, 'get_state') and callable(attr_get_optional(obj, 'get_state')):
+                with guard_context(ctx='m3/m3_core.py:12419', catch_base=False) as __m3_guard_12415_16:
                     st = obj.get_state()
                     _walk(st, path + ".state", depth + 1)
                     return
-                except Exception:
-                    pass
-            if hasattr(obj, 'state_dict') and callable(getattr(obj, 'state_dict')):
-                try:
+
+                if __m3_guard_12415_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
+            if attr_has(obj, 'state_dict') and callable(attr_get_optional(obj, 'state_dict')):
+                with guard_context(ctx='m3/m3_core.py:12431', catch_base=False) as __m3_guard_12422_16:
                     sd = obj.state_dict()
                     if isinstance(sd, dict):
                         for i, (k, v) in enumerate(sd.items()):
@@ -12384,23 +12706,26 @@ class M3ConsciousnessCore:
                                 break
                             _walk(v, f"{path}.state.{k}", depth + 1)
                         return
-                except Exception:
-                    pass
-            try:
-                if hasattr(obj, '__dict__'):
+
+                if __m3_guard_12422_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
+            with guard_context(ctx='m3/m3_core.py:12437', catch_base=False) as __m3_guard_12433_12:
+                if attr_has(obj, '__dict__'):
                     _walk(obj.__dict__, path + ".__dict__", depth + 1)
                     return
-            except Exception:
-                pass
+
+            if __m3_guard_12433_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             _add(path + ".__repr__", repr(obj)[:256], False)
 
         _walk(self.__dict__, "core", 0)
-        if include_panels and hasattr(self, 'feature_bank') and hasattr(self.feature_bank, 'panels'):
-            try:
+        if include_panels and attr_has(self, 'feature_bank') and attr_has(self.feature_bank, 'panels'):
+            with guard_context(ctx='m3/m3_core.py:12446', catch_base=False) as __m3_guard_12443_12:
                 panels = self.feature_bank.panels(self)
                 _walk(panels, "core.feature_bank.panels", 1)
-            except Exception:
-                pass
+
+            if __m3_guard_12443_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         return vec.astype(np.float32)
 
     def _scheduler_update(self, delta_hat: float) -> Dict[str, float]:
@@ -12410,18 +12735,18 @@ class M3ConsciousnessCore:
         res = {}
         try:
             # Surprise: entropy jump + policy KL
-            H_prev = float(getattr(self, '_prev_policy_entropy', 0.0))
-            last_mu = getattr(self, '_last_policy_mu', None)
-            if last_mu is not None and hasattr(self, 'policy') and hasattr(self.policy, 'sigma'):
+            H_prev = float(attr_get_optional(self, '_prev_policy_entropy', 0.0))
+            last_mu = attr_get_optional(self, '_last_policy_mu', None)
+            if last_mu is not None and attr_has(self, 'policy') and attr_has(self.policy, 'sigma'):
                 mu_vec = np.asarray(last_mu, dtype=np.float32)
                 H_now = 0.5 * mu_vec.size * (1.0 + float(np.log(2.0 * np.pi * (float(self.policy.sigma) ** 2))))
             else:
                 H_now = H_prev
             dH = abs(H_now - H_prev)
-            kl = float(getattr(self.policy, '_last_kl', 0.0)) if hasattr(self, 'policy') else 0.0
+            kl = float(attr_get_optional(self.policy, '_last_kl', 0.0)) if attr_has(self, 'policy') else 0.0
             surprise = float(np.tanh(0.2 * dH) * 0.5 + np.tanh(kl) * 0.5)
             # Agency: bounded action variance proxy
-            var_a = float(np.var(np.tanh(np.asarray(getattr(self, '_last_policy_action', np.zeros(1)), dtype=np.float32)))) if hasattr(self, '_last_policy_action') else 0.0
+            var_a = float(np.var(np.tanh(np.asarray(attr_get_optional(self, '_last_policy_action', np.zeros(1)), dtype=np.float32)))) if attr_has(self, '_last_policy_action') else 0.0
             agency = float(np.clip(var_a, 0.0, 1.0))
             # Map to targets
             base_kl = 0.02
@@ -12429,44 +12754,42 @@ class M3ConsciousnessCore:
             self._sched_target_kl = targ_kl
             res['target_kl'] = targ_kl
             # Optional: adjust bus top-k
-            try:
-                if getattr(self, 'bus', None) is not None and hasattr(self.bus, 'top_k'):
+            with guard_context(ctx='m3/m3_core.py:12481', catch_base=False) as __m3_guard_12476_12:
+                if attr_get_optional(self, 'bus', None) is not None and attr_has(self.bus, 'top_k'):
                     k = int(np.clip(round(4 + 2 * (surprise - (1.0 - agency))), 2, 6))
                     self.bus.top_k = k
                     res['bus_top_k'] = float(k)
-            except Exception:
-                pass
+
+            if __m3_guard_12476_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             # Policy sigma: only for numpy MLP; Torch policies keep trainable sigma
-            try:
-                if hasattr(self.policy, 'W1') and hasattr(self.policy, 'sigma'):
+            with guard_context(ctx='m3/m3_core.py:12489', catch_base=False) as __m3_guard_12484_12:
+                if attr_has(self.policy, 'W1') and attr_has(self.policy, 'sigma'):
                     target_sigma = float(np.clip(self.policy.sigma * np.exp(0.2 * (surprise - (1.0 - agency))), 0.1, 2.0))
                     self.policy.sigma = target_sigma
                     res['sigma'] = target_sigma
-            except Exception:
-                pass
+
+            if __m3_guard_12484_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             return res
         except Exception:
             return res
 
     def _policy_obs(self) -> np.ndarray:
-        if getattr(self, 'feature_bank', None) is not None:
+        if attr_get_optional(self, 'feature_bank', None) is not None:
             z = self.feature_bank.build(self)
-            try:
-                if getattr(self, 'shared_repr', None) is not None:
+            with guard_context(ctx='m3/m3_core.py:12503', catch_base=False) as __m3_guard_12498_12:
+                if attr_get_optional(self, 'shared_repr', None) is not None:
                     # keep dim consistent
                     self.shared_repr.update_stats(z)
                     z = self.shared_repr.transform(z)
-            except Exception:
-                pass
+
+            if __m3_guard_12498_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             return z
         # Fallback to legacy 12D observation
-        try:
-            retina = self._vision_build_retina(size=(32, 32), foveate=True)
-            contrast, entropy, edge_density, depth_cue = self._vision_features(retina)
-            r_mean = float(np.mean(retina))
-        except Exception:
-            contrast = entropy = edge_density = 0.0
-            r_mean = 0.0
+        contrast = entropy = edge_density = 0.0
+        r_mean = 0.0
         last_phi = float(self.phi_calculator.phi_history[-1]) if self.phi_calculator.phi_history else 0.0
         obs = np.array([
             r_mean, contrast, entropy, edge_density,
@@ -12474,7 +12797,7 @@ class M3ConsciousnessCore:
             float(self.self_model.meta_awareness),
             float(self.energy_ctrl.activation_level),
             float(self.unified_subject.unity_score),
-            float(self.world_state.get('stability', 0.5)) if hasattr(self, 'world_state') else 0.5,
+            float(self.world_state.get('stability', 0.5)) if attr_has(self, 'world_state') else 0.5,
             float(self.qualia.arousal), float(self.qualia.valence), float(self.qualia.entropy)
         ], dtype=np.float32)
         obs = np.clip((obs - 0.5) * 2.0, -1.0, 1.0)
@@ -12490,9 +12813,8 @@ class M3ConsciousnessCore:
 
         Always returns a numpy float32 vector of length `target_dim`.
         """
-        try:
-            # Preferred: feature bank
-            if getattr(self, 'feature_bank', None) is not None:
+        with guard_context(ctx='m3/m3_core.py:12551', catch_base=False) as __m3_guard_12537_8:
+            if attr_get_optional(self, 'feature_bank', None) is not None:
                 emb = self.feature_bank.build(self)
                 arr = np.asarray(emb, dtype=np.float32).ravel()
                 out = np.zeros((target_dim,), dtype=np.float32)
@@ -12504,10 +12826,11 @@ class M3ConsciousnessCore:
                     if nrm > 1e-8:
                         out /= nrm
                 return out
-        except Exception:
-            pass
+
+        if __m3_guard_12537_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         # Fallback: policy observation (small vector) padded
-        try:
+        with guard_context(ctx='m3/m3_core.py:12566', catch_base=False) as __m3_guard_12554_8:
             obs = self._policy_obs_adapted()
             arr = np.asarray(obs, dtype=np.float32).ravel()
             out = np.zeros((target_dim,), dtype=np.float32)
@@ -12519,19 +12842,24 @@ class M3ConsciousnessCore:
                 if nrm > 1e-8:
                     out /= nrm
             return out
-        except Exception:
-            pass
+
+        if __m3_guard_12554_8.error is not None:
+            e = __m3_guard_12554_8.error
+            import logging
+            logging.debug(f"[extract_embedding] Policy observation fallback failed: {e}")
+            return np.zeros((target_dim,), dtype=np.float32)
     def _torch_shared_z(self, z: np.ndarray) -> np.ndarray:
         try:
-            mod = getattr(self, '_shared_repr_torch', None)
+            mod = attr_get_optional(self, '_shared_repr_torch', None)
             if mod is None:
                 return np.asarray(z, dtype=np.float32)
             import torch as _t
             dev = _t.device(resolve_torch_device_string(torch_module=_t, require_cuda=False))
-            try:
+            with guard_context(ctx='m3/m3_core.py:12579', catch_base=False) as __m3_guard_12577_12:
                 mod = mod.to(dev)
-            except Exception:
-                pass
+
+            if __m3_guard_12577_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             with _t.no_grad():
                 xt = _t.as_tensor(np.asarray(z, np.float32).reshape(1, -1), device=dev)
                 yt = mod(xt)
@@ -12541,22 +12869,23 @@ class M3ConsciousnessCore:
             return np.asarray(z, dtype=np.float32)
 
     def _align_z_for_sdm(self, z: np.ndarray) -> np.ndarray:
-        try:
+        with guard_context(ctx='m3/m3_core.py:12598', catch_base=False) as __m3_guard_12590_8:
             z = np.asarray(z, dtype=np.float32).ravel()
-            z_dim = int(getattr(self, 'sdm', None).z_dim) if getattr(self, 'sdm', None) is not None else int(z.size)
+            z_dim = int(attr_get_optional(self, 'sdm', None).z_dim) if attr_get_optional(self, 'sdm', None) is not None else int(z.size)
             out = np.zeros((z_dim,), dtype=np.float32)
             take = min(z.size, z_dim)
             if take > 0:
                 out[:take] = z[:take]
             return out
-        except Exception:
+
+        if __m3_guard_12590_8.error is not None:
             return np.asarray(z, dtype=np.float32)
 
     def _cda_rollout_advantages(self, z0: np.ndarray, action_plan: Dict[str, Any], order: List[str], g_vec: np.ndarray,
                                 H: int = 3, gamma: float = 0.95) -> Dict[str, float]:
         credits: Dict[str, float] = {}
         try:
-            if getattr(self, 'sdm', None) is None or not order or g_vec is None:
+            if attr_get_optional(self, 'sdm', None) is None or not order or g_vec is None:
                 return credits
             zt = np.asarray(z0, np.float32)
              # Baseline rollout
@@ -12574,10 +12903,11 @@ class M3ConsciousnessCore:
                 z_sim = zt.copy()
                 total = 0.0
                 a_cf = dict(action_plan)
-                try:
+                with guard_context(ctx='m3/m3_core.py:12625', catch_base=False) as __m3_guard_12623_16:
                     a_cf['gate_adjust'] = float(np.clip(a_cf.get('gate_adjust', 1.0) * (1.0 - min(0.5, float(g_vec[i]))), 0.1, 2.0))
-                except Exception:
-                    pass
+
+                if __m3_guard_12623_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 for t in range(int(H)):
                     avec = self._action_vector(a_cf)
                     zf = self._torch_shared_z(z_sim)
@@ -12590,8 +12920,8 @@ class M3ConsciousnessCore:
         except Exception:
             return credits
         # Last-resort: structural data (U) flattened
-        try:
-            u = np.asarray(getattr(self, 'U', np.zeros((1,), dtype=np.float32)), dtype=np.float32).ravel()
+        with guard_context(ctx='m3/m3_core.py:12650', catch_base=False) as __m3_guard_12639_8:
+            u = np.asarray(attr_get_optional(self, 'U', np.zeros((1,), dtype=np.float32)), dtype=np.float32).ravel()
             out = np.zeros((target_dim,), dtype=np.float32)
             take = min(u.size, target_dim)
             if take > 0:
@@ -12601,7 +12931,8 @@ class M3ConsciousnessCore:
                 if nrm > 1e-8:
                     out /= nrm
             return out
-        except Exception:
+
+        if __m3_guard_12639_8.error is not None:
             return np.zeros((target_dim,), dtype=np.float32)
 
     def grow_feature_bank(self, new_max_dim: int | None = None, new_embed_dim: int | None = None, specs: List[FeatureSpec] | None = None, force: bool = False) -> bool:
@@ -12612,11 +12943,12 @@ class M3ConsciousnessCore:
         if no-op or failed.
         """
         # Ensure feature_bank exists (create lazily with sensible defaults)
-        if getattr(self, 'feature_bank', None) is None:
+        if attr_get_optional(self, 'feature_bank', None) is None:
             # If specs provided and no explicit new_max_dim, estimate dimension
-            base_dim = getattr(self, 'feature_bank', None)
+            base_dim = attr_get_optional(self, 'feature_bank', None)
             init_dim = int(new_max_dim) if new_max_dim is not None else 128
             self.feature_bank = FeatureBank(max_dim=init_dim, embed_dim=(new_embed_dim or 32))
+            _validate_feature_bank_contract(self.feature_bank, "M3ConsciousnessCore.grow_feature_bank/reinit")
             fb_dim = self.feature_bank.max_dim
         else:
             fb_dim = int(self.feature_bank.max_dim)
@@ -12625,99 +12957,124 @@ class M3ConsciousnessCore:
         now = time.time()
         if not force:
             try:
-                if (now - float(getattr(self, '_last_growth_time', 0.0))) < float(getattr(self, 'growth_cooldown_sec', 300.0)):
-                    try:
-                        self.visualizer.add_major_event(f'Grow blocked: cooldown active ({now - float(getattr(self, "_last_growth_time", 0.0)):.1f}s)')
-                    except Exception:
-                        pass
+                if (now - float(attr_get_optional(self, '_last_growth_time', 0.0))) < float(attr_get_optional(self, 'growth_cooldown_sec', 300.0)):
+                    with guard_context(ctx='m3/m3_core.py:12677', catch_base=False) as __m3_guard_12675_20:
+                        self.visualizer.add_major_event(f'Grow blocked: cooldown active ({now - float(attr_get_optional(self, "_last_growth_time", 0.0)):.1f}s)')
+
+                    if __m3_guard_12675_20.error is not None:
+                        e = __m3_guard_12675_20.error
+                        import logging
+                        logging.debug(f"[grow_feature_bank] Failed to add major event: {e}")
                     return False
-            except Exception:
-                pass
+            except Exception as e:
+                import logging
+                logging.warning(f"[grow_feature_bank] Failed to check growth cooldown: {e}")
 
         # If specs provided, compute added dims but don't commit until sandbox evaluation
         if specs:
-            try:
-                added = int(sum(getattr(s, 'produced_dim', 1) for s in specs))
-            except Exception:
+            with guard_context(ctx='m3/m3_core.py:12689', catch_base=False) as __m3_guard_12687_12:
+                added = int(sum(attr_get_optional(s, 'produced_dim', 1) for s in specs))
+
+            if __m3_guard_12687_12.error is not None:
+                e = __m3_guard_12687_12.error
+                import logging
+                logging.warning(f"[grow_feature_bank] Failed to compute added dim: {e}")
                 added = 0
             # enforce per-call cap
-            max_add = int(getattr(self, 'growth_max_added_dim_per_call', 256))
+            max_add = int(attr_get_optional(self, 'growth_max_added_dim_per_call', 256))
             if not force and added > max_add:
                 # cap added to safe limit and adjust provided specs by trimming
                 added = max_add
-                try:
-                    specs = specs[:max(1, int(len(specs) * (added / max(1, sum(getattr(s, 'produced_dim', 1) for s in specs))))) ]
-                except Exception:
+                with guard_context(ctx='m3/m3_core.py:12700', catch_base=False) as __m3_guard_12698_16:
+                    specs = specs[:max(1, int(len(specs) * (added / max(1, sum(attr_get_optional(s, 'produced_dim', 1) for s in specs))))) ]
+
+                if __m3_guard_12698_16.error is not None:
+                    e = __m3_guard_12698_16.error
+                    import logging
+                    logging.warning(f"[grow_feature_bank] Spec trimming failed: {e}")
                     specs = specs[:1]
             # estimate new_max_dim (no commit yet)
             if new_max_dim is None:
-                new_max_dim = int(min(getattr(self, '_growth_hard_cap', 4096), fb_dim + added))
+                new_max_dim = int(min(attr_get_optional(self, '_growth_hard_cap', 4096), fb_dim + added))
 
         # validate new_max_dim
         if new_max_dim is None:
             return False
         try:
             new_max_dim = int(new_max_dim)
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.error(f"[grow_feature_bank] Invalid new_max_dim: {e}")
             return False
 
         if int(new_max_dim) <= fb_dim:
             return False
 
         # If specs given and sandbox enabled, evaluate in sandbox before committing
-        if specs and getattr(self, 'enable_growth_sandbox', True) and not force:
+        if specs and attr_get_optional(self, 'enable_growth_sandbox', True) and not force:
             try:
                 sandbox_metrics = self._sandbox_evaluate_specs(specs, steps=40)
                 base = float(sandbox_metrics.get('baseline_reward_mean', 0.0))
                 treat = float(sandbox_metrics.get('treatment_reward_mean', 0.0))
                 # require non-trivial improvement or at least no degradation
                 if treat + 1e-6 < base - 1e-4:
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:12731', catch_base=False) as __m3_guard_12729_20:
                         self.visualizer.add_major_event(f'Auto-grow rejected by sandbox: baseline {base:.4f} -> treat {treat:.4f}')
-                    except Exception:
-                        pass
+
+                    if __m3_guard_12729_20.error is not None:
+                        e = __m3_guard_12729_20.error
+                        import logging
+                        logging.debug(f"[grow_feature_bank] Visualizer event failed: {e}")
                     return False
                 # else fall through to commit
-            except Exception:
+            except Exception as e:
+                import logging
+                logging.error(f"[grow_feature_bank] Sandbox evaluation failed: {e}")
                 # If sandbox fails, abort to be safe
-                try:
+                with guard_context(ctx='m3/m3_core.py:12742', catch_base=False) as __m3_guard_12740_16:
                     self.visualizer.add_major_event('Auto-grow aborted: sandbox failed')
-                except Exception:
-                    pass
+
+                if __m3_guard_12740_16.error is not None:
+                    eval_e = __m3_guard_12740_16.error
+                    logging.debug(f"[grow_feature_bank] Secondary visualizer failed: {eval_e}")
                 return False
 
         # Grow feature bank (commit)
         self.feature_bank.grow(new_max_dim, new_embed_dim)
         fb_dim_new = int(self.feature_bank.max_dim)
         # record growth time
-        try:
+        with guard_context(ctx='m3/m3_core.py:12752', catch_base=False) as __m3_guard_12750_8:
             self._last_growth_time = float(time.time())
-        except Exception:
-            pass
+
+        if __m3_guard_12750_8.error is not None:
+            e = __m3_guard_12750_8.error
+            import logging
+            logging.warning(f"[grow_feature_bank] Recording _last_growth_time failed: {e}")
         # Resize policy input
-        if hasattr(self, 'policy') and self.policy is not None:
-            try:
-                if hasattr(self.policy, 'resize_input'):
+        if attr_has(self, 'policy') and self.policy is not None:
+            with guard_context(ctx='m3/m3_core.py:12760', catch_base=False) as __m3_guard_12757_12:
+                if attr_has(self.policy, 'resize_input'):
                     self.policy.resize_input(fb_dim_new)
-            except Exception:
+
+            if __m3_guard_12757_12.error is not None:
                 allow_recreate = bool(self._observation_adapter_cfg.get("allow_policy_recreate", False))
                 if allow_recreate:
-                    out_dim = int(getattr(getattr(self, 'policy', None), 'out_dim', 12))
+                    out_dim = int(attr_get_optional(attr_get_optional(self, 'policy', None), 'out_dim', 12))
                     self._recreate_policy_with_transfer(in_dim=int(fb_dim_new), out_dim=out_dim)
                 else:
                     self._log_runtime_event(
                         "obs_adapter",
                         mode="keep_policy_dim",
-                        policy_dim=int(getattr(getattr(self, 'policy', None), 'in_dim', fb_dim_new)),
+                        policy_dim=int(attr_get_optional(attr_get_optional(self, 'policy', None), 'in_dim', fb_dim_new)),
                         feature_dim=int(fb_dim_new),
                     )
         # Resize SDM (input dim = fb_dim + act_dim)
         act_dim = 5
         self._sdm_in_dim = int(self.feature_bank.max_dim + act_dim)
         use_torch_sdm = os.environ.get('M3_TORCH_SDM', '0') in ('1', 'true', 'TRUE')
-        if getattr(self, 'sdm', None) is None:
+        if attr_get_optional(self, 'sdm', None) is None:
             if use_torch_sdm and _TORCH_OK:
-                try:
+                with guard_context(ctx='m3/m3_core.py:12787', catch_base=False) as __m3_guard_12778_16:
                     d_model = int(os.environ.get('M3_SDM_DMODEL', '2048'))
                     n_layers = int(os.environ.get('M3_SDM_LAYERS', '16'))
                     d_ff = int(os.environ.get('M3_SDM_DFF', '8192'))
@@ -12726,9 +13083,13 @@ class M3ConsciousnessCore:
                     use_fsdp = os.environ.get('M3_SDM_FSDP', '1') in ('1', 'true', 'TRUE')
                     self.sdm = TorchSDM(in_dim=self._sdm_in_dim, z_dim=self.feature_bank.max_dim, d_model=d_model, n_layers=n_layers,
                                         d_ff=d_ff, n_experts=n_experts, top_k=top_k, fsdp=use_fsdp)
-                except Exception:
+
+                if __m3_guard_12778_16.error is not None:
+                    e = __m3_guard_12778_16.error
+                    import logging
+                    logging.error(f"[grow_feature_bank] TorchSDM creation failed: {e}")
                     self.sdm = None
-            if getattr(self, 'sdm', None) is None:
+            if attr_get_optional(self, 'sdm', None) is None:
                 self.sdm = SelfDynamicsModel(in_dim=self._sdm_in_dim, hidden=max(128, self.feature_bank.max_dim), rng=self.rngr.get('sdm'), z_dim=self.feature_bank.max_dim)
         else:
             # Try in-place resize when legacy SDM; TorchSDM will be re-created
@@ -12736,7 +13097,7 @@ class M3ConsciousnessCore:
                 self.sdm.resize(new_in_dim=self._sdm_in_dim, new_z_dim=self.feature_bank.max_dim)
             except Exception:
                 if use_torch_sdm and _TORCH_OK:
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:12809', catch_base=False) as __m3_guard_12799_20:
                         d_model = int(os.environ.get('M3_SDM_DMODEL', '2048'))
                         n_layers = int(os.environ.get('M3_SDM_LAYERS', '16'))
                         d_ff = int(os.environ.get('M3_SDM_DFF', '8192'))
@@ -12746,19 +13107,25 @@ class M3ConsciousnessCore:
                         self.sdm = TorchSDM(in_dim=self._sdm_in_dim, z_dim=self.feature_bank.max_dim, d_model=d_model, n_layers=n_layers,
                                             d_ff=d_ff, n_experts=n_experts, top_k=top_k, fsdp=use_fsdp, a_dim=5,
                                             shared_repr=self._shared_repr_torch)
-                    except Exception:
+
+                    if __m3_guard_12799_20.error is not None:
                         self.sdm = SelfDynamicsModel(in_dim=self._sdm_in_dim, hidden=max(128, self.feature_bank.max_dim), rng=self.rngr.get('sdm'), z_dim=self.feature_bank.max_dim)
         # Announce
         try:
             # include spec names in event if available
-            try:
-                spec_names = ','.join([s.name for s in getattr(self.feature_bank, 'specs', [])[-8:]])
+            with guard_context(ctx='m3/m3_core.py:12817', catch_base=False) as __m3_guard_12814_12:
+                spec_names = ','.join([s.name for s in attr_get_optional(self.feature_bank, 'specs', [])[-8:]])
                 self.visualizer.add_major_event(f'FeatureBank grown -> {self.feature_bank.max_dim}D; specs:+{spec_names}')
-            except Exception:
+
+            if __m3_guard_12814_12.error is not None:
+                e = __m3_guard_12814_12.error
+                import logging
+                logging.debug(f"[grow_feature_bank] Spec name extraction failed: {e}")
                 self.visualizer.add_major_event(f'FeatureBank grown -> {self.feature_bank.max_dim}D')
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.debug(f"[grow_feature_bank] Visualization error: {e}")
             # non-fatal visualization error
-            pass
         return True
 
     def _action_vector(self, action: Dict[str, Any]) -> np.ndarray:
@@ -12777,7 +13144,7 @@ class M3ConsciousnessCore:
         """Short-horizon CEM planner over 5D control space using SDM as scorer.
         Returns best control vector for the first step in [-1,1]^5 after planning horizon H.
         """
-        if getattr(self, 'sdm', None) is None:
+        if attr_get_optional(self, 'sdm', None) is None:
             return None
         z = obs.astype(np.float32)
         dim = 5
@@ -12827,12 +13194,16 @@ class M3ConsciousnessCore:
             try:
                 if float(scores[idx[-1]]) > best_score:
                     best_score = float(scores[idx[-1]])
-            except Exception:
-                pass
-        try:
+            except Exception as e:
+                import logging
+                logging.debug(f"[_plan_action_cem] Updating best_score failed: {e}")
+        with guard_context(ctx='m3/m3_core.py:12898', catch_base=False) as __m3_guard_12896_8:
             self._last_plan_score = float(best_score)
-        except Exception:
-            pass
+
+        if __m3_guard_12896_8.error is not None:
+            e = __m3_guard_12896_8.error
+            import logging
+            logging.debug(f"[_plan_action_cem] Recording last_plan_score failed: {e}")
         return mu[0].astype(np.float32)
 
     # ---- Rule AB test (mini episode) ----
@@ -12843,42 +13214,49 @@ class M3ConsciousnessCore:
         """
         # Backup minimal state
         snap = self._get_structure_snapshot()
-        h_bak = getattr(self, 'h', None)
+        h_bak = attr_get_optional(self, 'h', None)
         if h_bak is not None:
-            try:
+            with guard_context(ctx='m3/m3_core.py:12915', catch_base=False) as __m3_guard_12913_12:
                 h_bak = h_bak.copy()
-            except Exception:
-                pass
+
+            if __m3_guard_12913_12.error is not None:
+                e = __m3_guard_12913_12.error
+                import logging
+                logging.debug(f"[_ab_test_rule] h_bak copy failed: {e}")
         energy_bak = (float(self.energy_ctrl.cognitive_energy), float(self.energy_ctrl.activation_level))
-        prev_meta_bak = float(getattr(self, '_prev_meta', 0.5))
-        rules_bak = list(getattr(self, '_policy_rules', []))
+        prev_meta_bak = float(attr_get_optional(self, '_prev_meta', 0.5))
+        rules_bak = list(attr_get_optional(self, '_policy_rules', []))
         def _run(with_rule: bool):
             # restore dynamics
-            try:
+            with guard_context(ctx='m3/m3_core.py:12930', catch_base=False) as __m3_guard_12923_12:
                 self._apply_structure_snapshot(snap)
                 if h_bak is not None:
                     self.h = h_bak.copy()
                 self.energy_ctrl.cognitive_energy = energy_bak[0]
                 self.energy_ctrl.activation_level = energy_bak[1]
                 self._prev_meta = prev_meta_bak
-            except Exception:
-                pass
+
+            if __m3_guard_12923_12.error is not None:
+                e = __m3_guard_12923_12.error
+                import logging
+                logging.warning(f"[_ab_test_rule] Restoring dynamics in _run failed: {e}")
             # set rules
             self._policy_rules = [rule] if with_rule else []
             rewards = []
             deltas = []
             for i in range(max(10, int(steps))):
-                try:
+                with guard_context(ctx='m3/m3_core.py:12948', catch_base=False) as __m3_guard_12938_16:
                     self.energy_ctrl.internal_clock += 1
                     self.world_state = self._get_current_world_state()
                     plan = self._decide_action(None, max(0.2, float(self.energy_ctrl.activation_level)))
                     d, _ = self._execute_action(plan)
                     self._experience_qualia(d, plan)
                     deltas.append(d)
-                    r = float(-d + getattr(self, 'reward_shape_lambda', 0.2) * (self.self_model.meta_awareness - getattr(self, '_prev_meta', 0.5)))
+                    r = float(-d + attr_get_optional(self, 'reward_shape_lambda', 0.2) * (self.self_model.meta_awareness - attr_get_optional(self, '_prev_meta', 0.5)))
                     self._prev_meta = float(self.self_model.meta_awareness)
                     rewards.append(r)
-                except Exception:
+
+                if __m3_guard_12938_16.error is not None:
                     break
             rm = float(np.mean(rewards)) if rewards else 0.0
             dm = float(np.mean(deltas)) if deltas else 1.0
@@ -12896,17 +13274,21 @@ class M3ConsciousnessCore:
             self._policy_rules = rules_bak
             # pass criteria: reward_mean improves and td_error reduces slightly
             return (rm_t > rm_c + 0.01) and (dm_t < dm_c * 0.98)
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.error(f"[_ab_test_rule] AB test failed: {e}")
             # fail closed
             self._policy_rules = rules_bak
-            try:
+            with guard_context(ctx='m3/m3_core.py:12973', catch_base=False) as __m3_guard_12971_12:
                 self._apply_structure_snapshot(snap)
-            except Exception:
-                pass
+
+            if __m3_guard_12971_12.error is not None:
+                snap_e = __m3_guard_12971_12.error
+                logging.error(f"[_ab_test_rule] Failed to apply structure snapshot on fail: {snap_e}")
             return False
 
     def _policy_signals(self) -> Dict[str, float]:
-        try:
+        with guard_context(ctx='m3/m3_core.py:12990', catch_base=False) as __m3_guard_12978_8:
             last = self.log_buffer[-1] if self.log_buffer else {}
             return {
                 'phi': float(last.get('phi', 0.0)),
@@ -12918,7 +13300,8 @@ class M3ConsciousnessCore:
                 'flow': float(last.get('flow', 0.0)),
                 'delta_hat': float(last.get('delta_hat', 0.0)),
             }
-        except Exception:
+
+        if __m3_guard_12978_8.error is not None:
             return {'phi': 0.0, 'meta': 0.5, 'energy': 0.5, 'activation': 0.5, 'unity': 0.5, 'entropy': 0.0, 'flow': 0.0, 'delta_hat': 0.0}
 
     def _safe_eval_expr(self, expr: str, sigs: Dict[str, float]) -> float:
@@ -12932,7 +13315,7 @@ class M3ConsciousnessCore:
             return 0.0
 
     def _synthesize_policy_rule(self) -> None:
-        if self.t - getattr(self, '_last_synthesis_at', 0) < 200:
+        if self.t - attr_get_optional(self, '_last_synthesis_at', 0) < 200:
             return
         hist = list(self.log_buffer)[-120:]
         if len(hist) < 60:
@@ -13011,25 +13394,38 @@ class M3ConsciousnessCore:
             if best_expr is not None and best_score > 0.2:
                 candidate = {'target': target, 'expr': best_expr, 'score': best_score, 'ttl': 500, 'promoted': False}
                 # Mini AB test before promotion
-                try:
+                with guard_context(ctx='m3/m3_core.py:13087', catch_base=False) as __m3_guard_13083_16:
                     if self._ab_test_rule(candidate, steps=40):
                         candidate['promoted'] = True
                         scored.append(candidate)
-                except Exception:
-                    pass
+
+                if __m3_guard_13083_16.error is not None:
+                    e = __m3_guard_13083_16.error
+                    import logging
+                    logging.error(f"[_synthesize_policy_rule] AB test for candidate failed: {e}")
         if scored:
             scored.sort(key=lambda r: r['score'], reverse=True)
             self._policy_rules = scored[:3]
             self._last_synthesis_at = int(self.t)
-            try:
+            with guard_context(ctx='m3/m3_core.py:13096', catch_base=False) as __m3_guard_13094_12:
                 print('SYNTHESIZED RULES:', '; '.join([f"{r['target']} <- {r['expr']} ({r['score']:.2f})" for r in self._policy_rules]))
-            except Exception:
-                pass
+
+            if __m3_guard_13094_12.error is not None:
+                e = __m3_guard_13094_12.error
+                import logging
+                logging.debug(f"[_synthesize_policy_rule] Printing synthesized rules failed: {e}")
 
     def _execute_action(self, action: Dict[str, Any]) -> Tuple[float, np.ndarray]:
         mod = np.array([float(np.mean(self.h[g])) for g in self.groups])
         gmean = float(np.mean(self.h))
         W = np.concatenate([mod, [gmean]])
+        U_arr = np.asarray(self.U)
+        if U_arr.ndim != 2:
+            raise ValueError(f"U matrix must be 2D, got shape={U_arr.shape}")
+        rows, cols = U_arr.shape
+        if int(cols) != int(W.size):
+            raise ValueError(f"U/W shape mismatch: U.shape={U_arr.shape}, len(W)={int(W.size)}")
+        self.U = U_arr
         lt = self.U @ W
         if action['exploration_factor'] > 0:
             noise = self.rng.normal(0, 0.3 * action['exploration_factor'], size=self.K)
@@ -13052,28 +13448,23 @@ class M3ConsciousnessCore:
         noise = self.rng.normal(0, 0.05, size=self.n)
         decay = 0.99 if action['strategy'] != 'ultra_conservative' else 0.995
         # structural effects from policy heads
-        try:
-            sg = float(action.get('sparsify_gain', 0.0))
-            if sg > 0:
-                self.U -= 0.001 * sg * np.sign(self.U)
-            pg = float(action.get('prune_gain', 0.0))
-            if pg > 0:
-                thr = 0.05 * pg
-                mask_small = (np.abs(self.U) < thr)
-                self.U[mask_small] *= (1.0 - 0.05 * pg)
-            rg = float(action.get('reconnect_gain', 0.0))
-            if rg > 0:
-                try:
-                    num = max(1, int(3 * rg))
-                    for _ in range(num):
-                        i = int(self.rng.integers(self.K)); j = int(self.rng.integers(self.K))
-                        self.U[i, j] += float(self.rng.normal(0, 0.1 * rg))
-                except Exception:
-                    pass
-            stg = float(action.get('stability_gain', 0.0))
-            decay = float(np.clip(decay * (1.0 - 0.02 * stg), 0.95, 0.995))
-        except Exception:
-            pass
+        sg = float(action.get('sparsify_gain', 0.0))
+        if sg > 0:
+            self.U -= 0.001 * sg * np.sign(self.U)
+        pg = float(action.get('prune_gain', 0.0))
+        if pg > 0:
+            thr = 0.05 * pg
+            mask_small = (np.abs(self.U) < thr)
+            self.U[mask_small] *= (1.0 - 0.05 * pg)
+        rg = float(action.get('reconnect_gain', 0.0))
+        if rg > 0 and rows > 0 and cols > 0:
+            num = max(1, int(3 * rg))
+            for _ in range(num):
+                i = int(self.rng.integers(rows))
+                j = int(self.rng.integers(cols))
+                self.U[i, j] += float(self.rng.normal(0, 0.1 * rg))
+        stg = float(action.get('stability_gain', 0.0))
+        decay = float(np.clip(decay * (1.0 - 0.02 * stg), 0.95, 0.995))
         self.h = decay * self.h + noise
         self.gate_mid *= action['gate_adjust']
         self.gate_mid = np.clip(self.gate_mid, 0.3, 0.99)
@@ -13090,12 +13481,15 @@ class M3ConsciousnessCore:
         self.global_workspace.submit_for_competition(ConsciousContent(timestamp=self.t, content_type='meta_awareness', content={'level': self.self_model.meta_awareness, 'knows_it_knows': self.self_model.knows_it_knows}, salience=self.self_model.meta_awareness, semantic_meaning=f'meta-awareness (level={self.self_model.meta_awareness:.2f})'))
 
         # Broadcast spatial focus/goal for workspace
-        try:
-            ax, ay = getattr(self, 'attn_xy', (0.5, 0.5))
-            az = getattr(self, 'attn_xyz', (ax, ay, 0.5))[2]
-            self.global_workspace.submit_for_competition(ConsciousContent(timestamp=self.t, content_type='spatial_focus', content={'attention': {'x': float(ax), 'y': float(ay), 'z': float(az)}, 'goal': self.spatial_goal, 'space_size': getattr(self, 'space_size', 256)}, salience=0.5, semantic_meaning='spatial attention/goal'))
-        except Exception:
-            pass
+        with guard_context(ctx='m3/m3_core.py:13170', catch_base=False) as __m3_guard_13166_8:
+            ax, ay = attr_get_optional(self, 'attn_xy', (0.5, 0.5))
+            az = attr_get_optional(self, 'attn_xyz', (ax, ay, 0.5))[2]
+            self.global_workspace.submit_for_competition(ConsciousContent(timestamp=self.t, content_type='spatial_focus', content={'attention': {'x': float(ax), 'y': float(ay), 'z': float(az)}, 'goal': self.spatial_goal, 'space_size': attr_get_optional(self, 'space_size', 256)}, salience=0.5, semantic_meaning='spatial attention/goal'))
+
+        if __m3_guard_13166_8.error is not None:
+            e = __m3_guard_13166_8.error
+            import logging
+            logging.debug(f"[_submit_to_workspace] Spatial focus submit failed: {e}")
 
     def _experience_qualia(self, delta_hat: float, action: Dict[str, Any]):
         stability = self.world_state['stability']
@@ -13157,21 +13551,28 @@ class M3ConsciousnessCore:
             'K': int(self.K),
             'n': int(self.n),
         }
-        try:
+        with guard_context(ctx='m3/m3_core.py:13236', catch_base=False) as __m3_guard_13234_8:
             snap['som_neuron_count'] = int(len(self.growing_som.neurons))
-        except Exception:
+
+        if __m3_guard_13234_8.error is not None:
+            e = __m3_guard_13234_8.error
+            import logging
+            logging.debug(f"[_get_structure_snapshot] Failed getting SOM neurons: {e}")
             snap['som_neuron_count'] = 0
         return snap
 
     def _apply_structure_snapshot(self, snap: Dict[str, Any]) -> None:
-        try:
+        with guard_context(ctx='m3/m3_core.py:13249', catch_base=False) as __m3_guard_13243_8:
             W = np.asarray(snap.get('weights'))
             if W.shape == self.U.shape:
                 self.U = W.copy()
             self.gate_mid = float(snap.get('gate_mid', self.gate_mid))
             self.kd_eff = float(snap.get('kd_eff', self.kd_eff))
-        except Exception:
-            pass
+
+        if __m3_guard_13243_8.error is not None:
+            e = __m3_guard_13243_8.error
+            import logging
+            logging.error(f"[_apply_structure_snapshot] Failed applying structure: {e}")
 
     def _evaluate_structure(self, snap: Dict[str, Any], steps: int = 60) -> Dict[str, float]:
         bak = self._get_structure_snapshot()
@@ -13182,19 +13583,26 @@ class M3ConsciousnessCore:
             for i in range(max(5, int(steps))):
                 self.energy_ctrl.internal_clock += 1
                 self.world_state = self._get_current_world_state()
-                try:
+                with guard_context(ctx='m3/m3_core.py:13264', catch_base=False) as __m3_guard_13262_16:
                     stabs.append(float(self.world_state.get('stability', 0.5)))
-                except Exception:
-                    pass
+
+                if __m3_guard_13262_16.error is not None:
+                    e = __m3_guard_13262_16.error
+                    import logging
+                    logging.debug(f"[_evaluate_structure] Failed getting stability: {e}")
                 plan = self._decide_action(None, max(0.2, float(self.energy_ctrl.activation_level)))
                 d, _ = self._execute_action(plan)
                 self._experience_qualia(d, plan)
                 deltas.append(d)
                 if self.iit_enabled and (i % 10 == 0):
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:13275', catch_base=False) as __m3_guard_13272_20:
                         sv = np.array([self.qualia.arousal, self.qualia.valence, self.qualia.entropy, self.qualia.engagement, self.qualia.frustration, self.self_model.meta_awareness, self.energy_ctrl.activation_level, self.unified_subject.unity_score])
                         phi = self.phi_calculator.compute_phi(state=sv, method='integrated')
-                    except Exception:
+
+                    if __m3_guard_13272_20.error is not None:
+                        e = __m3_guard_13272_20.error
+                        import logging
+                        logging.debug(f"[_evaluate_structure] Failed computing phi: {e}")
                         phi = 0.0
                     phis.append(phi)
                 r = float(-d + 0.5 * (self.self_model.meta_awareness - prev_meta))
@@ -13213,35 +13621,46 @@ class M3ConsciousnessCore:
     def _snapshot_feature_state(self) -> Dict[str, Any]:
         snap: Dict[str, Any] = {}
         try:
-            if getattr(self, 'feature_bank', None) is not None:
+            if attr_get_optional(self, 'feature_bank', None) is not None:
                 fb = self.feature_bank
                 # shallow copy specs list
                 snap['fb_max_dim'] = int(fb.max_dim)
                 snap['fb_embed_dim'] = int(fb.embed_dim)
-                try:
+                with guard_context(ctx='m3/m3_core.py:13303', catch_base=False) as __m3_guard_13301_16:
                     snap['fb_specs'] = [s for s in fb.specs]
-                except Exception:
+
+                if __m3_guard_13301_16.error is not None:
+                    e = __m3_guard_13301_16.error
+                    import logging
+                    logging.debug(f"[_snapshot_feature_state] Failed extracting fb_specs: {e}")
                     snap['fb_specs'] = []
             else:
                 snap['fb_max_dim'] = None
                 snap['fb_embed_dim'] = None
                 snap['fb_specs'] = []
             # policy snapshot
-            if getattr(self, 'policy', None) is not None:
+            if attr_get_optional(self, 'policy', None) is not None:
                 p = self.policy
-                try:
+                with guard_context(ctx='m3/m3_core.py:13316', catch_base=False) as __m3_guard_13314_16:
                     snap['policy_W1'] = p.W1.copy(); snap['policy_b1'] = p.b1.copy(); snap['policy_W2'] = p.W2.copy(); snap['policy_b2'] = p.b2.copy()
-                except Exception:
-                    pass
+
+                if __m3_guard_13314_16.error is not None:
+                    p_err = __m3_guard_13314_16.error
+                    import logging
+                    logging.debug(f"[_snapshot_feature_state] Failed snapshotting policy: {p_err}")
             # sdm snapshot
-            if getattr(self, 'sdm', None) is not None:
+            if attr_get_optional(self, 'sdm', None) is not None:
                 s = self.sdm
-                try:
+                with guard_context(ctx='m3/m3_core.py:13324', catch_base=False) as __m3_guard_13322_16:
                     snap['sdm_W1'] = s.W1.copy(); snap['sdm_b1'] = s.b1.copy(); snap['sdm_Wo'] = s.Wo.copy(); snap['sdm_bo'] = s.bo.copy()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+
+                if __m3_guard_13322_16.error is not None:
+                    s_err = __m3_guard_13322_16.error
+                    import logging
+                    logging.debug(f"[_snapshot_feature_state] Failed snapshotting sdm: {s_err}")
+        except Exception as e:
+            import logging
+            logging.error(f"[_snapshot_feature_state] Overall snapshot failed: {e}")
         return snap
 
     def _restore_feature_state(self, snap: Dict[str, Any]) -> None:
@@ -13253,26 +13672,49 @@ class M3ConsciousnessCore:
                     # re-register specs
                     self.feature_bank.specs = []
                     for s in snap.get('fb_specs', []):
-                        try:
+                        with guard_context(ctx='m3/m3_core.py:13343', catch_base=False) as __m3_guard_13341_24:
                             self.feature_bank.register_spec(s)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+
+                        if __m3_guard_13341_24.error is not None:
+                            s_err = __m3_guard_13341_24.error
+                            import logging
+                            logging.debug(f"[_restore_feature_state] Failed registering spec {s}: {s_err}")
+                    _validate_feature_bank_contract(self.feature_bank, "M3ConsciousnessCore._restore_feature_state")
+                except Exception as fb_err:
+                    import logging
+                    logging.error(f"[_restore_feature_state] Failed restoring FeatureBank: {fb_err}")
+                    raise
             # restore policy
-            if 'policy_W1' in snap and getattr(self, 'policy', None) is not None:
-                try:
+            if 'policy_W1' in snap and attr_get_optional(self, 'policy', None) is not None:
+                with guard_context(ctx='m3/m3_core.py:13353', catch_base=False) as __m3_guard_13351_16:
                     self.policy.W1 = snap['policy_W1'].copy(); self.policy.b1 = snap['policy_b1'].copy(); self.policy.W2 = snap['policy_W2'].copy(); self.policy.b2 = snap['policy_b2'].copy()
-                except Exception:
-                    pass
+
+                if __m3_guard_13351_16.error is not None:
+                    p_err = __m3_guard_13351_16.error
+                    import logging
+                    logging.error(f"[_restore_feature_state] Failed restoring policy: {p_err}")
             # restore sdm
-            if 'sdm_W1' in snap and getattr(self, 'sdm', None) is not None:
-                try:
+            if 'sdm_W1' in snap and attr_get_optional(self, 'sdm', None) is not None:
+                with guard_context(ctx='m3/m3_core.py:13360', catch_base=False) as __m3_guard_13358_16:
                     self.sdm.W1 = snap['sdm_W1'].copy(); self.sdm.b1 = snap['sdm_b1'].copy(); self.sdm.Wo = snap['sdm_Wo'].copy(); self.sdm.bo = snap['sdm_bo'].copy()
-                except Exception:
-                    pass
+
+                if __m3_guard_13358_16.error is not None:
+                    s_err = __m3_guard_13358_16.error
+                    import logging
+                    logging.error(f"[_restore_feature_state] Failed restoring sdm: {s_err}")
+        except Exception as e:
+            import logging
+            logging.error(f"[_restore_feature_state] Overall restore failed: {e}")
+            if 'sdm_W1' in snap and attr_get_optional(self, 'sdm', None) is not None:
+                with guard_context(ctx='m3/m3_core.py:13369', catch_base=False) as __m3_guard_13367_16:
+                    self.sdm.W1 = snap['sdm_W1'].copy(); self.sdm.b1 = snap['sdm_b1'].copy(); self.sdm.Wo = snap['sdm_Wo'].copy(); self.sdm.bo = snap['sdm_bo'].copy()
+
+                if __m3_guard_13367_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
+            raise
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Swallowed exception")
+            raise
 
     def _sandbox_evaluate_specs(self, specs: List[FeatureSpec], steps: int = 40) -> Dict[str, float]:
         """Apply specs in a sandbox, run a short evaluation, and rollback.
@@ -13288,38 +13730,40 @@ class M3ConsciousnessCore:
             # apply specs temporarily
             try:
                 # register specs on a fresh temp FeatureBank to avoid mutating live state
-                fb_old = getattr(self, 'feature_bank', None)
+                fb_old = attr_get_optional(self, 'feature_bank', None)
                 fb_temp = FeatureBank(max_dim=fb_old.max_dim if fb_old is not None else 128, embed_dim=fb_old.embed_dim if fb_old is not None else 32)
                 # clone existing specs
-                try:
-                    for s in (getattr(fb_old, 'specs', []) if fb_old is not None else []):
+                with guard_context(ctx='m3/m3_core.py:13394', catch_base=False) as __m3_guard_13391_16:
+                    for s in (attr_get_optional(fb_old, 'specs', []) if fb_old is not None else []):
                         fb_temp.register_spec(s)
-                except Exception:
-                    pass
+
+                if __m3_guard_13391_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 for s in specs:
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:13399', catch_base=False) as __m3_guard_13397_20:
                         fb_temp.register_spec(s)
-                    except Exception:
-                        pass
+
+                    if __m3_guard_13397_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
                 # estimate new dim and grow temp FB if needed
-                added = int(sum(getattr(s, 'produced_dim', 1) for s in specs))
+                added = int(sum(attr_get_optional(s, 'produced_dim', 1) for s in specs))
                 cap = int(min(self._growth_hard_cap, fb_temp.max_dim + added))
                 fb_temp.grow(cap, fb_temp.embed_dim)
                 # swap in temp FB
                 self.feature_bank, fb_backup = fb_temp, fb_old
             except Exception:
-                fb_backup = getattr(self, 'feature_bank', None)
+                fb_backup = attr_get_optional(self, 'feature_bank', None)
             # run evaluation with temp feature bank
             treat_metrics = self._evaluate_structure(self._get_structure_snapshot(), steps=steps)
             return_metrics = {'baseline_reward_mean': base_metrics.get('reward_mean', 0.0), 'treatment_reward_mean': treat_metrics.get('reward_mean', 0.0), 'treatment': treat_metrics}
             return return_metrics
         finally:
             # restore original feature bank and other snapshots
-            try:
-                # restore any other weights recorded in baseline_snap
+            with guard_context(ctx='m3/m3_core.py:13418', catch_base=False) as __m3_guard_13415_12:
                 self._restore_feature_state(baseline_snap)
-            except Exception:
-                pass
+
+            if __m3_guard_13415_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
 
     def run_meta_proposal_cycle(self, k: int = 1, steps: int = 40, commit_threshold: float = 0.0) -> Dict[str, Any]:
         """Run one meta-proposal cycle: propose specs, sandbox-evaluate, compute reward,
@@ -13330,23 +13774,26 @@ class M3ConsciousnessCore:
         res: Dict[str, Any] = {'accepted': False, 'reward': 0.0, 'sandbox': None, 'specs': []}
         try:
             # ensure controller exists
-            if getattr(self, 'meta_feature_controller', None) is None:
-                try:
+            if attr_get_optional(self, 'meta_feature_controller', None) is None:
+                with guard_context(ctx='m3/m3_core.py:13434', catch_base=False) as __m3_guard_13431_16:
                     in_dim = 128
                     self.meta_feature_controller = MetaFeatureController(in_dim=in_dim, hidden=128, rng=self.rngr.get('meta_feature'))
-                except Exception:
+
+                if __m3_guard_13431_16.error is not None:
                     self.meta_feature_controller = MetaFeatureController()
             ctrl: MetaFeatureController = self.meta_feature_controller
             # ensure controller controls main policy width
-            try:
+            with guard_context(ctx='m3/m3_core.py:13441', catch_base=False) as __m3_guard_13438_12:
                 ctrl.target_policy = self.policy
-                ctrl.H_max = int(getattr(self.policy, 'hidden', 128))
-            except Exception:
-                pass
+                ctrl.H_max = int(attr_get_optional(self.policy, 'hidden', 128))
+
+            if __m3_guard_13438_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             # get features for controller
-            try:
+            with guard_context(ctx='m3/m3_core.py:13446', catch_base=False) as __m3_guard_13444_12:
                 feats = self.extract_embedding(target_dim=ctrl.in_dim, normalize=True)
-            except Exception:
+
+            if __m3_guard_13444_12.error is not None:
                 feats = np.zeros((ctrl.in_dim,), dtype=np.float32)
             # propose
             specs = ctrl.decide(feats, k=k)
@@ -13362,143 +13809,68 @@ class M3ConsciousnessCore:
             phi = float(treat_metrics.get('phi_median', 0.0))
             td_err = float(treat_metrics.get('td_error', 0.0))
             stability = float(treat_metrics.get('stability', 0.0))
-            added_dim = int(sum(getattr(s, 'produced_dim', 1) for s in specs))
+            added_dim = int(sum(attr_get_optional(s, 'produced_dim', 1) for s in specs))
             reward = 1.0 * delta_reward + 0.5 * phi - 0.2 * td_err + 0.05 * (stability - 0.5) - 0.001 * float(added_dim)
             res['reward'] = float(reward)
             # call observe with action metadata
             try:
-                action_meta = {'features': feats, 'specs': [s.name for s in specs], 'mu': getattr(ctrl, 'last_mu', None), 'act_vec': getattr(ctrl, 'last_act_vec', None), 'sandbox': sandbox}
-                try:
+                action_meta = {'features': feats, 'specs': [s.name for s in specs], 'mu': attr_get_optional(ctrl, 'last_mu', None), 'act_vec': attr_get_optional(ctrl, 'last_act_vec', None), 'sandbox': sandbox}
+                with guard_context(ctx='m3/m3_core.py:13470', catch_base=False) as __m3_guard_13468_16:
                     ctrl.observe(float(reward), action_meta)
-                except Exception:
-                    pass
-            except Exception:
-                pass
+
+                if __m3_guard_13468_16.error is not None:
+                    eval_e = __m3_guard_13468_16.error
+                    import logging
+                    logging.debug(f"[run_meta_proposal_cycle] ctrl.observe failed: {eval_e}")
+            except Exception as e:
+                import logging
+                logging.debug(f"[run_meta_proposal_cycle] Action meta prep failed: {e}")
             # autosize (bandit) using treatment performance
-            try:
+            with guard_context(ctx='m3/m3_core.py:13479', catch_base=False) as __m3_guard_13477_12:
                 ctrl.autosize_step(perf=float(treat))
-            except Exception:
-                pass
+
+            if __m3_guard_13477_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             # decide commit
             accept = False
             try:
                 if float(treat) >= float(base) + float(commit_threshold):
                     accept = True
-            except Exception:
+            except Exception as e:
+                import logging
+                logging.debug(f"[run_meta_proposal_cycle] Evaluation conversion failed: {e}")
                 accept = False
             if accept:
                 # commit growth (force to bypass cooldown since we just sandboxed)
                 try:
                     grown = self.grow_feature_bank(new_max_dim=None, new_embed_dim=None, specs=specs, force=True)
                     res['accepted'] = bool(grown)
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:13497', catch_base=False) as __m3_guard_13495_20:
                         self.visualizer.add_major_event(f'MetaFeatureController committed {len(specs)} specs -> FB {self.feature_bank.max_dim}D')
-                    except Exception:
-                        pass
-                except Exception:
+
+                    if __m3_guard_13495_20.error is not None:
+                        ve = __m3_guard_13495_20.error
+                        import logging
+                        logging.debug(f"[run_meta_proposal_cycle] Visualizer event failed: {ve}")
+                except Exception as e:
+                    import logging
+                    logging.error(f"[run_meta_proposal_cycle] FeatureBank growth failed: {e}")
                     res['accepted'] = False
             # metrics logging hook
-            try:
-                if getattr(self, 'feature_bank', None) is not None:
+            with guard_context(ctx='m3/m3_core.py:13509', catch_base=False) as __m3_guard_13505_12:
+                if attr_get_optional(self, 'feature_bank', None) is not None:
                     rec = {'ts': int(self.t), 'event': 'meta_cycle', 'base': base, 'treat': treat, 'delta': float(treat - base), 'accepted': bool(res.get('accepted', False))}
-                    self.feature_bank._log_jsonl(getattr(self.feature_bank, '_metrics_path', None), rec)
-            except Exception:
-                pass
+                    self.feature_bank._log_jsonl(attr_get_optional(self.feature_bank, '_metrics_path', None), rec)
+
+            if __m3_guard_13505_12.error is not None:
+                e = __m3_guard_13505_12.error
+                import logging
+                logging.debug(f"[run_meta_proposal_cycle] FeatureBank logging failed: {e}")
             return res
-        except Exception:
+        except Exception as overall_e:
+            import logging
+            logging.error(f"[run_meta_proposal_cycle] Critical error in proposal cycle: {overall_e}")
             return res
-
-    # ---- Vision source public API ----
-    def set_vision_folder(self, path: str) -> int:
-        try:
-            exts = {'.png', '.jpg', '.jpeg', '.bmp'}
-            files = []
-            for name in os.listdir(path):
-                p = os.path.join(path, name)
-                if os.path.isfile(p) and os.path.splitext(p)[1].lower() in exts:
-                    files.append(p)
-            files.sort()
-            if files:
-                self._vision_frames = files
-                self._vision_idx = 0
-                self.vision_mode = 'folder'
-                return len(files)
-        except Exception:
-            pass
-        return 0
-
-    def set_vision_loop(self, enabled: bool) -> bool:
-        try:
-            self._vision_loop = bool(enabled)
-            return True
-        except Exception:
-            return False
-
-    def set_vision_shuffle(self, enabled: bool) -> bool:
-        try:
-            self._vision_shuffle = bool(enabled)
-            return True
-        except Exception:
-            return False
-
-    def set_vision_camera(self, index: int = 0) -> bool:
-        try:
-            import cv2
-            # Reduce OpenCV log noise if possible
-            try:
-                cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
-            except Exception:
-                pass
-            # Release any previous camera
-            try:
-                if getattr(self, '_vision_camera', None) is not None:
-                    self._vision_camera.release()
-            except Exception:
-                pass
-            indices = [int(index)] if index >= 0 else list(range(10))
-            backends = [getattr(cv2, 'CAP_DSHOW', None), getattr(cv2, 'CAP_MSMF', None), None]
-            for i in indices:
-                for be in backends:
-                    try:
-                        cap = cv2.VideoCapture(int(i), be) if be is not None else cv2.VideoCapture(int(i))
-                        if cap is not None and cap.isOpened():
-                            try:
-                                cap.set(getattr(cv2, 'CAP_PROP_FRAME_WIDTH', 3), 640)
-                                cap.set(getattr(cv2, 'CAP_PROP_FRAME_HEIGHT', 4), 480)
-                            except Exception:
-                                pass
-                            self._vision_camera = cap
-                            self.vision_mode = 'camera'
-                            return True
-                        else:
-                            try:
-                                if cap is not None:
-                                    cap.release()
-                            except Exception:
-                                pass
-                    except Exception:
-                        continue
-        except Exception:
-            pass
-        return False
-
-    def push_external_frame(self, frame: 'np.ndarray') -> None:
-        self._pushed_frame = frame
-        self.vision_mode = 'push'
-
-    def clear_vision_source(self) -> None:
-        try:
-            if self._vision_camera is not None:
-                try:
-                    self._vision_camera.release()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        self._vision_camera = None
-        self._vision_frames = []
-        self._pushed_frame = None
-        self.vision_mode = 'internal'
 
     def _reflect_and_learn(self, delta_hat: float, goal: Optional[Goal]):
         state = {'delta_hat': delta_hat, 'm': 0.0, 'stability': self.world_state['stability'], 'meta_confidence': self.self_model.meta_confidence}
@@ -13534,17 +13906,19 @@ class M3ConsciousnessCore:
                         # Consult GrowthTrigger before running meta-proposal
                         should_run = True
                         try:
-                            gt = getattr(self, 'growth_trigger', None)
+                            gt = attr_get_optional(self, 'growth_trigger', None)
                             if gt is not None:
-                                try:
-                                    feat_dim = getattr(gt, 'in_dim', 64)
+                                with guard_context(ctx='m3/m3_core.py:13663', catch_base=False) as __m3_guard_13660_32:
+                                    feat_dim = attr_get_optional(gt, 'in_dim', 64)
                                     feats = self.extract_embedding(target_dim=feat_dim, normalize=True)
-                                except Exception:
-                                    feats = np.zeros((getattr(gt, 'in_dim', 64),), dtype=np.float32)
-                                try:
+
+                                if __m3_guard_13660_32.error is not None:
+                                    feats = np.zeros((attr_get_optional(gt, 'in_dim', 64),), dtype=np.float32)
+                                with guard_context(ctx='m3/m3_core.py:13668', catch_base=False) as __m3_guard_13665_32:
                                     trig, meta = gt.decide(feats)
                                     should_run = bool(trig)
-                                except Exception:
+
+                                if __m3_guard_13665_32.error is not None:
                                     should_run = True
                         except Exception:
                             should_run = True
@@ -13552,27 +13926,29 @@ class M3ConsciousnessCore:
                             res = self.run_meta_proposal_cycle(k=1, steps=40, commit_threshold=0.0)
                             # let GrowthTrigger observe the outcome
                             try:
-                                gt = getattr(self, 'growth_trigger', None)
+                                gt = attr_get_optional(self, 'growth_trigger', None)
                                 if gt is not None and isinstance(res, dict):
                                     rew = float(res.get('reward', 0.0)) if res.get('reward') is not None else 0.0
                                     try:
                                         gt.observe(rew, meta={'accepted': bool(res.get('accepted', False)), 'specs': res.get('specs', [])})
                                     except Exception:
-                                        try:
+                                        with guard_context(ctx='m3/m3_core.py:13684', catch_base=False) as __m3_guard_13682_40:
                                             gt.observe(rew)
-                                        except Exception:
-                                            pass
+
+                                        if __m3_guard_13682_40.error is not None:
+                                            logging.getLogger(__name__).exception("Swallowed exception")
                             except Exception:
-                                pass
+                                logging.getLogger(__name__).exception("Swallowed exception")
                             if res.get('accepted'):
-                                try:
+                                with guard_context(ctx='m3/m3_core.py:13691', catch_base=False) as __m3_guard_13689_32:
                                     print(f' Auto-grown FeatureBank -> {self.feature_bank.max_dim}D')
-                                except Exception:
-                                    pass
+
+                                if __m3_guard_13689_32.error is not None:
+                                    logging.getLogger(__name__).exception("Swallowed exception")
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).exception("Swallowed exception")
             except Exception:
-                pass
+                logging.getLogger(__name__).exception("Swallowed exception")
             self.self_model.execute_revision(revision_level)
             policy_status = self.meta_meta.get_revision_policy_status()
             print(f"   Consecutive revisions: {policy_status['consecutive_revisions']}")
@@ -13582,11 +13958,11 @@ class M3ConsciousnessCore:
             # If we previously initiated a meta-driven growth, allow the controller
             # to observe a delayed reward signal after a short evaluation window.
             try:
-                pending = getattr(self, '_meta_grow_pending', None)
+                pending = attr_get_optional(self, '_meta_grow_pending', None)
                 if pending is not None:
                     # require at least a small number of steps to have passed
                     if int(self.t) - int(pending.get('t', 0)) >= 8:
-                        if hasattr(self, 'meta_controller') and self.meta_controller is not None:
+                        if attr_has(self, 'meta_controller') and self.meta_controller is not None:
                             try:
                                 quality_after = float(quality)
                                 quality_before = float(pending.get('quality_before', quality_after))
@@ -13594,30 +13970,33 @@ class M3ConsciousnessCore:
                                 # reward = improvement in quality minus small penalty for growth size
                                 reward = float(quality_after - quality_before) - 0.01 * (float(action) / 100.0)
                                 # Prepare features and ensure controller has them if decide wasn't called earlier
+                                with guard_context(ctx='m3/m3_core.py:13720', catch_base=False) as __m3_guard_13718_32:
+                                    feats = np.asarray(pending.get('features', np.zeros((attr_get_optional(self.meta_controller, 'in_dim', 6),), dtype=np.float32)), dtype=np.float32)
+
+                                if __m3_guard_13718_32.error is not None:
+                                    feats = np.zeros((attr_get_optional(self.meta_controller, 'in_dim', 6),), dtype=np.float32)
                                 try:
-                                    feats = np.asarray(pending.get('features', np.zeros((getattr(self.meta_controller, 'in_dim', 6),), dtype=np.float32)), dtype=np.float32)
-                                except Exception:
-                                    feats = np.zeros((getattr(self.meta_controller, 'in_dim', 6),), dtype=np.float32)
-                                try:
-                                    if getattr(self.meta_controller, 'last_features', None) is None:
-                                        try:
+                                    if attr_get_optional(self.meta_controller, 'last_features', None) is None:
+                                        with guard_context(ctx='m3/m3_core.py:13727', catch_base=False) as __m3_guard_13724_40:
                                             self.meta_controller.last_features = feats
                                             self.meta_controller.last_action = int(action)
-                                        except Exception:
-                                            pass
+
+                                        if __m3_guard_13724_40.error is not None:
+                                            logging.getLogger(__name__).exception("Swallowed exception")
                                 except Exception:
-                                    pass
+                                    logging.getLogger(__name__).exception("Swallowed exception")
                                 # snapshot before
-                                try:
-                                    if hasattr(self.meta_controller, 'snapshot'):
+                                with guard_context(ctx='m3/m3_core.py:13741', catch_base=False) as __m3_guard_13732_32:
+                                    if attr_has(self.meta_controller, 'snapshot'):
                                         pre = self.meta_controller.snapshot()
-                                    elif hasattr(self.meta_controller, 'log_snapshot'):
+                                    elif attr_has(self.meta_controller, 'log_snapshot'):
                                         pre = self.meta_controller.log_snapshot()
                                     else:
                                         pre = {}
                                     W_before = pre.get('W_norm', None)
                                     sigma_before = pre.get('sigma', None)
-                                except Exception:
+
+                                if __m3_guard_13732_32.error is not None:
                                     W_before = sigma_before = None
                                 # perform observe (REINFORCE update)
                                 try:
@@ -13629,38 +14008,42 @@ class M3ConsciousnessCore:
                                         try:
                                             self.meta_controller.observe(feats, int(action), float(reward))
                                         except Exception:
-                                            try:
+                                            with guard_context(ctx='m3/m3_core.py:13756', catch_base=False) as __m3_guard_13753_44:
                                                 import traceback as _tb
                                                 _tb.print_exc()
-                                            except Exception:
-                                                pass
+
+                                            if __m3_guard_13753_44.error is not None:
+                                                logging.getLogger(__name__).exception("Swallowed exception")
                                     except Exception:
-                                        try:
+                                        with guard_context(ctx='m3/m3_core.py:13762', catch_base=False) as __m3_guard_13759_40:
                                             import traceback as _tb
                                             _tb.print_exc()
-                                        except Exception:
-                                            pass
+
+                                        if __m3_guard_13759_40.error is not None:
+                                            logging.getLogger(__name__).exception("Swallowed exception")
                                 except Exception:
-                                    try:
+                                    with guard_context(ctx='m3/m3_core.py:13768', catch_base=False) as __m3_guard_13765_36:
                                         import traceback as _tb
                                         _tb.print_exc()
-                                    except Exception:
-                                        pass
+
+                                    if __m3_guard_13765_36.error is not None:
+                                        logging.getLogger(__name__).exception("Swallowed exception")
                                 # snapshot after
-                                try:
-                                    if hasattr(self.meta_controller, 'snapshot'):
+                                with guard_context(ctx='m3/m3_core.py:13780', catch_base=False) as __m3_guard_13771_32:
+                                    if attr_has(self.meta_controller, 'snapshot'):
                                         post = self.meta_controller.snapshot()
-                                    elif hasattr(self.meta_controller, 'log_snapshot'):
+                                    elif attr_has(self.meta_controller, 'log_snapshot'):
                                         post = self.meta_controller.log_snapshot()
                                     else:
                                         post = {}
                                     W_after = post.get('W_norm', None)
                                     sigma_after = post.get('sigma', None)
-                                except Exception:
+
+                                if __m3_guard_13771_32.error is not None:
                                     W_after = sigma_after = None
                                 # append a trial CSV row for post-hoc analysis
-                                try:
-                                    outdir = getattr(self, 'outdir', os.getcwd())
+                                with guard_context(ctx='m3/m3_core.py:13792', catch_base=False) as __m3_guard_13783_32:
+                                    outdir = attr_get_optional(self, 'outdir', os.getcwd())
                                     os.makedirs(outdir, exist_ok=True)
                                     logp = os.path.join(outdir, 'meta_trials.csv')
                                     header = not os.path.exists(logp)
@@ -13668,28 +14051,31 @@ class M3ConsciousnessCore:
                                         if header:
                                             f.write('t,action,quality_before,quality_after,reward,W_before,W_after,sigma_before,sigma_after\n')
                                         f.write(f"{int(self.t)},{int(action)},{quality_before:.6f},{quality_after:.6f},{reward:.6f},{W_before},{W_after},{sigma_before},{sigma_after}\n")
-                                except Exception:
-                                    pass
+
+                                if __m3_guard_13783_32.error is not None:
+                                    logging.getLogger(__name__).exception("Swallowed exception")
                             except Exception:
-                                pass
-                        try:
+                                logging.getLogger(__name__).exception("Swallowed exception")
+                        with guard_context(ctx='m3/m3_core.py:13798', catch_base=False) as __m3_guard_13796_24:
                             self._meta_grow_pending = None
-                        except Exception:
+
+                        if __m3_guard_13796_24.error is not None:
                             self._meta_grow_pending = None
             except Exception:
-                try:
+                with guard_context(ctx='m3/m3_core.py:13804', catch_base=False) as __m3_guard_13801_16:
                     import traceback as _tb
                     _tb.print_exc()
-                except Exception:
-                    pass
+
+                if __m3_guard_13801_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
         elif len(self.meta_meta.quality_before_revision) > len(self.meta_meta.quality_after_revision):
             self.meta_meta.record_revision_outcome(quality)
-        if hasattr(self.self_model, 'belief_about_beliefs'):
-            if hasattr(self.self_model, 'belief_stability'):
+        if attr_has(self.self_model, 'belief_about_beliefs'):
+            if attr_has(self.self_model, 'belief_stability'):
                 self.self_model.belief_about_beliefs['confidence_in_stability_belief'] = float(self.self_model.belief_stability)
-            if hasattr(self.self_model, 'belief_adaptation'):
+            if attr_has(self.self_model, 'belief_adaptation'):
                 self.self_model.belief_about_beliefs['confidence_in_adaptation_belief'] = float(self.self_model.belief_adaptation)
-            if hasattr(self.self_model, 'belief_prediction'):
+            if attr_has(self.self_model, 'belief_prediction'):
                 self.self_model.belief_about_beliefs['confidence_in_prediction_belief'] = float(self.self_model.belief_prediction)
 
     def _make_bar(self, value: float, width: int=20) -> str:
@@ -13702,22 +14088,29 @@ class M3ConsciousnessCore:
         return False
 
     def _log_runtime_event(self, kind: str, **payload: Any) -> None:
-        try:
+        with guard_context(ctx='m3/m3_core.py:13831', catch_base=False) as __m3_guard_13826_8:
             path = _resolve_llm_adapter_log_path("llm_adapter.log")
-            rec = {"kind": str(kind), "t": int(getattr(self, "t", 0))}
+            rec = {"kind": str(kind), "t": int(attr_get_optional(self, "t", 0))}
             rec.update(payload)
             _write_jsonl_safe(path, rec)
-        except Exception:
-            pass
+
+        if __m3_guard_13826_8.error is not None:
+            e = __m3_guard_13826_8.error
+            import logging
+            logging.debug(f"[_log_runtime_event] Error logging runtime event: {e}")
 
     def _phi_threshold_policy(self) -> Dict[str, float]:
         hist = []
-        try:
-            hist = list(getattr(self.phi_calculator, "phi_history", []) or [])
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:13839', catch_base=False) as __m3_guard_13837_8:
+            hist = list(attr_get_optional(self.phi_calculator, "phi_history", []) or [])
+
+        if __m3_guard_13837_8.error is not None:
+            e = __m3_guard_13837_8.error
+            import logging
+            logging.debug(f"[_phi_threshold_policy] Error getting phi history: {e}")
             hist = []
         pol = _compute_phi_policy_from_history(hist, cfg=self._adaptive_threshold_cfg)
-        t_now = int(getattr(self, "t", 0))
+        t_now = int(attr_get_optional(self, "t", 0))
         if (
             self._phi_policy_last is None
             or any(abs(float(pol.get(k, 0.0)) - float(self._phi_policy_last.get(k, 0.0))) > 1e-6 for k in ("floor", "low", "mid", "high", "very_high", "announce_high"))
@@ -13743,7 +14136,7 @@ class M3ConsciousnessCore:
             src_t = src_sd.get(k)
             if src_t is None:
                 continue
-            try:
+            with guard_context(ctx='m3/m3_core.py:13880', catch_base=False) as __m3_guard_13870_12:
                 if tuple(src_t.shape) == tuple(dst_t.shape):
                     out[k] = src_t.clone().to(device=dst_t.device, dtype=dst_t.dtype)
                     continue
@@ -13753,22 +14146,29 @@ class M3ConsciousnessCore:
                 slices = tuple(slice(0, min(int(src_t.shape[i]), int(dst_t.shape[i]))) for i in range(src_t.ndim))
                 merged[slices] = src_t[slices].to(device=dst_t.device, dtype=dst_t.dtype)
                 out[k] = merged
-            except Exception:
+
+            if __m3_guard_13870_12.error is not None:
+                e = __m3_guard_13870_12.error
+                import logging
+                logging.debug(f"[_copy_state_overlap] Error copying state overlap for {k}: {e}")
                 continue
         return out
 
     def _recreate_policy_with_transfer(self, in_dim: int, out_dim: int = 12) -> None:
-        old_policy = getattr(self, "policy", None)
+        old_policy = attr_get_optional(self, "policy", None)
         hidden = max(128, int(in_dim))
         new_policy = PolicyMLP(in_dim=int(in_dim), out_dim=int(out_dim), hidden=hidden, rng=self.rngr.get('policy'))
-        try:
-            if old_policy is not None and hasattr(old_policy, "state_dict") and hasattr(new_policy, "load_state_dict"):
+        with guard_context(ctx='m3/m3_core.py:13896', catch_base=False) as __m3_guard_13890_8:
+            if old_policy is not None and attr_has(old_policy, "state_dict") and attr_has(new_policy, "load_state_dict"):
                 src_sd = old_policy.state_dict()
                 dst_sd = new_policy.state_dict()
                 merged = self._copy_state_overlap(src_sd, dst_sd)
                 new_policy.load_state_dict(merged, strict=False)
-        except Exception:
-            pass
+
+        if __m3_guard_13890_8.error is not None:
+            e = __m3_guard_13890_8.error
+            import logging
+            logging.debug(f"[_recreate_policy_with_transfer] Error transferring policy state: {e}")
         self.policy = new_policy
 
     def _project_obs_to_dim(self, obs: np.ndarray, target_dim: int) -> np.ndarray:
@@ -13797,17 +14197,19 @@ class M3ConsciousnessCore:
                 self._log_runtime_event("obs_adapter", in_dim=int(arr.size), out_dim=int(tgt), mode="project")
                 self._obs_adapter_last_sig = sig
         x = arr
-        try:
+        with guard_context(ctx='m3/m3_core.py:13932', catch_base=False) as __m3_guard_13927_8:
             eps = float(max(1e-9, self._observation_adapter_cfg.get("projection_eps", 1e-6)))
             mu = float(np.mean(x)) if x.size > 0 else 0.0
             sd = float(np.std(x)) if x.size > 0 else 0.0
             x = (x - mu) / (sd + eps)
-        except Exception:
-            pass
-        try:
+
+        if __m3_guard_13927_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
+        with guard_context(ctx='m3/m3_core.py:13937', catch_base=False) as __m3_guard_13934_8:
             out = np.tanh(x @ self._obs_adapter_W).astype(np.float32)
             return out
-        except Exception:
+
+        if __m3_guard_13934_8.error is not None:
             out = np.zeros((tgt,), dtype=np.float32)
             take = min(arr.size, tgt)
             if take > 0:
@@ -13818,7 +14220,7 @@ class M3ConsciousnessCore:
         raw = self._policy_obs()
         raw = np.asarray(raw, dtype=np.float32).ravel()
         target_cfg = int(max(0, int(self._observation_adapter_cfg.get("target_policy_dim", 0))))
-        policy_dim = int(getattr(getattr(self, "policy", None), "in_dim", 0) or 0)
+        policy_dim = int(attr_get_optional(attr_get_optional(self, "policy", None), "in_dim", 0) or 0)
         if policy_dim > 0:
             target = policy_dim
         elif target_cfg > 0:
@@ -13828,152 +14230,27 @@ class M3ConsciousnessCore:
         return self._project_obs_to_dim(raw, target_dim=target)
 
     def _maybe_adaptive_feature_bank_growth(self) -> Optional[Dict[str, Any]]:
-        if getattr(self, "feature_bank", None) is None:
+        if attr_get_optional(self, "feature_bank", None) is None:
             return None
-        if not hasattr(self.feature_bank, "adaptive_grow"):
+        if not attr_has(self.feature_bank, "adaptive_grow"):
             return None
-        try:
+        with guard_context(ctx='m3/m3_core.py:13971', catch_base=False) as __m3_guard_13962_8:
             proposal = self.feature_bank.adaptive_grow(float(self.t), self, apply=False)
             if not proposal:
                 return None
-            new_dim = int(proposal.get("new_max_dim", getattr(self.feature_bank, "max_dim", 0)))
-            new_embed = int(proposal.get("new_embed_dim", getattr(self.feature_bank, "embed_dim", 0)))
+            new_dim = int(proposal.get("new_max_dim", attr_get_optional(self.feature_bank, "max_dim", 0)))
+            new_embed = int(proposal.get("new_embed_dim", attr_get_optional(self.feature_bank, "embed_dim", 0)))
             applied = self.grow_feature_bank(new_max_dim=new_dim, new_embed_dim=new_embed, force=True)
             proposal["applied"] = bool(applied)
             return proposal
-        except Exception:
+
+        if __m3_guard_13962_8.error is not None:
             return None
 
-    def _update_visualization(self):
-        phi = 0.0
-        if len(self.log_buffer) > 0:
-            phi = self.log_buffer[-1].get('phi', 0.0)
-        mem_stats = self.episodic_memory.get_statistics()
-        grounded = self.conceptual_space.ground_experience(self.qualia)
-        current_experience = grounded['nearest_concept']
-        som_stats = self.growing_som.get_statistics()
-        meta_awareness = self.self_model.meta_awareness if hasattr(self.self_model, 'meta_awareness') else 0.0
-        knows_it_knows = self.self_model.knows_it_knows if hasattr(self.self_model, 'knows_it_knows') else False
-        phi_policy = self._phi_threshold_policy()
-        system_state = {'phi': phi, 'meta_awareness': meta_awareness, 'strange_loop': knows_it_knows, 'energy': self.energy_ctrl.cognitive_energy, 'qualia': {'arousal': self.qualia.arousal, 'valence': self.qualia.valence, 'entropy': self.qualia.entropy, 'engagement': self.qualia.engagement, 'frustration': self.qualia.frustration}, 'unity': self.unified_subject.unity_score, 'memories': mem_stats['total_memories'], 'memory_consolidation': mem_stats['avg_consolidation'], 'current_experience': current_experience, 'neuron_count': som_stats.get('neuron_count', 4), 'connection_count': som_stats.get('connection_count', 4), 'growth_events': som_stats.get('growth_events', 0), 'u_matrix': self.U, 'timestamp': self.t, 'vision_mode': getattr(self, 'vision_mode', 'internal')}
-        system_state['phi_policy'] = dict(phi_policy)
-        system_state['pred_err_map'] = self._scope_build_pred_err_map()
-        # Self-vision Phase 2: foveated retina + disparity/flow-based depth
-        try:
-            retina = self._vision_build_retina(size=(64, 64), foveate=True)
-            prev_frame = getattr(self, '_vision_prev', None)
-            # Compute flow/depth before updating prev
-            if prev_frame is None:
-                u = v = None
-                depth_map = None
-            else:
-                u, v = self._vision_optical_flow(prev_frame, retina)
-                depth_map = self._vision_depth_from_flow(u, v)
-            vision_err = self._vision_compute_error(retina)
-            try:
-                vb = float(getattr(self, '_vision_mix_beta', 0.5))
-            except Exception:
-                vb = 0.5
-            system_state['pred_err_map'] = self._mix_err_maps(system_state['pred_err_map'], vision_err, beta=vb)
-            # Provide the retina to visualizer for realistic display
-            try:
-                system_state['retina'] = retina
-            except Exception:
-                pass
-        except Exception:
-            depth_map = None
-        system_state['td_error'] = float(self._scope_compute_td_error())
-        system_state['gw_ignition'] = float(self._scope_get_gw_ignition())
-        # pass scope one-bit preference to visualizer
-        try:
-            system_state['scope_one_bit'] = bool(self.scope_one_bit)
-        except Exception:
-            pass
-        # expose arousal at top-level for visualizer/Scope drivers
-        try:
-            system_state['arousal'] = float(self.qualia.arousal)
-        except Exception:
-            pass
-        self.visualizer.update(system_state)
-        # Compose spatial map image with overlays (attention crosshair + optional goal)
-        try:
-            import numpy as _np
-            if 'retina' not in locals():
-                retina = self._vision_build_retina(size=(64, 64))
-            if 'vision_err' not in locals():
-                vision_err = self._vision_compute_error(retina)
-            # Use mixed error map as spatial base; step attention (with depth cue) and render overlay
-            # Use flow-based depth if available, else gradient-based
-            if depth_map is None:
-                _, _, _, depth_cue = self._vision_features(retina)
-                dmap = depth_cue
-            else:
-                dmap = depth_map
-            spatial_base = system_state.get('pred_err_map', vision_err)
-            self._space_step_attention(spatial_base, depth_map=dmap)
-            space_img = self._space_compose_image(spatial_base, size=self.space_size, depth_map=dmap)
-            if getattr(self, 'show_spatial_overlay', False):
-                self.visualizer.scope_image = space_img
-        except Exception:
-            pass
-        # Light vision qualia coupling (small, stable nudge) + summary for policy
-        try:
-            import numpy as _np
-            contrast, entropy, edge_density, depth_cue_local = self._vision_features(retina)
-            self.qualia.engagement = float(_np.clip(0.98 * self.qualia.engagement + 0.02 * (0.5 + 0.5 * contrast), 0.0, 1.0))
-            self.qualia.entropy = float(_np.clip(0.98 * self.qualia.entropy + 0.02 * entropy, 0.0, 1.0))
-            # Store compact vision summary for action policy
-            try:
-                self._vision_summary = {
-                    'r_mean': float(_np.mean(retina)),
-                    'g_mean': float(_np.mean(vision_err)),
-                    'b_mean': float(_np.mean(depth_cue_local)),
-                    'contrast': float(contrast),
-                    'entropy': float(entropy),
-                    'edge_density': float(edge_density),
-                }
-            except Exception:
-                pass
-        except Exception:
-            pass
-        if self.self_model.knows_it_knows and self.t > 0:
-            if not hasattr(self, '_loop_announced'):
-                self.visualizer.add_major_event('STRANGE LOOP EMERGED!')
-                self._loop_announced = True
-        ann_thr = float(phi_policy.get("announce_high", phi_policy.get("high", 0.5)))
-        ann_hys = float(max(0.0, self._adaptive_threshold_cfg.get("announce_hysteresis", 0.02)))
-        ann_cd = int(max(0, self._adaptive_threshold_cfg.get("announce_cooldown", 200)))
-        if phi >= ann_thr and self.t > 0:
-            if (
-                (int(self.t) - int(self._last_phi_announce_t)) >= ann_cd
-                and float(phi - self._last_phi_announce_value) >= ann_hys
-            ):
-                self.visualizer.add_major_event(f'High phi: {phi:.3f}')
-                self._last_phi_announce_t = int(self.t)
-                self._last_phi_announce_value = float(phi)
-        if mem_stats['total_memories'] == 1 and (not hasattr(self, '_first_memory')):
-            self.visualizer.add_major_event('First episodic memory!')
-            self._first_memory = True
-        mem_count = mem_stats['total_memories']
-        if mem_count >= 100 and (not hasattr(self, '_mem_100')):
-            self.visualizer.add_major_event('100 memories stored!')
-            self._mem_100 = True
-        if mem_count >= 500 and (not hasattr(self, '_mem_500')):
-            self.visualizer.add_major_event('500 memories!')
-            self._mem_500 = True
-        conn = self.visualizer.total_connections
-        if conn > 1000 and (not hasattr(self, '_conn_1k')):
-            self.visualizer.add_major_event('1,000 connections!')
-            self._conn_1k = True
-        if conn > 5000 and (not hasattr(self, '_conn_5k')):
-            self.visualizer.add_major_event('5,000 connections!!')
-            self._conn_5k = True
-
-    
     # --- SCOPE: real-signal adapters (no proxies) ---
     def _scope_build_pred_err_map(self):
         import numpy as _np
-        neurons = getattr(self.growing_som, 'neurons', [])
+        neurons = attr_get_optional(self.growing_som, 'neurons', [])
         if not neurons:
             raise RuntimeError("No SOM neurons available for pred_err_map")
         xs = [int(n['position'][0]) for n in neurons]
@@ -14014,7 +14291,7 @@ class M3ConsciousnessCore:
 
     def _scope_compute_td_error(self):
         import numpy as _np
-        hist = list(getattr(self, 'reward_history', []))
+        hist = list(attr_get_optional(self, 'reward_history', []))
         if len(hist) < 2:
             return 0.0
         r_t = float(hist[-1])
@@ -14022,258 +14299,12 @@ class M3ConsciousnessCore:
         return r_t - base
 
     def _scope_get_gw_ignition(self):
-        gw = getattr(self, 'global_workspace', None)
+        gw = attr_get_optional(self, 'global_workspace', None)
         if gw is None:
             return 0.0
-        focus = getattr(gw, 'attention_focus', None)
-        contents = getattr(gw, 'current_contents', [])
+        focus = attr_get_optional(gw, 'attention_focus', None)
+        contents = attr_get_optional(gw, 'current_contents', [])
         return 1.0 if (focus is not None and contents) else 0.0
-
-    # ------------------------ Self-Vision: Phase 1 (retina + error mix) ------------------------
-    def _vision_resize_nn(self, a, out_h: int, out_w: int):
-        import numpy as _np
-        a = _np.asarray(a, dtype=_np.float32)
-        h, w = a.shape[:2]
-        if h <= 0 or w <= 0:
-            return _np.zeros((out_h, out_w), dtype=_np.float32)
-        row_idx = (_np.linspace(0, max(0, h - 1), out_h)).astype(_np.int32)
-        col_idx = (_np.linspace(0, max(0, w - 1), out_w)).astype(_np.int32)
-        return a[row_idx][:, col_idx]
-
-    def _vision_build_retina(self, size=(64, 64), foveate: bool=True):
-        import numpy as _np
-        # Optional external vision sources: folder/camera/push
-        try:
-            mode = getattr(self, 'vision_mode', 'internal')
-            if mode == 'folder' and getattr(self, '_vision_frames', None):
-                n = len(self._vision_frames)
-                if n > 0:
-                    idx = None
-                    if getattr(self, '_vision_shuffle', False):
-                        try:
-                            idx = int(self.rng.integers(n))
-                        except Exception:
-                            idx = int(_np.random.randint(n))
-                    else:
-                        if self._vision_idx < n:
-                            idx = self._vision_idx
-                            self._vision_idx += 1
-                        else:
-                            if getattr(self, '_vision_loop', True):
-                                self._vision_idx = 1
-                                idx = 0
-                            else:
-                                return None
-                    p = self._vision_frames[idx]
-                    try:
-                        from PIL import Image as _PIL_Image
-                        im = _PIL_Image.open(p).convert('L')
-                        arr = _np.asarray(im, dtype=_np.float32) / 255.0
-                        return self._vision_resize_nn(arr, size[0], size[1])
-                    except Exception:
-                        pass
-            elif mode == 'camera' and getattr(self, '_vision_camera', None) is not None:
-                try:
-                    import cv2 as _cv2
-                    ok, frame = self._vision_camera.read()
-                    if ok and frame is not None:
-                        gray = _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY)
-                        arr = gray.astype(_np.float32) / 255.0
-                        return self._vision_resize_nn(arr, size[0], size[1])
-                except Exception:
-                    pass
-            elif mode == 'push' and getattr(self, '_pushed_frame', None) is not None:
-                arr = _np.asarray(self._pushed_frame)
-                if arr.ndim == 3 and arr.shape[2] >= 3:
-                    arr = _np.dot(arr[..., :3].astype(_np.float32), _np.array([0.2989, 0.5870, 0.1140], dtype=_np.float32))
-                arr = arr.astype(_np.float32)
-                if arr.dtype != _np.float32:
-                    arr = arr.astype(_np.float32)
-                if arr.max() > 1.0:
-                    arr = arr / 255.0
-                arr = _np.clip(arr, 0.0, 1.0)
-                return self._vision_resize_nn(arr, size[0], size[1])
-        except Exception:
-            pass
-        # Prefer richer neural_map if available; fallback to U
-        src = None
-        try:
-            nm = getattr(self.visualizer, 'neural_map', None)
-            if nm is not None:
-                src = _np.asarray(nm, dtype=_np.float32)
-        except Exception:
-            src = None
-        if src is None:
-            u = _np.asarray(getattr(self, 'U', _np.zeros((8, 8), dtype=_np.float32)), dtype=_np.float32)
-            if u.ndim == 1:
-                u = u[None, :]
-            if u.ndim != 2:
-                u = _np.zeros((8, 8), dtype=_np.float32)
-            src = u
-        src = _np.nan_to_num(src, nan=0.0, posinf=0.0, neginf=0.0)
-        smin, smax = float(_np.min(src)), float(_np.max(src))
-        if smax > smin:
-            base = (src - smin) / (smax - smin)
-        else:
-            base = _np.zeros_like(src)
-        # Low-res base
-        lo = self._vision_resize_nn(base, size[0], size[1])
-        if not foveate:
-            return lo
-        # Foveate around goal or attention
-        cx, cy = (self.attn_xy if hasattr(self, 'attn_xy') else (0.5, 0.5))
-        if getattr(self, 'spatial_goal', None) and 'xy' in self.spatial_goal:
-            cx, cy = self.spatial_goal['xy']
-        rad = float(self.spatial_goal.get('radius', 0.15) if getattr(self, 'spatial_goal', None) else 0.15)
-        # Build higher-res and paste ROI
-        hi = self._vision_resize_nn(base, size[0]*2, size[1]*2)
-        H, W = size
-        cxp, cyp = int(cx * (W - 1)), int(cy * (H - 1))
-        r_pix = max(4, int(rad * min(H, W)))
-        x0, x1 = max(0, cxp - r_pix), min(W - 1, cxp + r_pix)
-        y0, y1 = max(0, cyp - r_pix), min(H - 1, cyp + r_pix)
-        # Map ROI to hi coordinates
-        hx0, hx1 = x0*2, x1*2 + 1
-        hy0, hy1 = y0*2, y1*2 + 1
-        roi_hi = hi[hy0:hy1+1, hx0:hx1+1]
-        roi_lo = self._vision_resize_nn(roi_hi, (y1 - y0 + 1), (x1 - x0 + 1))
-        out = lo.copy()
-        out[y0:y1+1, x0:x1+1] = roi_lo
-        return out
-
-    def _vision_optical_flow(self, prev, curr, lam: float=1e-3):
-        import numpy as _np
-        p = _np.asarray(prev, dtype=_np.float32)
-        c = _np.asarray(curr, dtype=_np.float32)
-        # Gradients from prev
-        gy, gx = _np.gradient(p)
-        It = c - p
-        denom = gx*gx + gy*gy + lam
-        u = -It * gx / denom
-        v = -It * gy / denom
-        return u, v
-
-    def _vision_depth_from_flow(self, u, v):
-        import numpy as _np
-        mag = _np.sqrt(_np.asarray(u, dtype=_np.float32)**2 + _np.asarray(v, dtype=_np.float32)**2)
-        # depth ~ inverse flow magnitude
-        d = 1.0 / (mag + 1e-3)
-        d = d / (d.max() + 1e-8)
-        return d
-
-    def _vision_compute_error(self, frame):
-        import numpy as _np
-        f = _np.asarray(frame, dtype=_np.float32)
-        prev = getattr(self, '_vision_prev', None)
-        if prev is None:
-            err = _np.zeros_like(f)
-        else:
-            err = _np.abs(f - _np.asarray(prev, dtype=_np.float32))
-        self._vision_prev = f.copy()
-        e_min, e_max = float(err.min(initial=0.0)), float(err.max(initial=1.0))
-        if e_max > e_min:
-            err = (err - e_min) / (e_max - e_min)
-        else:
-            err = _np.zeros_like(err)
-        return err
-
-    def _vision_features(self, frame):
-        import numpy as _np
-        f = _np.asarray(frame, dtype=_np.float32)
-        contrast = float(f.std())
-        hist = _np.histogram(_np.clip(f, 0.0, 1.0), bins=32, range=(0.0, 1.0))[0].astype(_np.float32)
-        p = hist / (hist.sum() + 1e-8)
-        entropy = float((-_np.sum(p * _np.log2(p + 1e-12))) / _np.log2(32.0))
-        gy, gx = _np.gradient(f)
-        grad = _np.hypot(gx, gy)
-        thr = float(_np.percentile(grad, 90.0)) if grad.size else 0.0
-        edge_density = float((grad > thr).mean()) if grad.size else 0.0
-        g_min, g_max = float(grad.min(initial=0.0)), float(grad.max(initial=1.0))
-        depth_cue = (grad - g_min) / (g_max - g_min + 1e-8) if g_max > g_min else _np.zeros_like(grad)
-        return contrast, entropy, edge_density, depth_cue
-
-    def describe_current_vision(self) -> Dict[str, Any]:
-        """Return a concise natural-language summary and metrics of current vision input.
-
-        Uses the same retina build path as policy to avoid any fake signals.
-        """
-        import numpy as _np
-        try:
-            retina = self._vision_build_retina(size=(96, 96), foveate=False)
-        except Exception:
-            return {'summary': '', 'metrics': {}}
-        f = _np.asarray(retina, dtype=_np.float32)
-        f = _np.clip(f, 0.0, 1.0)
-        mean = float(f.mean())
-        std = float(f.std())
-        hist = _np.histogram(f, bins=32, range=(0.0, 1.0))[0].astype(_np.float32)
-        p = hist / (hist.sum() + 1e-8)
-        ent = float((-_np.sum(p * _np.log2(p + 1e-12))) / _np.log2(32.0))
-        gy, gx = _np.gradient(f)
-        grad = _np.hypot(gx, gy)
-        thr = float(_np.percentile(grad, 90.0)) if grad.size else 0.0
-        edge_density = float((grad > thr).mean()) if grad.size else 0.0
-        ang = _np.degrees(_np.arctan2(gy, gx))
-        ang = _np.abs(ang)
-        def frac(mask):
-            m = _np.asarray(mask)
-            return float(m.mean()) if m.size else 0.0
-        vertical_edge = frac((ang <= 22.5) | (ang >= 157.5))
-        horizontal_edge = frac((ang >= 67.5) & (ang <= 112.5))
-        diag_edge = frac(~(((ang <= 22.5) | (ang >= 157.5)) | ((ang >= 67.5) & (ang <= 112.5))))
-        # coarse region count via block thresholds
-        blocks = []
-        ph = pw = 12
-        H, W = f.shape
-        for y in range(0, H, ph):
-            for x in range(0, W, pw):
-                blk = f[y:y+ph, x:x+pw]
-                if blk.size:
-                    blocks.append((float(blk.mean()), float(blk.std())))
-        bright_patches = sum(1 for m, s in blocks if (m > (mean + 0.15) and s > 0.08))
-        parts = []
-        parts.append('dark' if mean < 0.25 else ('bright' if mean > 0.75 else 'balanced'))
-        parts.append('low variance' if std < 0.12 else ('high variance' if std > 0.35 else 'moderate variance'))
-        if edge_density > 0.12:
-            parts.append('rich edges')
-        if max(vertical_edge, horizontal_edge, diag_edge) < 0.35:
-            parts.append('weak orientation')
-        else:
-            if horizontal_edge == max(vertical_edge, horizontal_edge, diag_edge):
-                parts.append('horizontal texture dominant')
-            elif vertical_edge == max(vertical_edge, horizontal_edge, diag_edge):
-                parts.append('vertical texture dominant')
-            else:
-                parts.append('diagonal texture dominant')
-        if bright_patches >= 12:
-            parts.append('many bright patches')
-        elif bright_patches <= 2 and edge_density < 0.06 and std < 0.1:
-            parts.append('flat and dim')
-        summary = ' | '.join(parts)
-        metrics = {
-            'mean': round(mean, 3), 'std': round(std, 3), 'entropy': round(ent, 3),
-            'edge_density': round(edge_density, 3),
-            'orient_h': round(horizontal_edge, 3), 'orient_v': round(vertical_edge, 3), 'orient_d': round(diag_edge, 3),
-            'regions': int(bright_patches),
-        }
-        return {'summary': summary, 'metrics': metrics}
-
-    def _mix_err_maps(self, som_map, vision_err, beta: float=0.5):
-        import numpy as _np
-        v = _np.asarray(vision_err, dtype=_np.float32)
-        try:
-            s = _np.asarray(som_map, dtype=_np.float32)
-        except Exception:
-            s = _np.zeros_like(v)
-        if s.shape != v.shape:
-            s = self._vision_resize_nn(s, v.shape[0], v.shape[1])
-        s_min, s_max = float(s.min(initial=0.0)), float(s.max(initial=1.0))
-        if s_max > s_min:
-            s = (s - s_min) / (s_max - s_min)
-        else:
-            s = _np.zeros_like(s)
-        mix = _np.clip(beta * s + (1.0 - beta) * v, 0.0, 1.0)
-        return mix
 
     # ------------------------ Spatial space and goals ------------------------
     def set_spatial_goal(self, x: float, y: float, radius: float=0.1):
@@ -14292,11 +14323,11 @@ class M3ConsciousnessCore:
     def _space_step_attention(self, base_map, depth_map=None):
         import numpy as _np
         # Move attention toward goal or toward highest-salience location
-        try:
+        with guard_context(ctx='m3/m3_core.py:14472', catch_base=False) as __m3_guard_14437_8:
             bm = _np.asarray(base_map, dtype=_np.float32)
             h, w = bm.shape[:2]
             ax, ay = self.attn_xy
-            az = getattr(self, 'attn_xyz', (ax, ay, 0.5))[2]
+            az = attr_get_optional(self, 'attn_xyz', (ax, ay, 0.5))[2]
             if self.spatial_goal and ('xy' in self.spatial_goal or 'xyz' in self.spatial_goal):
                 if 'xyz' in self.spatial_goal:
                     gx, gy, gz = self.spatial_goal['xyz']
@@ -14311,7 +14342,10 @@ class M3ConsciousnessCore:
                 if depth_map is not None:
                     dm = _np.asarray(depth_map, dtype=_np.float32)
                     if dm.shape != bm.shape:
-                        dm = self._vision_resize_nn(dm, h, w)
+                        dh, dw = dm.shape[:2]
+                        ry = max(1, int(_np.ceil(h / max(1, dh))))
+                        rx = max(1, int(_np.ceil(w / max(1, dw))))
+                        dm = _np.kron(dm, _np.ones((ry, rx), dtype=_np.float32))[:h, :w]
                     gz = float(_np.clip(dm[int(gy*(h-1)), int(gx*(w-1))], 0.0, 1.0))
                 else:
                     gz = az
@@ -14327,8 +14361,11 @@ class M3ConsciousnessCore:
             az = float(max(0.0, min(1.0, az)))
             self.attn_xy = (ax, ay)
             self.attn_xyz = (ax, ay, az)
-        except Exception:
-            pass
+
+        if __m3_guard_14437_8.error is not None:
+            e = __m3_guard_14437_8.error
+            import logging
+            logging.debug(f"[_space_step_attention] Error moving attention: {e}")
 
     def _space_compose_image(self, base_map, size: int=256, depth_map=None):
         import numpy as _np
@@ -14338,16 +14375,19 @@ class M3ConsciousnessCore:
             bm = (bm - bmin) / (bmax - bmin)
         else:
             bm = _np.zeros_like(bm)
-        up = self._vision_resize_nn(bm, size, size)
+        bh, bw = bm.shape[:2]
+        ry = max(1, int(_np.ceil(size / max(1, bh))))
+        rx = max(1, int(_np.ceil(size / max(1, bw))))
+        up = _np.kron(bm, _np.ones((ry, rx), dtype=_np.float32))[:size, :size]
         # grayscale to RGB
         img = _np.dstack([(up*255).astype(_np.uint8)]*3)
         # Overlay spatial goal
-        if not getattr(self, 'show_spatial_overlay', False):
+        if not attr_get_optional(self, 'show_spatial_overlay', False):
             return img
         # overlay attention crosshair (green)
-        try:
+        with guard_context(ctx='m3/m3_core.py:14527', catch_base=False) as __m3_guard_14491_8:
             ax, ay = self.attn_xy
-            az = getattr(self, 'attn_xyz', (ax, ay, 0.5))[2]
+            az = attr_get_optional(self, 'attn_xyz', (ax, ay, 0.5))[2]
             cx = int(ax * (size - 1))
             cy = int(ay * (size - 1))
             half = max(6, size // 32)
@@ -14381,8 +14421,11 @@ class M3ConsciousnessCore:
                 # z encodes ring color (blue-ish when deep)
                 ring_col = _np.array([255, int(255*(1.0-gz)), int(255*gz)], dtype=_np.uint8)
                 img[ring] = ring_col
-        except Exception:
-            pass
+
+        if __m3_guard_14491_8.error is not None:
+            e = __m3_guard_14491_8.error
+            import logging
+            logging.debug(f"[_space_compose_image] Error drawing overlays: {e}")
         return img
 
     def _log_state(self, delta_hat: float, goal: Optional[Goal]):
@@ -14390,7 +14433,7 @@ class M3ConsciousnessCore:
         phi = 0.0
         consciousness_metric = 0.0
         if self.iit_enabled and self.t % 5 == 0:
-            try:
+            with guard_context(ctx='m3/m3_core.py:14573', catch_base=False) as __m3_guard_14537_12:
                 state_vector = np.array([self.qualia.arousal, self.qualia.valence, self.qualia.entropy, self.qualia.engagement, self.qualia.frustration, self.self_model.meta_awareness, self.energy_ctrl.activation_level, self.unified_subject.unity_score])
                 phi = self.phi_calculator.compute_phi(state=state_vector, method='integrated')
                 consciousness_metric = phi
@@ -14401,14 +14444,14 @@ class M3ConsciousnessCore:
                     connections_data = []
                     for conn in self.growing_som.connections:
                         connections_data.append({'from': conn['from'], 'to': conn['to'], 'strength': conn['strength']})
-                    recent_growth = hasattr(self, '_last_growth_event') and self._last_growth_event
+                    recent_growth = attr_has(self, '_last_growth_event') and self._last_growth_event
                     self.network_visualizer.update_data(neurons=neurons_data, connections=connections_data, timestamp=self.t, growth_event=recent_growth, phi=phi, energy=self.energy_ctrl.cognitive_energy, qualia={'arousal': self.qualia.arousal, 'valence': self.qualia.valence, 'entropy': self.qualia.entropy, 'engagement': self.qualia.engagement, 'frustration': self.qualia.frustration}, beliefs={'stability': self.self_model.belief_stability, 'adaptation': self.self_model.belief_adaptation, 'prediction': self.self_model.belief_prediction}, meta_awareness=self.self_model.meta_awareness, unity=self.unified_subject.unity_score, activation=self.energy_ctrl.activation_level)
                     self._last_growth_event = False
                 consciousness_metric = phi * self.unified_subject.unity_score * self.self_model.meta_awareness
                 if self.t % 5 == 0:
                     qualia_vec = np.array([self.qualia.arousal, self.qualia.valence, self.qualia.entropy, self.qualia.engagement, self.qualia.frustration])
                     qualia_variance = np.var(qualia_vec)
-                    phi_history = list(self.phi_calculator.phi_history) if hasattr(self.phi_calculator, 'phi_history') else [phi]
+                    phi_history = list(self.phi_calculator.phi_history) if attr_has(self.phi_calculator, 'phi_history') else [phi]
                     if len(phi_history) > 10:
                         phi_percentile = np.percentile(phi_history, 75)
                         should_encode = phi > phi_percentile or qualia_variance > 0.15
@@ -14426,7 +14469,9 @@ class M3ConsciousnessCore:
                         self.episodic_memory.encode_experience(experience_name=experience_name, qualia_vector=qualia_vec, phi_value=phi, context=context, narrative=narrative)
                 if self.t % 100 == 0 and self.t > 0:
                     self.episodic_memory.consolidate()
-            except Exception as e:
+
+            if __m3_guard_14537_12.error is not None:
+                e = __m3_guard_14537_12.error
                 print(f'   calculation failed: {str(e)}')
                 phi = 0.0
         # Normalize qualia fields: keep existing q_* keys but also expose plain names
@@ -14439,32 +14484,35 @@ class M3ConsciousnessCore:
             'flow': float(self.qualia.engagement),
             'resistance': float(self.qualia.frustration)
         })
-        self.log_buffer.append({'t': self.t, 'delta_hat': delta_hat, 'stability': self.world_state['stability'], 'goal_type': goal.type.value if goal else 'none', 'goal_priority': goal.priority if goal else 0.0, 'energy_level': self.energy_ctrl.cognitive_energy / self.energy_ctrl.energy_capacity, 'activation_level': self.energy_ctrl.activation_level, 'strange_loop_active': int(self.self_model.knows_it_knows), 'meta_awareness': self.self_model.meta_awareness, 'unity_score': self.unified_subject.unity_score, 'conscious_focus': consciousness_summary[:50], 'phi': phi, 'consciousness_metric': consciousness_metric, 'sdm_z_mse': float(getattr(self, '_sdm_last_mse', np.nan)) if 'np' in globals() else None, 'plan_score': float(getattr(self, '_last_plan_score', np.nan)) if 'np' in globals() else None, **qd, **self.self_model.to_dict()})
-        try:
+        self.log_buffer.append({'t': self.t, 'delta_hat': delta_hat, 'stability': self.world_state['stability'], 'goal_type': goal.type.value if goal else 'none', 'goal_priority': goal.priority if goal else 0.0, 'energy_level': self.energy_ctrl.cognitive_energy / self.energy_ctrl.energy_capacity, 'activation_level': self.energy_ctrl.activation_level, 'strange_loop_active': int(self.self_model.knows_it_knows), 'meta_awareness': self.self_model.meta_awareness, 'unity_score': self.unified_subject.unity_score, 'conscious_focus': consciousness_summary[:50], 'phi': phi, 'consciousness_metric': consciousness_metric, 'sdm_z_mse': float(attr_get_optional(self, '_sdm_last_mse', np.nan)) if 'np' in globals() else None, 'plan_score': float(attr_get_optional(self, '_last_plan_score', np.nan)) if 'np' in globals() else None, **qd, **self.self_model.to_dict()})
+        with guard_context(ctx='m3/m3_core.py:14590', catch_base=False) as __m3_guard_14587_8:
             if (self.t % 100 == 0) and (len(self.log_buffer) >= 40):
                 self._synthesize_policy_rule()
-        except Exception:
-            pass
+
+        if __m3_guard_14587_8.error is not None:
+            e = __m3_guard_14587_8.error
+            import logging
+            logging.debug(f"[_log_state] Error synthesizing policy rule: {e}")
 
         # --- Self-dynamics model online training (prev->current) ---
         try:
-            if getattr(self, 'sdm', None) is not None:
+            if attr_get_optional(self, 'sdm', None) is not None:
                 # Build current z via FeatureBank
-                if getattr(self, 'feature_bank', None) is not None:
+                if attr_get_optional(self, 'feature_bank', None) is not None:
                     z_now = self.feature_bank.build(self)
                     z_now = self._torch_shared_z(z_now)
                 else:
                     z_now = self._policy_obs()
                 # Targets from current signals
-                r_now = float(getattr(self, '_last_shaped_reward', 0.0))
+                r_now = float(attr_get_optional(self, '_last_shaped_reward', 0.0))
                 y_heads = np.array([
                     float(delta_hat),
                     float(self.world_state.get('stability', 0.5)),
-                    float(getattr(self.self_model, 'meta_awareness', 0.0)),
+                    float(attr_get_optional(self.self_model, 'meta_awareness', 0.0)),
                     r_now
                 ], dtype=np.float32)
-                z_prev = getattr(self, '_sdm_prev_z', None)
-                a_prev = getattr(self, '_sdm_prev_a', None)
+                z_prev = attr_get_optional(self, '_sdm_prev_z', None)
+                a_prev = attr_get_optional(self, '_sdm_prev_a', None)
                 if z_prev is not None and a_prev is not None:
                     xa = np.concatenate([self._align_z_for_sdm(self._torch_shared_z(z_prev.astype(np.float32))), a_prev.astype(np.float32)], axis=0)
                     y_all = np.concatenate([y_heads, self._align_z_for_sdm(z_now)], axis=0)
@@ -14481,18 +14529,22 @@ class M3ConsciousnessCore:
                             Y = np.stack([self._sdm_replay[i][1] for i in idx], axis=0)
                             try:
                                 _loss = self.sdm.train_batch(X, Y)
-                                try:
+                                with guard_context(ctx='m3/m3_core.py:14631', catch_base=False) as __m3_guard_14629_32:
                                     self._sdm_last_mse = float(_loss)
-                                except Exception:
-                                    pass
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
+
+                                if __m3_guard_14629_32.error is not None:
+                                    logging.getLogger(__name__).exception("Swallowed exception")
+                            except Exception as e:
+                                import logging
+                                logging.debug(f"[_log_state] Error training SDM batch: {e}")
+                    except Exception as e:
+                        import logging
+                        logging.debug(f"[_log_state] Error sampling SDM replay: {e}")
                 # cache current z for next step
                 self._sdm_prev_z = self._torch_shared_z(z_now)
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.debug(f"[_log_state] Error in SDM training block: {e}")
 
     def _print_summary(self, elapsed: float):
         log_df = pd.DataFrame(self.log_buffer) if self.log_buffer else pd.DataFrame()
@@ -14534,13 +14586,17 @@ class M3ConsciousnessCore:
             self.event_log_buffer = []
 
     def _recent_policy_avg(self, window: int = 50) -> float:
-        try:
+        with guard_context(ctx='m3/m3_core.py:14691', catch_base=False) as __m3_guard_14685_8:
             import numpy as _np
             hist = list(self.policy_reward_history)
             if not hist:
                 return 0.0
             return float(_np.mean(hist[-min(window, len(hist)) :]))
-        except Exception:
+
+        if __m3_guard_14685_8.error is not None:
+            e = __m3_guard_14685_8.error
+            import logging
+            logging.debug(f"[_recent_policy_avg] Error computing policy avg: {e}")
             return 0.0
 
     def _save_policy_snapshots(self) -> None:
@@ -14549,35 +14605,39 @@ class M3ConsciousnessCore:
         # Save only when improved; keep a single best file (policy.npz)
         try:
             # Always save a rolling snapshot for debugging
-            try:
+            with guard_context(ctx='m3/m3_core.py:14708', catch_base=False) as __m3_guard_14702_12:
                 last_path = os.path.join(self.outdir, 'policy_last.npz')
-                if hasattr(self.policy, 'theta'):
+                if attr_has(self.policy, 'theta'):
                     np.savez(last_path, theta=self.policy.theta, t=self.t, recent_avg=recent_avg)
                 else:
                     np.savez(last_path, W1=self.policy.W1, b1=self.policy.b1, W2=self.policy.W2, b2=self.policy.b2, Wv=self.policy.Wv, bv=self.policy.bv, t=self.t, recent_avg=recent_avg)
-            except Exception:
-                pass
+
+            if __m3_guard_14702_12.error is not None:
+                e = __m3_guard_14702_12.error
+                import logging
+                logging.debug(f"[_save_policy_snapshots] Error saving rolling snapshot: {e}")
             if recent_avg > self._best_policy_score + 1e-9:
                 path = os.path.join(self.outdir, 'policy.npz')
-                if hasattr(self.policy, 'theta'):
+                if attr_has(self.policy, 'theta'):
                     np.savez(path, theta=self.policy.theta, t=self.t, recent_avg=recent_avg)
                 else:
                     np.savez(path, W1=self.policy.W1, b1=self.policy.b1, W2=self.policy.W2, b2=self.policy.b2, Wv=self.policy.Wv, bv=self.policy.bv, t=self.t, recent_avg=recent_avg)
                 self._best_policy_score = recent_avg
                 print(f' Policy: new best checkpoint (avg@50={recent_avg:.4f}) at t={self.t}')
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.debug(f"[_save_policy_snapshots] Error saving policy: {e}")
 
     def policy_report(self) -> Dict[str, Any]:
-        try:
+        with guard_context(ctx='m3/m3_core.py:14740', catch_base=False) as __m3_guard_14724_8:
             import numpy as _np
-            if hasattr(self.policy, 'theta') and getattr(self.policy, 'theta') is not None:
-                theta = getattr(self.policy, 'theta')
+            if attr_has(self.policy, 'theta') and attr_get_optional(self.policy, 'theta') is not None:
+                theta = attr_get_optional(self.policy, 'theta')
                 theta_norm = float(_np.linalg.norm(theta))
                 theta_shape = tuple(theta.shape)
             else:
-                theta_norm = float(_np.linalg.norm(getattr(self.policy, 'W1')) + _np.linalg.norm(getattr(self.policy, 'W2')))
-                theta_shape = (getattr(self.policy, 'W1').shape, getattr(self.policy, 'W2').shape)
+                theta_norm = float(_np.linalg.norm(attr_get_optional(self.policy, 'W1')) + _np.linalg.norm(attr_get_optional(self.policy, 'W2')))
+                theta_shape = (attr_get_optional(self.policy, 'W1').shape, attr_get_optional(self.policy, 'W2').shape)
             return {
                 't': int(self.t),
                 'recent_avg_50': self._recent_policy_avg(50),
@@ -14585,7 +14645,11 @@ class M3ConsciousnessCore:
                 'theta_norm': theta_norm,
                 'best_recent_avg_50': float(self._best_policy_score),
             }
-        except Exception:
+
+        if __m3_guard_14724_8.error is not None:
+            e = __m3_guard_14724_8.error
+            import logging
+            logging.debug(f"[policy_report] Error generating report: {e}")
             return {
                 't': int(self.t),
                 'recent_avg_50': 0.0,
@@ -14612,14 +14676,18 @@ class M3ConsciousnessCore:
         arc_dir = str(arc_dir)
         if files is None:
             files = []
-            try:
+            with guard_context(ctx='m3/m3_core.py:14774', catch_base=False) as __m3_guard_14769_12:
                 for root, _dirs, names in os.walk(arc_dir):
                     for name in sorted(names):
                         if name.lower().endswith('.json'):
                             files.append(os.path.join(root, name))
-            except Exception:
+
+            if __m3_guard_14769_12.error is not None:
+                e = __m3_guard_14769_12.error
+                import logging
+                logging.debug(f"[solve_arc_dir] Error reading directory {arc_dir}: {e}")
                 if progress_cb:
-                    progress_cb({'type': 'arc_error', 'msg': f'arc_dir not found: {arc_dir}'})
+                    progress_cb({'type': 'arc_error', 'msg': f'arc_dir error {arc_dir}: {e}'})
                 return results
         # optional shuffle / limit
         if shuffle:
@@ -14629,27 +14697,37 @@ class M3ConsciousnessCore:
             files = files[:max_files]
         # per-session context for ARC (e.g., palette mappings)
         # load cache and compile macros
-        try:
+        with guard_context(ctx='m3/m3_core.py:14791', catch_base=False) as __m3_guard_14788_8:
             self._arc_load_cache()
             self._arc_compile_macros(top_k=10)
-        except Exception:
-            pass
+
+        if __m3_guard_14788_8.error is not None:
+            e = __m3_guard_14788_8.error
+            import logging
+            logging.debug(f"[solve_arc_dir] Error loading cache: {e}")
         self._arc_ctx: Dict[str, Any] = {}
         for p in files:
             prob = self._arc_load_problem(p)
             # compute simple palette mapping hints from train pairs (used by remap op)
-            try:
+            with guard_context(ctx='m3/m3_core.py:14803', catch_base=False) as __m3_guard_14798_12:
                 self._arc_ctx[prob['id']] = {
                     'palette_map': self._arc_palette_map_from_train(prob['train']),
                     'out_mode': self._arc_out_mode_from_train(prob['train'])
                 }
-            except Exception:
+
+            if __m3_guard_14798_12.error is not None:
+                e = __m3_guard_14798_12.error
+                import logging
+                logging.debug(f"[solve_arc_dir] Error creating palette map for {prob['id']}: {e}")
                 self._arc_ctx[prob['id']] = {'palette_map': {}, 'out_mode': 0}
             start = _time.perf_counter()
-            try:
+            with guard_context(ctx='m3/m3_core.py:14810', catch_base=False) as __m3_guard_14808_12:
                 self._arc_current_id = prob['id']
-            except Exception:
-                pass
+
+            if __m3_guard_14808_12.error is not None:
+                e = __m3_guard_14808_12.error
+                import logging
+                logging.debug(f"[solve_arc_dir] Error setting current id: {e}")
             # Attempt search; if require_solve, escalate time budget with retries up to total_time_cap
             attempt = 0
             best_prog, best_info = None, {'train_acc': 0.0}
@@ -14675,18 +14753,24 @@ class M3ConsciousnessCore:
             preds = [self._arc_apply_program(prob['id'], prog, g) for g in prob['test']] if prog is not None else []
             ok = bool(info.get('train_acc', 0.0) >= 1.0)
             # update cache with successful or strong program
-            try:
+            with guard_context(ctx='m3/m3_core.py:14841', catch_base=False) as __m3_guard_14838_12:
                 if prog is not None:
                     self._arc_update_cache(prob['id'], prog, float(info.get('train_acc', 0.0)), float(info.get('soft_train', 0.0)))
-            except Exception:
-                pass
+
+            if __m3_guard_14838_12.error is not None:
+                e = __m3_guard_14838_12.error
+                import logging
+                logging.debug(f"[solve_arc_dir] Error updating cache: {e}")
             if save_preds and out_dir and preds:
-                try:
+                with guard_context(ctx='m3/m3_core.py:14849', catch_base=False) as __m3_guard_14845_16:
                     os.makedirs(out_dir, exist_ok=True)
                     with open(os.path.join(out_dir, f"{prob['id']}.json"), 'w', encoding='utf-8') as f:
                         json.dump({'output': [a.astype(int).tolist() for a in preds]}, f)
-                except Exception:
-                    pass
+
+                if __m3_guard_14845_16.error is not None:
+                    e = __m3_guard_14845_16.error
+                    import logging
+                    logging.debug(f"[solve_arc_dir] Error saving predictions: {e}")
             dt = _time.perf_counter() - start
             meta = {
                 'id': prob['id'],
@@ -14707,10 +14791,13 @@ class M3ConsciousnessCore:
                 cb = {'type': 'arc_done', **meta, 'preview': preview}
                 progress_cb(cb)
         # save cache at end of run
-        try:
+        with guard_context(ctx='m3/m3_core.py:14874', catch_base=False) as __m3_guard_14872_8:
             self._arc_save_cache()
-        except Exception:
-            pass
+
+        if __m3_guard_14872_8.error is not None:
+            e = __m3_guard_14872_8.error
+            import logging
+            logging.debug(f"[solve_arc_dir] Error saving cache at end: {e}")
         return results
 
     def _arc_load_problem(self, path: str) -> Dict[str, Any]:
@@ -14726,34 +14813,43 @@ class M3ConsciousnessCore:
 
     # ---- ARC cache (program priors/macros) ----
     def _arc_cache_path(self) -> str:
-        try:
+        with guard_context(ctx='m3/m3_core.py:14894', catch_base=False) as __m3_guard_14892_8:
             os.makedirs(self.outdir, exist_ok=True)
-        except Exception:
-            pass
+
+        if __m3_guard_14892_8.error is not None:
+            e = __m3_guard_14892_8.error
+            import logging
+            logging.debug(f"[_arc_cache_path] Error creating outdir: {e}")
         return os.path.join(self.outdir, 'arc_cache.json')
 
     def _arc_load_cache(self) -> None:
         p = self._arc_cache_path()
-        try:
+        with guard_context(ctx='m3/m3_core.py:14905', catch_base=False) as __m3_guard_14901_8:
             if os.path.exists(p):
                 with open(p, 'r', encoding='utf-8') as f:
                     self._arc_cache = json.load(f)
-        except Exception:
+
+        if __m3_guard_14901_8.error is not None:
+            e = __m3_guard_14901_8.error
+            import logging
+            logging.debug(f"[_arc_load_cache] Error loading cache: {e}")
             self._arc_cache = {'solved': {}, 'macro_counts': {}}
 
     def _arc_save_cache(self) -> None:
         p = self._arc_cache_path()
-        try:
+        with guard_context(ctx='m3/m3_core.py:14915', catch_base=False) as __m3_guard_14912_8:
             with open(p, 'w', encoding='utf-8') as f:
                 json.dump(self._arc_cache, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+
+        if __m3_guard_14912_8.error is not None:
+            e = __m3_guard_14912_8.error
+            import logging
+            logging.debug(f"[_arc_save_cache] Error saving cache: {e}")
 
     def _arc_update_cache(self, prob_id: str, program: List[str], hard: float, soft: float) -> None:
         if not program:
             return
-        try:
-            # skip macro-containing programs to avoid recursion
+        with guard_context(ctx='m3/m3_core.py:14934', catch_base=False) as __m3_guard_14922_8:
             if any(isinstance(op, str) and op.startswith('macro_') for op in program):
                 return
             # Store solved program
@@ -14764,11 +14860,14 @@ class M3ConsciousnessCore:
                 key = '|'.join(program)
                 mc = self._arc_cache.setdefault('macro_counts', {})
                 mc[key] = int(mc.get(key, 0)) + 1
-        except Exception:
-            pass
+
+        if __m3_guard_14922_8.error is not None:
+            e = __m3_guard_14922_8.error
+            import logging
+            logging.debug(f"[_arc_update_cache] Error updating cache for {prob_id}: {e}")
 
     def _arc_compile_macros(self, top_k: int = 10) -> List[List[str]]:
-        try:
+        with guard_context(ctx='m3/m3_core.py:14949', catch_base=False) as __m3_guard_14939_8:
             counts = self._arc_cache.get('macro_counts', {})
             items = sorted(counts.items(), key=lambda kv: int(kv[1]), reverse=True)
             macros = []
@@ -14778,7 +14877,11 @@ class M3ConsciousnessCore:
                     macros.append(prog)
             self._arc_macros = macros
             return macros
-        except Exception:
+
+        if __m3_guard_14939_8.error is not None:
+            e = __m3_guard_14939_8.error
+            import logging
+            logging.debug(f"[_arc_compile_macros] Error compiling macros: {e}")
             self._arc_macros = []
             return []
 
@@ -14911,7 +15014,7 @@ class M3ConsciousnessCore:
             area = int(np.sum(lab == c))
             if area > best_area:
                 best_area, best = area, c
-        color = int(self._arc_ctx.get(getattr(self, '_arc_current_id', ''), {}).get('out_mode', self._arc_mode_color(g)))
+        color = int(self._arc_ctx.get(attr_get_optional(self, '_arc_current_id', ''), {}).get('out_mode', self._arc_mode_color(g)))
         out = g.copy()
         if best is not None:
             out[lab == best] = color
@@ -14920,7 +15023,7 @@ class M3ConsciousnessCore:
     def _arc_bbox_border_largest(self, g: np.ndarray) -> np.ndarray:
         y0, x0, y1, x1 = self._arc_bbox_of_largest_region(g)
         out = g.copy()
-        color = int(self._arc_ctx.get(getattr(self, '_arc_current_id', ''), {}).get('out_mode', self._arc_mode_color(g)))
+        color = int(self._arc_ctx.get(attr_get_optional(self, '_arc_current_id', ''), {}).get('out_mode', self._arc_mode_color(g)))
         if y1 >= y0 and x1 >= x0:
             out[y0, x0:x1+1] = color
             out[y1, x0:x1+1] = color
@@ -14946,9 +15049,13 @@ class M3ConsciousnessCore:
 
     def _arc_remap_hist(self, prob_id: str, g: np.ndarray) -> np.ndarray:
         mapping = {}
-        try:
-            mapping = dict(self._arc_ctx.get(prob_id, {}).get('palette_map', {}))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:15121', catch_base=False) as __m3_guard_15119_8:
+            mapping = self._arc_palette_map_from_train(prob_id)
+
+        if __m3_guard_15119_8.error is not None:
+            e = __m3_guard_15119_8.error
+            import logging
+            logging.debug(f"[_arc_remap_hist] Error getting palette map: {e}")
             mapping = {}
         out = g.copy()
         if mapping:
@@ -14995,7 +15102,7 @@ class M3ConsciousnessCore:
         state['tensions']['engagement_entropy_gap'] = abs(state['dynamics']['engagement'] - (1.0 - state['dynamics']['entropy']))
         
         # Compute gradients (rate of change)
-        if hasattr(self, '_last_introspection'):
+        if attr_has(self, '_last_introspection'):
             dt = state['timestamp'] - self._last_introspection['timestamp']
             if dt > 0:
                 for key in ['arousal', 'valence', 'entropy', 'frustration']:
@@ -15014,11 +15121,15 @@ class M3ConsciousnessCore:
 
     def _research_m3_state_summary(self) -> Dict[str, Any]:
         """Compact M3 state snapshot for research grounding."""
-        try:
+        with guard_context(ctx='m3/m3_core.py:15191', catch_base=False) as __m3_guard_15189_8:
             phi = float(self.phi_calculator.phi_history[-1]) if self.phi_calculator.phi_history else 0.0
-        except Exception:
+
+        if __m3_guard_15189_8.error is not None:
+            e = __m3_guard_15189_8.error
+            import logging
+            logging.debug(f"[_research_m3_state_summary] Error getting phi: {e}")
             phi = 0.0
-        try:
+        with guard_context(ctx='m3/m3_core.py:15203', catch_base=False) as __m3_guard_15195_8:
             qualia = {
                 'arousal': float(self.qualia.arousal),
                 'valence': float(self.qualia.valence),
@@ -15026,20 +15137,32 @@ class M3ConsciousnessCore:
                 'engagement': float(self.qualia.engagement),
                 'frustration': float(self.qualia.frustration),
             }
-        except Exception:
+
+        if __m3_guard_15195_8.error is not None:
+            e = __m3_guard_15195_8.error
+            import logging
+            logging.debug(f"[_research_m3_state_summary] Error getting qualia: {e}")
             qualia = {}
-        try:
+        with guard_context(ctx='m3/m3_core.py:15210', catch_base=False) as __m3_guard_15207_8:
             energy = float(self.energy_ctrl.cognitive_energy)
             activation = float(self.energy_ctrl.activation_level)
-        except Exception:
+
+        if __m3_guard_15207_8.error is not None:
+            e = __m3_guard_15207_8.error
+            import logging
+            logging.debug(f"[_research_m3_state_summary] Error getting energy/activation: {e}")
             energy = 0.0
             activation = 0.0
-        try:
+        with guard_context(ctx='m3/m3_core.py:15220', catch_base=False) as __m3_guard_15215_8:
             meta = {
                 'meta_awareness': float(self.self_model.meta_awareness),
                 'meta_confidence': float(self.self_model.meta_confidence),
             }
-        except Exception:
+
+        if __m3_guard_15215_8.error is not None:
+            e = __m3_guard_15215_8.error
+            import logging
+            logging.debug(f"[_research_m3_state_summary] Error getting meta awareness: {e}")
             meta = {}
 
         return {
@@ -15052,25 +15175,52 @@ class M3ConsciousnessCore:
 
     def _generate_research_plan(self, m3_state: Dict[str, Any], needs: List[Dict[str, Any]], question: Dict[str, Any]) -> Optional[str]:
         """Use LLM adapter (if available) to propose M3-grounded research/combination steps."""
-        try:
-            adapter = getattr(self, 'llm_adapter', None)
-            if adapter is None or not hasattr(adapter, 'generate'):
+        with guard_context(ctx='m3/m3_core.py:15239', catch_base=False) as __m3_guard_15235_8:
+            adapter = attr_get_optional(self, 'llm_adapter', None)
+            if adapter is None or not attr_has(adapter, 'generate'):
                 return None
-        except Exception:
+
+        if __m3_guard_15235_8.error is not None:
+            e = __m3_guard_15235_8.error
+            import logging
+            logging.debug(f"[_generate_research_plan] Error getting llm adapter: {e}")
+            return None
+        with guard_context(ctx='m3/m3_core.py:15347', catch_base=False) as __m3_guard_15336_8:
+            needs_brief = ", ".join([f"{n.get('type')}:{n.get('source')}" for n in list(needs or [])])
+            prompt = (
+                "M3_STATE 기반으로 연구/조합/새 시도 계획을 제시해줘.\n"
+                f"M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
+                f"Needs: {needs_brief}\n"
+                f"Question: {question.get('formulation')}\n"
+                "요구사항: (1) 기존 변수 조합 실험 1개 (2) 새로운 시도 1개 (3) 측정 지표 1개."
+            )
+            plan = adapter.generate(prompt, max_len=200, source="research_plan")
+            if not plan:
+                return None
+            return str(plan).strip() or None
+
+        if __m3_guard_15336_8.error is not None:
             return None
 
     def _creative_output_path(self) -> str:
         """Single file destination for continuous creation output."""
-        try:
+        with guard_context(ctx='m3/m3_core.py:15248', catch_base=False) as __m3_guard_15246_8:
             path = os.getenv('M3_CREATIVE_FILE', '').strip()
-        except Exception:
+
+        if __m3_guard_15246_8.error is not None:
+            e = __m3_guard_15246_8.error
+            import logging
+            logging.debug(f"[_creative_output_path] Error reading env var M3_CREATIVE_FILE: {e}")
             path = ''
         if not path:
             path = os.path.join(self.outdir, 'm3_creative_sandbox.md')
-        try:
+        with guard_context(ctx='m3/m3_core.py:15256', catch_base=False) as __m3_guard_15254_8:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-        except Exception:
-            pass
+
+        if __m3_guard_15254_8.error is not None:
+            e = __m3_guard_15254_8.error
+            import logging
+            logging.debug(f"[_creative_output_path] Error creating directory for {path}: {e}")
         return path
 
     def _append_creative_output(self, text: str, meta: Optional[Dict[str, Any]] = None) -> None:
@@ -15084,13 +15234,17 @@ class M3ConsciousnessCore:
             with open(path, 'a', encoding='utf-8') as f:
                 f.write(header)
                 if meta:
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:15274', catch_base=False) as __m3_guard_15272_20:
                         f.write(f"Meta: {json.dumps(meta, ensure_ascii=False)}\n")
-                    except Exception:
-                        pass
+
+                    if __m3_guard_15272_20.error is not None:
+                        e = __m3_guard_15272_20.error
+                        import logging
+                        logging.debug(f"[_append_creative_output] Error writing metadata: {e}")
                 f.write(text.strip() + "\n")
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.debug(f"[_append_creative_output] Error appending to {path}: {e}")
 
     def run_autonomous_creation(self, cycles: int = 20, topic: str = None) -> Dict[str, Any]:
         """Create novel outputs grounded in M3 state or potentially a specific topic, saved to a single file."""
@@ -15099,8 +15253,8 @@ class M3ConsciousnessCore:
             'cycles': [],
             'file': self._creative_output_path(),
         }
-        adapter = getattr(self, 'llm_adapter', None)
-        if adapter is None or not hasattr(adapter, 'generate'):
+        adapter = attr_get_optional(self, 'llm_adapter', None)
+        if adapter is None or not attr_has(adapter, 'generate'):
             log['error'] = 'llm_adapter unavailable'
             return log
             
@@ -15112,20 +15266,24 @@ class M3ConsciousnessCore:
             
             if topic:
                 prompt = (
-                    f"주제 '{topic}'에 대해 M3_STATE를 반영하여 독창적인 산출물을 만들어줘.\n"
+                    f"二쇱젣 '{topic}'?????M3_STATE瑜?諛섏쁺?섏뿬 ?낆갹?곸씤 ?곗텧臾쇱쓣 留뚮뱾?댁쨾.\n"
                     f"M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
-                    "요구사항: (1) 주제와 내부 상태(정서 등)의 연결, (2) 창의적인 아이디어/텍스트/설계, (3) 실행 가능한 인사이트."
+                    "?붽뎄?ы빆: (1) 二쇱젣? ?대? ?곹깭(?뺤꽌 ?????곌껐, (2) 李쎌쓽?곸씤 ?꾩씠?붿뼱/?띿뒪???ㅺ퀎, (3) ?ㅽ뻾 媛?ν븳 ?몄궗?댄듃."
                 )
             else:
                 prompt = (
-                    "M3_STATE 기반으로 새로운 시도를 만들어줘.\n"
+                    "M3_STATE 湲곕컲?쇰줈 ?덈줈???쒕룄瑜?留뚮뱾?댁쨾.\n"
                     f"M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
-                    "요구사항: (1) 새로운 조합/아이디어 1개, (2) 실행 가능한 다음 행동 1개, (3) 짧은 산출물(문단/설계/규칙 등)."
+                    "?붽뎄?ы빆: (1) ?덈줈??議고빀/?꾩씠?붿뼱 1媛? (2) ?ㅽ뻾 媛?ν븳 ?ㅼ쓬 ?됰룞 1媛? (3) 吏㏃? ?곗텧臾?臾몃떒/?ㅺ퀎/洹쒖튃 ??."
                 )
             
-            try:
+            with guard_context(ctx='m3/m3_core.py:15315', catch_base=False) as __m3_guard_15313_12:
                 out = adapter.generate(prompt, max_len=220)
-            except Exception:
+
+            if __m3_guard_15313_12.error is not None:
+                e = __m3_guard_15313_12.error
+                import logging
+                logging.debug(f"[run_autonomous_creation] Error generating output from adapter: {e}")
                 out = ''
             if out:
                 meta = {'cycle': i + 1, 'm3_state': m3_state}
@@ -15134,28 +15292,17 @@ class M3ConsciousnessCore:
                 self._append_creative_output(out, meta=meta)
                 log['cycles'].append({'cycle': i + 1, 'm3_state': m3_state})
                 print(f"  [Creation] Cycle {i+1}: Output generated.")
-            try:
+            with guard_context(ctx='m3/m3_core.py:15328', catch_base=False) as __m3_guard_15326_12:
                 self._single_consciousness_step()
-            except Exception:
-                pass
+
+            if __m3_guard_15326_12.error is not None:
+                e = __m3_guard_15326_12.error
+                import logging
+                logging.debug(f"[run_autonomous_creation] Error in consciousness step: {e}")
 
         log['end_time'] = time.time()
         log['duration'] = log['end_time'] - log['start_time']
         return log
-
-        try:
-            needs_brief = ", ".join([f"{n.get('type')}:{n.get('source')}" for n in needs])
-            prompt = (
-                "M3_STATE 기반으로 연구/조합/새 시도 계획을 제시해줘.\n"
-                f"M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
-                f"Needs: {needs_brief}\n"
-                f"Question: {question.get('formulation')}\n"
-                "요구사항: (1) 내부 변수 조합 실험 1개, (2) 새로운 시도 1개, (3) 측정 지표 제안."
-            )
-            plan = adapter.generate(prompt, max_len=200)
-            return plan.strip() if plan else None
-        except Exception:
-            return None
     
     def _detect_research_needs_from_internal_dynamics(self, introspection: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Detect what needs investigation based on internal state dynamics, not hardcoded rules"""
@@ -15281,32 +15428,90 @@ class M3ConsciousnessCore:
             }
         
         return question
+
+    def _research_recent_texts(self) -> deque:
+        buf = attr_get_optional(self, "_research_recent_texts_buf", None)
+        if buf is None:
+            buf = deque(maxlen=32)
+            self._research_recent_texts_buf = buf
+        return buf
+
+    @staticmethod
+    def _text_similarity_ratio(a: str, b: str) -> float:
+        sa = " ".join(str(a or "").strip().lower().split())
+        sb = " ".join(str(b or "").strip().lower().split())
+        if not sa or not sb:
+            return 0.0
+        return float(SequenceMatcher(None, sa, sb).ratio())
+
+    def _research_repeat_policy(self) -> Tuple[float, int]:
+        with guard_context(ctx='m3/m3_core.py:15412', catch_base=False) as __m3_guard_15410_8:
+            threshold = float(os.getenv("M3_RESEARCH_REPEAT_BLOCK_THRESHOLD", "0.90"))
+            streak = int(os.getenv("M3_RESEARCH_REPEAT_BLOCK_STREAK", "2"))
+        if __m3_guard_15410_8.error is not None:
+            threshold, streak = 0.90, 2
+        threshold = float(max(0.0, min(1.0, threshold)))
+        streak = int(max(1, streak))
+        return threshold, streak
+
+    def _is_research_repeat_candidate(self, text: str, context: Optional[List[str]] = None) -> bool:
+        cand = str(text or "").strip()
+        if not cand:
+            return False
+        threshold, streak = self._research_repeat_policy()
+        hist = list(context or [])
+        hist.extend(list(self._research_recent_texts()))
+        hist = [str(x).strip() for x in hist if str(x).strip()]
+        if len(hist) < streak:
+            return False
+        tail = hist[-streak:]
+        sims = [self._text_similarity_ratio(cand, prev) for prev in tail]
+        return bool(sims and min(sims) >= threshold)
+
+    def _select_research_step_policy(self, m3_state: Dict[str, Any], step_index: int, total_steps: int) -> str:
+        if total_steps <= 0:
+            return "explore"
+        if step_index >= max(0, total_steps - 1):
+            return "synthesize"
+        if step_index <= 0:
+            return "explore"
+        activation = float((m3_state or {}).get("activation", 0.0) or 0.0)
+        phi = float((m3_state or {}).get("phi", 0.0) or 0.0)
+        if activation >= 0.55 and phi >= 0.12:
+            return "verify"
+        return "explore"
     
     def _generate_cognitive_plan(self, question: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """M3_STATE 기반으로 LLM을 사용해 고차원적 인지 실험 계획 수립"""
-        adapter = getattr(self, 'llm_adapter', None)
-        if adapter is None or not hasattr(adapter, 'generate'):
+        """M3_STATE 湲곕컲?쇰줈 LLM???ъ슜??怨좎감?먯쟻 ?몄? ?ㅽ뿕 怨꾪쉷 ?섎┰"""
+        adapter = attr_get_optional(self, 'llm_adapter', None)
+        if adapter is None or not attr_has(adapter, 'generate'):
             return [{'step': 1, 'type': 'error', 'description': 'LLM adapter not available for planning'}]
 
         m3_state = self._research_m3_state_summary()
         topic = question.get('formulation', 'Unknown Topic')
         
         prompt = (
-            f"당신은 M3라는 자율적인 인공 지성체입니다. 현재 당신의 내부 상태(M3_STATE)를 기반으로\n"
-            f"연구 주제 '{topic}'에 대해 심도 깊은 사고 실험/분석을 수행하기 위한 3~5단계의 연구 계획을 세우세요.\n"
+            f"?뱀떊? M3?쇰뒗 ?먯쑉?곸씤 ?멸났 吏?깆껜?낅땲?? ?꾩옱 ?뱀떊???대? ?곹깭(M3_STATE)瑜?湲곕컲?쇰줈\n"
+            f"?곌뎄 二쇱젣 '{topic}'??????щ룄 源딆? ?ш퀬 ?ㅽ뿕/遺꾩꽍???섑뻾?섍린 ?꾪븳 3~5?④퀎???곌뎄 怨꾪쉷???몄슦?몄슂.\n"
             f"\n"
-            f"현재 M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
+            f"?꾩옱 M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
             f"\n"
-            f"요구사항:\n"
-            f"1. 연구 계획은 논리적이고 단계적이어야 합니다 (예: 정의 -> 반례 -> 분석 -> 종합).\n"
-            f"2. 각 단계는 M3의 현재 정서/상태가 반영된 관점이어야 합니다 (예: 에너지가 낮으면 비판적으로, 높으면 창의적으로).\n"
-            f"3. 응답은 오직 JSON 리스트 형식이어야 합니다. 예: [{{'step': 1, 'type': 'definition', 'description': '...'}}, ...]\n"
+            f"?붽뎄?ы빆:\n"
+            f"1. ?곌뎄 怨꾪쉷? ?쇰━?곸씠怨??④퀎?곸씠?댁빞 ?⑸땲??(?? ?뺤쓽 -> 諛섎? -> 遺꾩꽍 -> 醫낇빀).\n"
+            f"2. 媛??④퀎??M3???꾩옱 ?뺤꽌/?곹깭媛 諛섏쁺??愿?먯씠?댁빞 ?⑸땲??(?? ?먮꼫吏媛 ??쑝硫?鍮꾪뙋?곸쑝濡? ?믪쑝硫?李쎌쓽?곸쑝濡?.\n"
+            f"3. ?묐떟? ?ㅼ쭅 JSON 由ъ뒪???뺤떇?댁뼱???⑸땲?? ?? [{{'step': 1, 'type': 'definition', 'description': '...'}}, ...]\n"
         )
         
-        try:
+        with guard_context(ctx='m3/m3_core.py:15513', catch_base=False) as __m3_guard_15496_8:
             print(f"  [Planning] Generating cognitive research plan grounded in M3_STATE...")
             response = adapter.generate(prompt, max_len=512)
-            # 파싱 시도 (Markdown 코드블록 제거 등)
+            if self._is_research_repeat_candidate(response, context=[]):
+                response = adapter.generate(
+                    prompt + "\nAvoid repeating the previous phrasing. Make the plan structurally different.",
+                    max_len=512,
+                )
+            self._research_recent_texts().append(str(response or ""))
+            # ?뚯떛 ?쒕룄 (Markdown 肄붾뱶釉붾줉 ?쒓굅 ??
             cleaned = response.replace('```json', '').replace('```', '').strip()
             start = cleaned.find('[')
             end = cleaned.rfind(']')
@@ -15314,38 +15519,56 @@ class M3ConsciousnessCore:
                 plan_json = json.loads(cleaned[start:end+1])
                 return plan_json
             else:
-                # 파싱 실패 시 기본 플랜 반환
+                # ?뚯떛 ?ㅽ뙣 ??湲곕낯 ?뚮옖 諛섑솚
                 return [
                     {'step': 1, 'type': 'concept_analysis', 'description': f"Analyze the concept of {topic}"},
                     {'step': 2, 'type': 'self_reflection', 'description': "Reflect on this concept based on current state"},
                     {'step': 3, 'type': 'synthesis', 'description': "Synthesize findings into a conclusion"}
                 ]
-        except Exception as e:
+
+        if __m3_guard_15496_8.error is not None:
+            e = __m3_guard_15496_8.error
             print(f"  [Planning Error] {e}")
             return [
                 {'step': 1, 'type': 'fallback_analysis', 'description': f"Direct analysis of {topic}"}
             ]
 
-    def _execute_cognitive_step(self, step_info: Dict[str, Any], context: List[str]) -> str:
-        """단기 기억(Context)과 현재 상태를 사용하여 계획의 한 단계를 수행"""
-        adapter = getattr(self, 'llm_adapter', None)
+    def _execute_cognitive_step(self, step_info: Dict[str, Any], context: List[str], step_policy: str = "explore") -> str:
+        """?④린 湲곗뼲(Context)怨??꾩옱 ?곹깭瑜??ъ슜?섏뿬 怨꾪쉷?????④퀎瑜??섑뻾"""
+        adapter = attr_get_optional(self, 'llm_adapter', None)
         m3_state = self._research_m3_state_summary()
+        if adapter is None or not attr_has(adapter, 'generate'):
+            return "Need additional evidence. Please provide one focused hypothesis to continue."
         
-        context_str = "\n".join(context[-3:]) # 최근 맥락 3개만 유지
+        context_str = "\n".join(context[-3:]) # 理쒓렐 留λ씫 3媛쒕쭔 ?좎?
         
         prompt = (
-            f"M3 연구 진행 중. 현재 단계: {step_info['description']}\n"
-            f"이전 맥락:\n{context_str}\n\n"
-            f"현재 M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
-            f"지시: 위 상태와 맥락을 바탕으로 이 단계를 수행하고, 그 결과를 텍스트로 서술하세요.\n"
-            f"당신의 현재 기분/상태가 반영된 어조와 깊이로 작성하세요."
+            f"M3 ?곌뎄 吏꾪뻾 以? ?꾩옱 ?④퀎: {step_info['description']}\n"
+            f"Step policy: {step_policy}\n"
+            f"?댁쟾 留λ씫:\n{context_str}\n\n"
+            f"?꾩옱 M3_STATE: {json.dumps(m3_state, ensure_ascii=False)}\n"
+            f"吏?? ???곹깭? 留λ씫??諛뷀깢?쇰줈 ???④퀎瑜??섑뻾?섍퀬, 洹?寃곌낵瑜??띿뒪?몃줈 ?쒖닠?섏꽭??\n"
+            f"?뱀떊???꾩옱 湲곕텇/?곹깭媛 諛섏쁺???댁“? 源딆씠濡??묒꽦?섏꽭??"
         )
-        
-        try:
-            result = adapter.generate(prompt, max_len=300)
-            return result.strip()
-        except:
-            return "Execution failed."
+        attempts = 0
+        while attempts < 3:
+            attempts += 1
+            with guard_context(ctx='m3/m3_core.py:15537', catch_base=True) as __m3_guard_15534_8:
+                result = adapter.generate(prompt, max_len=300, source=f"research_{step_policy}")
+                text = str(result or "").strip()
+                if not text:
+                    continue
+                if self._is_research_repeat_candidate(text, context=context):
+                    prompt = (
+                        prompt
+                        + "\nYour last attempt was too repetitive. Reframe using a different angle and new evidence language."
+                    )
+                    continue
+                self._research_recent_texts().append(text)
+                return text
+            if __m3_guard_15534_8.error is not None:
+                continue
+        return "Need additional evidence. Please provide one specific constraint or target for this step."
 
     def _conduct_investigation(self, question: Dict[str, Any], steps: int = 20) -> Dict[str, Any]:
         """Conduct investigation based on COGNITIVE PLANNING, not mechanical loops"""
@@ -15369,18 +15592,24 @@ class M3ConsciousnessCore:
         # 2. Execute Steps
         for i, step_info in enumerate(plan):
             print(f"\n  [Executing Step {i+1}/{len(plan)}] {step_info['description']}...")
+            step_policy = self._select_research_step_policy(
+                m3_state=self._research_m3_state_summary(),
+                step_index=i,
+                total_steps=len(plan),
+            )
             
-            # 사고 실험 수행 (LLM)
-            result_text = self._execute_cognitive_step(step_info, context)
+            # ?ш퀬 ?ㅽ뿕 ?섑뻾 (LLM)
+            result_text = self._execute_cognitive_step(step_info, context, step_policy=step_policy)
             
             print(f"    -> Result: {result_text[:100]}... (truncated)")
             
-            # 결과 기록
-            # M3 내부 상태 변화도 동반 (사고 과정이 상태에 영향을 줌)
+            # 寃곌낵 湲곕줉
+            # M3 ?대? ?곹깭 蹂?붾룄 ?숇컲 (?ш퀬 怨쇱젙???곹깭???곹뼢??以?
             self._single_consciousness_step() 
             
             log_entry = {
                 'step': i + 1,
+                'step_policy': step_policy,
                 'intent': step_info['description'],
                 'result': result_text,
                 'm3_state_snapshot': self._research_m3_state_summary()
@@ -15392,8 +15621,13 @@ class M3ConsciousnessCore:
         # 3. Conclude
         print(f"\n  [Synthesizing Conclusion]...")
         final_summary = " ".join(findings)
+        if self._is_research_repeat_candidate(final_summary, context=list(findings)):
+            final_summary = (
+                "Need additional evidence to synthesize a stable conclusion. "
+                "Please provide one stronger grounding signal."
+            )
         evidence['conclusion'] = {
-            'interpretation': final_summary[:200] + "...", # 요약
+            'interpretation': final_summary[:200] + "...", # ?붿빟
             'detailed_findings': final_summary
         }
         
@@ -15401,7 +15635,7 @@ class M3ConsciousnessCore:
     
     def _single_consciousness_step(self):
         """Execute one minimal consciousness cycle"""
-        try:
+        with guard_context(ctx='m3/m3_core.py:15622', catch_base=True) as __m3_guard_15594_8:
             self.energy_ctrl.internal_clock += 1
             world_state = self._get_current_world_state()
             
@@ -15424,12 +15658,13 @@ class M3ConsciousnessCore:
                 
                 self.self_model.update_meta_awareness(contents)
                 
-                if hasattr(self, 'phi_calculator'):
+                if attr_has(self, 'phi_calculator'):
                     phi_state = self._build_phi_state_vector(world_state, contents)
                     self.phi_calculator.compute_phi(state=phi_state, method='simple')
             
             self.t += 1
-        except:
+
+        if __m3_guard_15594_8.error is not None:
             pass
 
     def _build_phi_state_vector(self, world_state: Optional[Dict[str, Any]], contents: Any) -> np.ndarray:
@@ -15444,9 +15679,10 @@ class M3ConsciousnessCore:
             ]
             for key in world_keys:
                 value = world_state.get(key, 0.0)
-                try:
+                with guard_context(ctx='m3/m3_core.py:15639', catch_base=False) as __m3_guard_15637_16:
                     state_features.append(float(value if value is not None else 0.0))
-                except Exception:
+
+                if __m3_guard_15637_16.error is not None:
                     state_features.append(0.0)
 
         content_count = 0.0
@@ -15456,9 +15692,10 @@ class M3ConsciousnessCore:
             priorities = []
             for item in contents:
                 if isinstance(item, dict):
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:15651', catch_base=False) as __m3_guard_15649_20:
                         priorities.append(float(item.get('priority', 0.0)))
-                    except Exception:
+
+                    if __m3_guard_15649_20.error is not None:
                         continue
             if priorities:
                 content_priority_mean = float(np.mean(priorities))
@@ -15490,14 +15727,15 @@ class M3ConsciousnessCore:
     
     def _inject_perturbation(self, var_name: str, value: float):
         """Inject perturbation into internal variable"""
-        try:
+        with guard_context(ctx='m3/m3_core.py:15690', catch_base=True) as __m3_guard_15683_8:
             if var_name == 'arousal':
                 self.qualia.arousal = np.clip(self.qualia.arousal + value, 0, 1)
             elif var_name == 'valence':
                 self.qualia.valence = np.clip(self.qualia.valence + value, 0, 1)
             elif var_name == 'energy':
                 self.energy_ctrl.cognitive_energy = np.clip(self.energy_ctrl.cognitive_energy + value * 100, 0, 100)
-        except:
+
+        if __m3_guard_15683_8.error is not None:
             pass
     
     def run_autonomous_research(self, max_cycles: int = 100, topic: str = None):
@@ -15541,9 +15779,10 @@ class M3ConsciousnessCore:
             else:
                 # 2. Detect research needs from internal dynamics
                 needs = self._detect_research_needs_from_internal_dynamics(introspection)
-                try:
+                with guard_context(ctx='m3/m3_core.py:15736', catch_base=False) as __m3_guard_15734_16:
                     force_research = os.getenv('M3_RESEARCH_FORCE', '0').lower() in ('1', 'true', 'yes', 'on')
-                except Exception:
+
+                if __m3_guard_15734_16.error is not None:
                     force_research = False
                 
                 if not needs and force_research:
@@ -15557,13 +15796,14 @@ class M3ConsciousnessCore:
 
             if not needs:
                 print(f"  Internal state stable - no investigation needs detected")
-                try:
+                with guard_context(ctx='m3/m3_core.py:15755', catch_base=False) as __m3_guard_15750_16:
                     self._append_creative_output(
-                        "연구: 내부 상태 안정. 조사 필요 없음.",
+                        "?곌뎄: ?대? ?곹깭 ?덉젙. 議곗궗 ?꾩슂 ?놁쓬.",
                         meta={'type': 'research', 'cycle': cycle + 1, 'm3_state': self._research_m3_state_summary()}
                     )
-                except Exception:
-                    pass
+
+                if __m3_guard_15750_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 self._single_consciousness_step()
                 continue
             
@@ -15643,7 +15883,7 @@ class M3ConsciousnessCore:
                     }
                     research_log['discoveries'].append(discovery)
                     print(f"    [DISCOVERY RECORDED]")
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:15889', catch_base=False) as __m3_guard_15836_20:
                         domain = str(topic).strip() if topic else str(primary_need.get('type', 'general')).strip()
                         if not domain:
                             domain = 'general'
@@ -15679,9 +15919,9 @@ class M3ConsciousnessCore:
                             f"Conclusion: {conclusion_text}",
                             f"Key points: {'; '.join(key_points)}",
                         ])
-                        adapter = getattr(self, 'llm_adapter', None) or getattr(self, 'llm', None)
+                        adapter = attr_get_optional(self, 'llm_adapter', None) or attr_get_optional(self, 'llm', None)
                         emb = None
-                        if adapter is not None and hasattr(adapter, 'embed_text'):
+                        if adapter is not None and attr_has(adapter, 'embed_text'):
                             emb_text = self._semantic_text_for_embedding(research_content)
                             emb = adapter.embed_text(emb_text, sys_identity="")
                         self._encode_semantic_memory_trace(
@@ -15696,32 +15936,34 @@ class M3ConsciousnessCore:
                                 'domain': domain,
                             },
                         )
-                    except Exception:
-                        pass
+
+                    if __m3_guard_15836_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
             else:
                 print(f"\n  Investigation inconclusive")
 
             # Append a concise research report to the single creative file
-            try:
+            with guard_context(ctx='m3/m3_core.py:15913', catch_base=False) as __m3_guard_15895_12:
                 report_lines = [
-                    f"연구 사이클 {cycle + 1}/{max_cycles}",
-                    f"질문: {question.get('formulation')}",
-                    f"전략: {question.get('investigation_strategy', {}).get('type')}",
+                    f"?곌뎄 ?ъ씠??{cycle + 1}/{max_cycles}",
+                    f"吏덈Ц: {question.get('formulation')}",
+                    f"?꾨왂: {question.get('investigation_strategy', {}).get('type')}",
                 ]
                 if question.get('m3_plan'):
-                    report_lines.append(f"M3 계획: {question.get('m3_plan')}")
+                    report_lines.append(f"M3 怨꾪쉷: {question.get('m3_plan')}")
                 if conclusion:
                     report_lines.append(
-                        f"결론: {conclusion.get('interpretation', 'No interpretation')}"
+                        f"寃곕줎: {conclusion.get('interpretation', 'No interpretation')}"
                     )
                 else:
-                    report_lines.append("결론: 불충분")
+                    report_lines.append("Conclusion: inconclusive")
                 self._append_creative_output(
                     "\n".join(report_lines),
                     meta={'type': 'research', 'cycle': cycle + 1, 'm3_state': m3_state}
                 )
-            except Exception:
-                pass
+
+            if __m3_guard_15895_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
             
             # 7. Log cycle
             cycle_log = {
@@ -15741,10 +15983,11 @@ class M3ConsciousnessCore:
             
             # 9. Periodic checkpoint
             if (cycle + 1) % 20 == 0:
-                try:
+                with guard_context(ctx='m3/m3_core.py:15937', catch_base=True) as __m3_guard_15934_16:
                     self._save_checkpoint()
                     print(f"\n  [Checkpoint saved]")
-                except:
+
+                if __m3_guard_15934_16.error is not None:
                     pass
         
         # Summary
@@ -15763,12 +16006,14 @@ class M3ConsciousnessCore:
         print(f"{'='*70}\n")
         
         # Save research log
-        try:
+        with guard_context(ctx='m3/m3_core.py:15961', catch_base=False) as __m3_guard_15956_8:
             log_path = os.path.join(self.outdir, 'autonomous_research_log.json')
             with open(log_path, 'w', encoding='utf-8') as f:
                 json.dump(research_log, f, indent=2, default=str)
             print(f"Research log saved: {log_path}\n")
-        except Exception as e:
+
+        if __m3_guard_15956_8.error is not None:
+            e = __m3_guard_15956_8.error
             print(f"Failed to save research log: {e}\n")
         
         return research_log
@@ -15779,7 +16024,7 @@ class M3ConsciousnessCore:
         datasets = []
         
         def scan_recursive(path: str, category: str = ''):
-            try:
+            with guard_context(ctx='m3/m3_core.py:16002', catch_base=False) as __m3_guard_15972_12:
                 for entry in os.listdir(path):
                     full_path = os.path.join(path, entry)
                     if os.path.isdir(full_path):
@@ -15809,7 +16054,9 @@ class M3ConsciousnessCore:
                                 'type': data_type,
                                 'size': size
                             })
-            except Exception as e:
+
+            if __m3_guard_15972_12.error is not None:
+                e = __m3_guard_15972_12.error
                 print(f"[Error] Failed to scan directory {path}: {e}")
         
         scan_recursive(dataset_root)
@@ -15817,7 +16064,7 @@ class M3ConsciousnessCore:
     
     def _learn_text_data(self, filepath: str, max_bytes: int = 100000) -> np.ndarray:
         """Extract features from text file"""
-        try:
+        with guard_context(ctx='m3/m3_core.py:16028', catch_base=False) as __m3_guard_16010_8:
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read(max_bytes)
             
@@ -15835,13 +16082,15 @@ class M3ConsciousnessCore:
                 features = features / norm
             
             return features
-        except Exception as e:
+
+        if __m3_guard_16010_8.error is not None:
+            e = __m3_guard_16010_8.error
             print(f"[Error] _learn_text_data failed for {filepath}: {e}")
             return np.zeros(512, dtype=np.float32)
     
     def _learn_json_data(self, filepath: str) -> np.ndarray:
         """Extract features from JSON file"""
-        try:
+        with guard_context(ctx='m3/m3_core.py:16065', catch_base=False) as __m3_guard_16034_8:
             with open(filepath, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
@@ -15872,7 +16121,9 @@ class M3ConsciousnessCore:
             result = np.zeros(512, dtype=np.float32)
             result[:min(arr.size, 512)] = arr[:min(arr.size, 512)]
             return result
-        except Exception as e:
+
+        if __m3_guard_16034_8.error is not None:
+            e = __m3_guard_16034_8.error
             print(f"[Error] _learn_json_data failed for {filepath}: {e}")
             return np.zeros(512, dtype=np.float32)
     
@@ -15896,7 +16147,7 @@ class M3ConsciousnessCore:
                     
                     # Knowledge graph triple format: subject \t relation \t object
                     if len(parts) == 3 and all(len(p.strip()) > 0 for p in parts):
-                        # 트리플 구조: 각 요소를 별도로 해시
+                        # ?몃━??援ъ“: 媛??붿냼瑜?蹂꾨룄濡??댁떆
                         for j, part in enumerate(parts):
                             h = int.from_bytes(
                                 hashlib.blake2b(
@@ -15906,20 +16157,20 @@ class M3ConsciousnessCore:
                                 'little'
                             )
                             idx = h % 512
-                            features[idx] += (3 - j) * 0.5  # subject > relation > object 가중치
+                            features[idx] += (3 - j) * 0.5  # subject > relation > object 媛以묒튂
                     
                     # MIND news format or other complex TSV
                     elif len(parts) > 3:
-                        # 텍스트 필드 추출 (제목, 내용, 카테고리 등)
+                        # ?띿뒪???꾨뱶 異붿텧 (?쒕ぉ, ?댁슜, 移댄뀒怨좊━ ??
                         for j, part in enumerate(parts):
                             part = part.strip()
                             
-                            # JSON 필드 파싱 시도
+                            # JSON ?꾨뱶 ?뚯떛 ?쒕룄
                             if part.startswith('[') or part.startswith('{'):
-                                try:
+                                with guard_context(ctx='m3/m3_core.py:16124', catch_base=True) as __m3_guard_16109_32:
                                     obj = json.loads(part)
                                     if isinstance(obj, list):
-                                        for item in obj[:10]:  # 최대 10개 엔티티
+                                        for item in obj[:10]:  # 理쒕? 10媛??뷀떚??
                                             if isinstance(item, dict):
                                                 for k, v in item.items():
                                                     if isinstance(v, str):
@@ -15931,13 +16182,14 @@ class M3ConsciousnessCore:
                                                             'little'
                                                         )
                                                         features[h % 512] += 0.3
-                                except:
+
+                                if __m3_guard_16109_32.error is not None:
                                     pass
                             
-                            # 일반 텍스트 필드
+                            # ?쇰컲 ?띿뒪???꾨뱶
                             elif len(part) > 0:
-                                # 단어 단위로 해시
-                                words = part.split()[:50]  # 최대 50개 단어
+                                # ?⑥뼱 ?⑥쐞濡??댁떆
+                                words = part.split()[:50]  # 理쒕? 50媛??⑥뼱
                                 for word in words:
                                     h = int.from_bytes(
                                         hashlib.blake2b(
@@ -15948,7 +16200,7 @@ class M3ConsciousnessCore:
                                     )
                                     features[h % 512] += 0.1
                     
-                    # 기타 형식: 모든 필드를 평등하게 해시
+                    # 湲고? ?뺤떇: 紐⑤뱺 ?꾨뱶瑜??됰벑?섍쾶 ?댁떆
                     else:
                         for part in parts:
                             if len(part.strip()) > 0:
@@ -15961,7 +16213,7 @@ class M3ConsciousnessCore:
                                 )
                                 features[h % 512] += 1.0
             
-            # L2 정규화
+            # L2 ?뺢퇋??
             norm = np.linalg.norm(features)
             if norm > 0:
                 features = features / norm
@@ -15981,10 +16233,11 @@ class M3ConsciousnessCore:
                         break
                     parts = line.strip().split()
                     if len(parts) > 1:
-                        try:
+                        with guard_context(ctx='m3/m3_core.py:16177', catch_base=True) as __m3_guard_16174_24:
                             vec = [float(x) for x in parts[1:]]
                             vectors.append(vec)
-                        except:
+
+                        if __m3_guard_16174_24.error is not None:
                             continue
             
             if vectors:
@@ -16000,28 +16253,30 @@ class M3ConsciousnessCore:
     
     def _learn_image_data(self, filepath: str) -> np.ndarray:
         """Extract features from image file"""
-        try:
+        with guard_context(ctx='m3/m3_core.py:16199', catch_base=False) as __m3_guard_16193_8:
             from PIL import Image
             img = Image.open(filepath).convert('L')
             img = img.resize((32, 32))
             arr = np.array(img, dtype=np.float32) / 255.0
             return arr.flatten()
-        except Exception as e:
+
+        if __m3_guard_16193_8.error is not None:
+            e = __m3_guard_16193_8.error
             print(f"[Error] _learn_image_data failed for {filepath}: {e}")
             return np.zeros(1024, dtype=np.float32)
     
     def _learn_legal_case(self, filepath: str, max_bytes: int = 50000) -> Dict[str, Any]:
-        """법률 케이스 문서 학습 (Legal Case Corpus)"""
-        try:
+        """踰뺣쪧 耳?댁뒪 臾몄꽌 ?숈뒿 (Legal Case Corpus)"""
+        with guard_context(ctx='m3/m3_core.py:16230', catch_base=False) as __m3_guard_16205_8:
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read(max_bytes)
             
-            # 법률 용어 추출
+            # 踰뺣쪧 ?⑹뼱 異붿텧
             import re
             legal_terms = re.findall(r'\b[A-Z][a-z]+(:\s+[A-Z][a-z]+)*\b', content)
             case_numbers = re.findall(r'\b\d+\s+[A-Z]\.\w+\.\s+\d+\b', content)
             
-            # 특징 벡터 생성
+            # ?뱀쭠 踰≫꽣 ?앹꽦
             import hashlib
             features = np.zeros(512, dtype=np.float32)
             for term in legal_terms[:200]:
@@ -16037,26 +16292,29 @@ class M3ConsciousnessCore:
                 'terms_count': len(legal_terms),
                 'case_numbers': case_numbers[:5]
             }
-        except Exception as e:
+
+        if __m3_guard_16205_8.error is not None:
+            e = __m3_guard_16205_8.error
             print(f"[Error] _learn_legal_case failed for {filepath}: {e}")
             return {'features': np.zeros(512, dtype=np.float32), 'terms_count': 0}
     
     def _learn_word2vec_model(self, filepath: str) -> np.ndarray:
-        """Word2Vec 모델/결과 학습"""
+        """Word2Vec 紐⑤뜽/寃곌낵 ?숈뒿"""
         try:
-            # CSV 형식의 word2vec 결과 읽기
+            # CSV ?뺤떇??word2vec 寃곌낵 ?쎄린
             import csv
             vectors = []
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                 reader = csv.reader(f)
                 for i, row in enumerate(reader):
-                    if i >= 100:  # 최대 100개 벡터
+                    if i >= 100:  # 理쒕? 100媛?踰≫꽣
                         break
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:16249', catch_base=True) as __m3_guard_16245_20:
                         vec = [float(x) for x in row if x.strip()]
                         if vec:
-                            vectors.append(vec[:50])  # 최대 50 차원
-                    except:
+                            vectors.append(vec[:50])
+
+                    if __m3_guard_16245_20.error is not None:
                         continue
             
             if vectors:
@@ -16071,7 +16329,7 @@ class M3ConsciousnessCore:
             return np.zeros(512, dtype=np.float32)
     
     def _learn_entity_embedding(self, filepath: str, max_lines: int = None) -> np.ndarray:
-        """엔티티 임베딩 학습 (.vec 파일)"""
+        """?뷀떚???꾨쿋???숈뒿 (.vec ?뚯씪)"""
         try:
             vectors = []
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
@@ -16080,12 +16338,12 @@ class M3ConsciousnessCore:
                         break
                     parts = line.strip().split()
                     if len(parts) > 1:
-                        try:
-                            # 첫 번째는 엔티티명, 나머지는 벡터
+                        with guard_context(ctx='m3/m3_core.py:16278', catch_base=True) as __m3_guard_16273_24:
                             vec = [float(x) for x in parts[1:]]
                             if vec:
                                 vectors.append(vec[:50])
-                        except:
+
+                        if __m3_guard_16273_24.error is not None:
                             continue
             
             if vectors:
@@ -16101,27 +16359,28 @@ class M3ConsciousnessCore:
     
     def _feed_features_to_memory(self, features: np.ndarray, metadata: Dict[str, Any]):
         """Feed learned features into M3 memory systems"""
-        try:
+        with guard_context(ctx='m3/m3_core.py:16313', catch_base=False) as __m3_guard_16294_8:
             features = np.asarray(features, dtype=np.float32).flatten()
             
-            if hasattr(self, 'scope') and hasattr(self.scope, 'mem'):
+            if attr_has(self, 'scope') and attr_has(self.scope, 'mem'):
                 self.scope.mem.update(features)
             
-            if hasattr(self, 'episodic_memory'):
+            if attr_has(self, 'episodic_memory'):
                 self.episodic_memory.store_episode(
                     context={'type': 'dataset_learning', **metadata},
                     content={'features': features, 'timestamp': time.time()},
                     salience=0.6
                 )
             
-            if hasattr(self, 'growing_som'):
+            if attr_has(self, 'growing_som'):
                 patch_size = min(len(features), 32)
                 for i in range(0, len(features), patch_size):
                     patch = features[i:i+patch_size]
                     if len(patch) > 0:
                         self.growing_som.learn(patch, learning_rate=0.01)
-        except Exception:
-            pass
+
+        if __m3_guard_16294_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
     
     def learn_from_dataset(self, dataset_info: Dict[str, Any]) -> Dict[str, Any]:
         """Learn from a single dataset file"""
@@ -16133,12 +16392,12 @@ class M3ConsciousnessCore:
             'features_learned': 0
         }
         
-        try:
+        with guard_context(ctx='m3/m3_core.py:16373', catch_base=False) as __m3_guard_16326_8:
             dtype = dataset_info['type']
             path = dataset_info['path']
             name = dataset_info['name'].lower()
             
-            # === 특화 데이터셋 처리 ===
+            # === ?뱁솕 ?곗씠?곗뀑 泥섎━ ===
             # Legal Case Corpus
             if 'legal' in name or 'case' in name:
                 result_data = self._learn_legal_case(path)
@@ -16161,7 +16420,7 @@ class M3ConsciousnessCore:
             elif 'edges_as_text' in name or 'edges_as_id' in name:
                 features = self._learn_tsv_data(path)
             
-            # 일반 데이터 타입별 처리
+            # ?쇰컲 ?곗씠????낅퀎 泥섎━
             elif dtype == 'text':
                 features = self._learn_text_data(path)
             elif dtype == 'json':
@@ -16179,8 +16438,9 @@ class M3ConsciousnessCore:
                 self._feed_features_to_memory(features, dataset_info)
                 result['features_learned'] = int(features.size)
                 result['success'] = True
-        
-        except Exception as e:
+
+        if __m3_guard_16326_8.error is not None:
+            e = __m3_guard_16326_8.error
             result['error'] = str(e)
         
         return result
@@ -16253,10 +16513,11 @@ class M3ConsciousnessCore:
                     
                     learning_stats['total_learned'] += 1
                     
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:16448', catch_base=False) as __m3_guard_16446_20:
                         self.step()
-                    except Exception:
-                        pass
+
+                    if __m3_guard_16446_20.error is not None:
+                        logging.getLogger(__name__).exception("Swallowed exception")
                     
                     iteration += 1
                     checkpoint_counter += 1
@@ -16267,10 +16528,11 @@ class M3ConsciousnessCore:
                         print(f"  Total features: {learning_stats['total_features']}")
                         print(f"  Core step: {self.t}")
                         
-                        try:
+                        with guard_context(ctx='m3/m3_core.py:16462', catch_base=False) as __m3_guard_16460_24:
                             self.save_checkpoint(os.path.join(self.outdir, 'checkpoint.json'))
-                        except Exception:
-                            pass
+
+                        if __m3_guard_16460_24.error is not None:
+                            logging.getLogger(__name__).exception("Swallowed exception")
                         
                         checkpoint_counter = 0
                     
@@ -16295,17 +16557,18 @@ class M3ConsciousnessCore:
         print(f"  Total features: {learning_stats['total_features']}")
         print(f"  By type: {learning_stats['by_type']}")
         
-        try:
+        with guard_context(ctx='m3/m3_core.py:16491', catch_base=False) as __m3_guard_16488_8:
             self.save_checkpoint(os.path.join(self.outdir, 'final_checkpoint.json'))
             print(f"  Final checkpoint saved to {self.outdir}")
-        except Exception:
-            pass
+
+        if __m3_guard_16488_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         
         return learning_stats
     # ==================== END AUTONOMOUS LEARNING ====================
     def _arc_ops_library(self, prob_id: str) -> List[Tuple[str, Callable[[np.ndarray], np.ndarray]]]:
         # ops can close over problem-specific hints (palette mapping)
-        inc = getattr(self, '_arc_cfg', {}).get('include_ops', {}) or {}
+        inc = attr_get_optional(self, '_arc_cfg', {}).get('include_ops', {}) or {}
         ops: List[Tuple[str, Callable[[np.ndarray], np.ndarray]]] = []
         if inc.get('id', True):
             ops.append(('id', self._arc_identity))
@@ -16331,7 +16594,7 @@ class M3ConsciousnessCore:
             ops.append(('paint_largest_outmode', self._arc_paint_largest_outmode))
             ops.append(('bbox_border_largest', self._arc_bbox_border_largest))
         # macros (global learned)
-        if inc.get('macros', True) and getattr(self, '_arc_macros', None):
+        if inc.get('macros', True) and attr_get_optional(self, '_arc_macros', None):
             for i, prog in enumerate(self._arc_macros):
                 name = f"macro_m{i+1}"
                 ops.append((name, (lambda g, _pid=prob_id, _prog=list(prog): self._arc_apply_program(_pid, _prog, g))))
@@ -16379,10 +16642,11 @@ class M3ConsciousnessCore:
 
     def _arc_search(self, prob: Dict[str, Any], max_time_per: float = 5.0, trace: bool = True, progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None) -> Tuple[Optional[List[str]], Dict[str, Any]]:
         import time as _time
-        try:
+        with guard_context(ctx='m3/m3_core.py:16574', catch_base=False) as __m3_guard_16572_8:
             self._arc_current_id = prob['id']
-        except Exception:
-            pass
+
+        if __m3_guard_16572_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         train_pairs = prob['train']
         ops = self._arc_ops_library(prob['id'])
         # adaptive small budget (no premature stop; allow depth growth under time)
@@ -16390,14 +16654,16 @@ class M3ConsciousnessCore:
         colors = int(len(np.unique(train_pairs[0][0])))
         beam = 150 if (H*W <= 100 and colors <= 4) else 250
         # apply beam scale from research config
-        try:
-            beam = int(max(1, beam * float(getattr(self, '_arc_cfg', {}).get('beam_scale', 1.0))))
-        except Exception:
-            pass
+        with guard_context(ctx='m3/m3_core.py:16585', catch_base=False) as __m3_guard_16583_8:
+            beam = int(max(1, beam * float(attr_get_optional(self, '_arc_cfg', {}).get('beam_scale', 1.0))))
+
+        if __m3_guard_16583_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         max_depth = 5 if H*W <= 100 else 6
-        try:
-            max_depth_cap = int(getattr(self, '_arc_cfg', {}).get('depth_cap', 10))
-        except Exception:
+        with guard_context(ctx='m3/m3_core.py:16590', catch_base=False) as __m3_guard_16588_8:
+            max_depth_cap = int(attr_get_optional(self, '_arc_cfg', {}).get('depth_cap', 10))
+
+        if __m3_guard_16588_8.error is not None:
             max_depth_cap = 10
         max_depth_cap = max(1, max_depth_cap)
         start = _time.perf_counter()
@@ -16418,7 +16684,7 @@ class M3ConsciousnessCore:
                     p2 = prog + [name]
                     s2_h, s2_soft_avg, s2_soft_min, s2_soft_std = self._arc_score_program(prob['id'], p2, train_pairs)
                     # composite objective with length penalty and consistency bonus
-                    w = getattr(self, '_arc_cfg', {}).get('score_weights', {}) or {}
+                    w = attr_get_optional(self, '_arc_cfg', {}).get('score_weights', {}) or {}
                     w_h, w_s, w_smin = float(w.get('w_hard', 1.0)), float(w.get('w_soft', 0.5)), float(w.get('w_soft_min', 0.25))
                     w_cons, w_len = float(w.get('w_consistency', 0.2)), float(w.get('w_len', 0.05))
                     len_pen = float(len(p2)) / 10.0
@@ -16554,12 +16820,13 @@ class M3ConsciousnessCore:
             if progress_cb:
                 progress_cb({'type': 'research_step', **rec})
         out = {'ok': True, 'history': history}
-        try:
+        with guard_context(ctx='m3/m3_core.py:16751', catch_base=False) as __m3_guard_16747_8:
             os.makedirs(self.outdir, exist_ok=True)
             with open(os.path.join(self.outdir, 'research.json'), 'w', encoding='utf-8') as f:
                 json.dump(out, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+
+        if __m3_guard_16747_8.error is not None:
+            logging.getLogger(__name__).exception("Swallowed exception")
         if progress_cb:
             progress_cb({'type': 'research_done', 'steps': len(history)})
         return out
@@ -16587,33 +16854,34 @@ def main(argv=None):
         args.seed = int(time.time() * 1000) % 2 ** 32
     
     # GUI mode check - default is GUI enabled unless --no-gui or --arc_dir is specified
-    use_gui = not getattr(args, 'no_gui', False) and not args.arc_dir and _GUI_AVAILABLE
+    use_gui = not attr_get_optional(args, 'no_gui', False) and not args.arc_dir and _GUI_AVAILABLE
     if use_gui:
-        try:
-            # M3SimpleGUI is defined later in the file
+        with guard_context(ctx='m3/m3_core.py:16806', catch_base=False) as __m3_guard_16782_8:
             if 'M3SimpleGUI' not in globals():
                 raise ImportError("M3SimpleGUI class not available (tkinter import may have failed)")
             system = M3ConsciousnessCore(n=args.n, K=args.K, seed=args.seed, max_iterations=None, outdir=args.outdir)
             
-            # LLM Adapter 초기화 (module import; legacy file path no longer required)
+            # LLM Adapter 珥덇린??(module import; legacy file path no longer required)
             system.llm_adapter = None
             try:
                 from llm_adapter import attach_llm_to_core
                 attach_llm_to_core(system)
-                print("✓ LLM Adapter initialized successfully")
+                print("??LLM Adapter initialized successfully")
             except ImportError as e:
-                print(f"✗ LLM Adapter import failed: {e}")
+                print(f"??LLM Adapter import failed: {e}")
                 import traceback
                 traceback.print_exc()
             except Exception as e:
-                print(f"✗ LLM Adapter initialization failed: {e}")
+                print(f"??LLM Adapter initialization failed: {e}")
                 import traceback
                 traceback.print_exc()
             
             gui = M3SimpleGUI(system)
             gui.mainloop()
             return
-        except Exception as e:
+
+        if __m3_guard_16782_8.error is not None:
+            e = __m3_guard_16782_8.error
             print(f"ERROR: Could not launch GUI: {e}")
             import traceback
             traceback.print_exc()
@@ -16633,60 +16901,6 @@ def main(argv=None):
         )
     else:
         system.run_autonomous()
-
-# =================== SCOPE ENCODER + GUI HOOK (no fallbacks) ===================
-# try:
-#     from m3_scope import Scope
-# except Exception as _e:
-#     raise ImportError("m3_scope.py not found or failed to import; place it next to M3_CR.py") from _e
-
-import numpy as _np
-def _scope_compute_arousal(_state):
-    import math as _math
-    pem = _state['pred_err_map']
-    td  = float(_state['td_error'])
-    ign = float(_state['gw_ignition'])
-    err_mean = float(_np.mean(pem)) if pem is not None else 0.0
-    return 1.0/(1.0 + _math.exp(-(1.2*err_mean + 0.8*abs(td) + 1.0*ign)))
-
-try:
-    _EV = EvolutionVisualizer
-    if not hasattr(_EV, "_scope_wired"):
-        _EV._scope_wired = True
-        _EV.__old_update__ = _EV.update
-        def _update_scope(self, system_state):
-            out = self.__old_update__(system_state)
-            if not hasattr(self, "_scope"):
-                self._scope = Scope()
-            if not all(k in system_state for k in ('pred_err_map','td_error','gw_ignition')):
-                # Drivers missing: do NOT fabricate data. Skip SCOPE encoding to preserve validity.
-                print("[DEBUG] Missing scope drivers in system_state; skipping SCOPE encoding")
-                # Ensure scope fields indicate no valid image produced
-                self.scope_image = None
-                self.scope_meta = None
-                self.scope_arousal = None
-                return out
-            A = _scope_compute_arousal(system_state)
-            u = _np.array(system_state.get('u_matrix', _np.zeros((32,32), dtype=_np.float32)), dtype=_np.float32)
-            if _np.max(u) > _np.min(u):
-                uu = (u - _np.min(u)) / (_np.max(u) - _np.min(u) + 1e-6)
-            else:
-                uu = u * 0.0
-            try:
-                import cv2 as _cv2
-                frame = _cv2.resize(uu, (256,256), interpolation=_cv2.INTER_AREA)
-            except Exception:
-                # fallback plain resize
-                frame = uu
-            img, meta = self._scope.encode(frame, drivers={"arousal": A})
-            self.scope_image = img
-            self.scope_meta = meta
-            self.scope_arousal = A
-            return out
-        _EV.update = _update_scope
-except Exception as _e:
-    # Do not break import if Scope is unavailable
-    pass
 
 # Optional GUI
 _GUI_AVAILABLE = False
@@ -16725,12 +16939,12 @@ if _GUI_AVAILABLE:
             top.pack(fill=_tk.X, padx=10, pady=10)
             top.pack_propagate(False)
             
-            self.start_btn = _tk.Button(top, text='▶ RUN', width=10, command=self._start, 
+            self.start_btn = _tk.Button(top, text='??RUN', width=10, command=self._start, 
                                        bg=ACCENT, fg='#000', font=('Consolas', 10, 'bold'), 
                                        bd=0, cursor='hand2')
             self.start_btn.pack(side=_tk.LEFT, padx=5)
             
-            self.stop_btn = _tk.Button(top, text='■ STOP', width=10, command=self._stop, 
+            self.stop_btn = _tk.Button(top, text='??STOP', width=10, command=self._stop, 
                                       state=_tk.DISABLED, bg='#ff4444', fg='#000', 
                                       font=('Consolas', 10, 'bold'), bd=0, cursor='hand2')
             self.stop_btn.pack(side=_tk.LEFT, padx=5)
@@ -16743,7 +16957,7 @@ if _GUI_AVAILABLE:
                                        font=('Consolas', 10))
             self.step_label.pack(side=_tk.LEFT, padx=10)
             
-            # LLM 학습 버튼들 (항상 표시)
+            # LLM ?숈뒿 踰꾪듉??(??긽 ?쒖떆)
             _tk.Button(top, text='Save', width=8, command=self._save_llm,
                       bg='#0088ff', fg='#000', font=('Consolas', 9, 'bold'),
                       bd=0, cursor='hand2').pack(side=_tk.RIGHT, padx=5)
@@ -16792,7 +17006,7 @@ if _GUI_AVAILABLE:
                       fg='#fff', width=8, font=('Consolas', 9, 'bold'), bd=0, 
                       cursor='hand2').pack(side=_tk.LEFT, padx=(5,0))
             
-            # LLM 컨트롤 버튼들 (항상 표시)
+            # LLM 而⑦듃濡?踰꾪듉??(??긽 ?쒖떆)
             llm_controls = _tk.Frame(right, bg=BG_CARD)
             llm_controls.pack(fill=_tk.X, padx=8, pady=(0,8))
             
@@ -16815,7 +17029,7 @@ if _GUI_AVAILABLE:
                       bg='#666666', fg='#fff', font=('Consolas', 8, 'bold'),
                       bd=0, cursor='hand2', width=8).pack(side=_tk.LEFT, padx=2)
             
-            # 새로운 LLM 어댑터 기능 버튼들
+            # ?덈줈??LLM ?대뙌??湲곕뒫 踰꾪듉??
             llm_advanced = _tk.Frame(right, bg=BG_CARD)
             llm_advanced.pack(fill=_tk.X, padx=8, pady=(0,8))
             
@@ -16849,7 +17063,7 @@ if _GUI_AVAILABLE:
             
             self.protocol('WM_DELETE_WINDOW', self._on_close)
             
-            # 초기 버튼 상태 설정
+            # 珥덇린 踰꾪듉 ?곹깭 ?ㅼ젙
             self._update_button_states()
             
             # Show initial metrics
@@ -16859,7 +17073,7 @@ if _GUI_AVAILABLE:
         
         def _show_initial_metrics(self):
             """Display initial metrics before RUN is pressed"""
-            try:
+            with guard_context(ctx='m3/m3_core.py:17129', catch_base=False) as __m3_guard_17052_12:
                 phi = self.core.phi_calculator.phi_history[-1] if self.core.phi_calculator.phi_history else 0.0
                 m = {
                     't': self.core.t,
@@ -16872,12 +17086,12 @@ if _GUI_AVAILABLE:
                 }
                 
                 # Reward System Metrics
-                if hasattr(self.core, 'rewards'):
+                if attr_has(self.core, 'rewards'):
                     rs = self.core.rewards
                     # Initial state: show 0.0 for drives as we haven't evaluated yet
                     m['drives'] = {k: 0.0 for k in rs.drives.keys()}
                     
-                    if hasattr(rs, 'last_affect') and rs.last_affect is not None:
+                    if attr_has(rs, 'last_affect') and rs.last_affect is not None:
                         m['affect'] = {
                             'V': float(rs.last_affect[0]) if len(rs.last_affect) > 0 else 0.0,
                             'A': float(rs.last_affect[1]) if len(rs.last_affect) > 1 else 0.0,
@@ -16936,7 +17150,9 @@ if _GUI_AVAILABLE:
                 
                 text += "==========================================================\n"
                 self.metrics.insert('1.0', text)
-            except Exception as e:
+
+            if __m3_guard_17052_12.error is not None:
+                e = __m3_guard_17052_12.error
                 self.metrics.insert('1.0', f"Metrics loading...\n{e}")
         
         def _start(self):
@@ -16964,9 +17180,10 @@ if _GUI_AVAILABLE:
                 should_continue, intensity = self.core.energy_ctrl.should_continue()
                 if not should_continue:
                     # Energy deadlock prevention: passive recovery while halted
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:17159', catch_base=False) as __m3_guard_17157_20:
                         self.core.energy_ctrl.update_energy(0.0)
-                    except Exception:
+
+                    if __m3_guard_17157_20.error is not None:
                         self.core.energy_ctrl.cognitive_energy += max(
                             0.5, self.core.energy_ctrl.recovery_rate_max * 0.3
                         )
@@ -16985,9 +17202,9 @@ if _GUI_AVAILABLE:
                 self.core.energy_ctrl.update_activation(self.core.qualia, self.core.self_model, goal)
                 
                 # --- Reward System Update (GUI Loop) ---
-                if hasattr(self.core, 'rewards'):
+                if attr_has(self.core, 'rewards'):
                     viability_cost = 0.0
-                    if hasattr(self.core.energy_ctrl, 'cognitive_energy'):
+                    if attr_has(self.core.energy_ctrl, 'cognitive_energy'):
                         energy_ratio = self.core.energy_ctrl.cognitive_energy / max(1.0, self.core.energy_ctrl.energy_capacity)
                         viability_cost = max(0.0, 1.0 - energy_ratio)
                     
@@ -17040,9 +17257,9 @@ if _GUI_AVAILABLE:
                 # --- Autonomous Sleep Logic (Hybrid: Cognitive + Biological) ---
                 # 1. Cognitive Decision (Goal-Driven): The GoalGenerator explicitly requests REST.
                 # 2. Biological Reflex (Fail-safe): Energy is critically low and environment is safe.
-                try:
-                    energy_level = getattr(self.core.energy_ctrl, 'activation_level', 1.0)
-                    stability = getattr(self.core.world_state, 'get', lambda k,d: d)('stability', 0.5)
+                with guard_context(ctx='m3/m3_core.py:17252', catch_base=False) as __m3_guard_17233_16:
+                    energy_level = attr_get_optional(self.core.energy_ctrl, 'activation_level', 1.0)
+                    stability = attr_get_optional(self.core.world_state, 'get', lambda k,d: d)('stability', 0.5)
                     
                     # Criteria A: Cognitive Decision
                     should_sleep_cognitive = (goal and goal.type == GoalType.REST)
@@ -17053,14 +17270,15 @@ if _GUI_AVAILABLE:
                     if should_sleep_cognitive or should_sleep_biological:
                         # Check debounce
                         now = _time.time()
-                        last_sleep = getattr(self, '_last_auto_sleep', 0)
+                        last_sleep = attr_get_optional(self, '_last_auto_sleep', 0)
                         if now - last_sleep > 300: # Min 5 minutes between naps
                             reason = "Goal: REST" if should_sleep_cognitive else "Critical Fatigue"
-                            self._log(f"💤 Auto-Sleep ({reason}). Consolidating Memories...")
+                            self._log(f"?뮘 Auto-Sleep ({reason}). Consolidating Memories...")
                             self._trigger_sleep()
                             self._last_auto_sleep = now
-                except Exception:
-                    pass
+
+                if __m3_guard_17233_16.error is not None:
+                    logging.getLogger(__name__).exception("Swallowed exception")
                 # -------------------------------------------------
                 
                 qvec = np.array([self.core.qualia.arousal, self.core.qualia.valence,
@@ -17079,7 +17297,7 @@ if _GUI_AVAILABLE:
                 if self.core.t % 10000 == 0:
                     self.core._save_checkpoint()
                 
-                # 더 자주 메트릭 업데이트 (10 스텝마다)
+                # ???먯＜ 硫뷀듃由??낅뜲?댄듃 (10 ?ㅽ뀦留덈떎)
                 if self.core.t % 10 == 0 and self.core.t != last_metric:
                     last_metric = self.core.t
                     self._push_metrics()
@@ -17102,13 +17320,13 @@ if _GUI_AVAILABLE:
             }
             
             # Reward System Metrics
-            if hasattr(self.core, 'rewards'):
+            if attr_has(self.core, 'rewards'):
                 rs = self.core.rewards
                 # Use cached scores if available
-                if hasattr(self.core, '_last_drive_scores'):
+                if attr_has(self.core, '_last_drive_scores'):
                     m['drives'] = self.core._last_drive_scores
                 
-                if hasattr(rs, 'last_affect') and rs.last_affect is not None:
+                if attr_has(rs, 'last_affect') and rs.last_affect is not None:
                     m['affect'] = {
                         'V': float(rs.last_affect[0]) if len(rs.last_affect) > 0 else 0.0,
                         'A': float(rs.last_affect[1]) if len(rs.last_affect) > 1 else 0.0,
@@ -17135,10 +17353,12 @@ if _GUI_AVAILABLE:
             
             # Run generation in a separate thread to prevent GUI freezing
             def _process():
-                try:
+                with guard_context(ctx='m3/m3_core.py:17331', catch_base=False) as __m3_guard_17328_16:
                     resp = self.core.handle_user_message(msg)
                     self.after(0, lambda: self._on_response(resp))
-                except Exception as e:
+
+                if __m3_guard_17328_16.error is not None:
+                    e = __m3_guard_17328_16.error
                     self.after(0, lambda: self._log(f"Error: {e}"))
             
             _threading.Thread(target=_process, daemon=True).start()
@@ -17150,7 +17370,7 @@ if _GUI_AVAILABLE:
         def _log(self, msg):
             formatted_msg = f'[{_time.strftime("%H:%M:%S")}] {msg}'
             self._log_queue.put(formatted_msg)
-            print(formatted_msg)  # 콘솔에도 출력
+            print(formatted_msg)  # 肄섏넄?먮룄 異쒕젰
         
         def _update_ui(self):
             if self.core:
@@ -17213,16 +17433,16 @@ if _GUI_AVAILABLE:
             self.after(100, self._update_ui)
         
         def _train_llm_chat(self):
-            """현재 채팅 대화로 LLM 학습"""
-            adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
+            """?꾩옱 梨꾪똿 ??붾줈 LLM ?숈뒿"""
+            adapter = attr_get_optional(self.core, 'llm_adapter', None) or attr_get_optional(self.core, 'llm', None)
             if adapter is None:
-                self._log('✗ LLM adapter not available - check console for errors')
+                self._log('??LLM adapter not available - check console for errors')
                 return
             
             def _train_thread():
-                try:
+                with guard_context(ctx='m3/m3_core.py:17446', catch_base=False) as __m3_guard_17413_16:
                     self._log('Training LLM on chat history...')
-                    if hasattr(self.core, '_chat_history') and len(self.core._chat_history) >= 2:
+                    if attr_has(self.core, '_chat_history') and len(self.core._chat_history) >= 2:
                         count = 0
                         # Convert deque to list for indexing
                         history = list(self.core._chat_history)
@@ -17250,24 +17470,26 @@ if _GUI_AVAILABLE:
                                     adapter.train_on_example(prompt, response)
                                     count += 1
                                     
-                        self._log(f'✓ Trained on {count} conversation pairs')
+                        self._log(f'??Trained on {count} conversation pairs')
                     else:
                         self._log('No chat history to train on')
-                except Exception as e:
-                    self._log(f'✗ Training error: {e}')
+
+                if __m3_guard_17413_16.error is not None:
+                    e = __m3_guard_17413_16.error
+                    self._log(f'??Training error: {e}')
                     import traceback
                     traceback.print_exc()
             
             _threading.Thread(target=_train_thread, daemon=True).start()
         
         def _train_llm_file(self):
-            """폴더에서 LLM 학습"""
-            adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
+            """?대뜑?먯꽌 LLM ?숈뒿"""
+            adapter = attr_get_optional(self.core, 'llm_adapter', None) or attr_get_optional(self.core, 'llm', None)
             if adapter is None:
-                self._log('✗ LLM adapter not available - check console for errors')
+                self._log('??LLM adapter not available - check console for errors')
                 return
             
-            # 폴더 선택 대화상자
+            # ?대뜑 ?좏깮 ??붿긽??
             from tkinter import filedialog
             folder_path = filedialog.askdirectory(
                 title='Select Training Data Folder',
@@ -17285,7 +17507,7 @@ if _GUI_AVAILABLE:
                     import json
                     import csv
                     
-                    # 폴더 내 모든 학습 데이터 파일 찾기 (하위 폴더 포함)
+                    # ?대뜑 ??紐⑤뱺 ?숈뒿 ?곗씠???뚯씪 李얘린 (?섏쐞 ?대뜑 ?ы븿)
                     files = []
                     supported_exts = ['.jsonl', '.json', '.csv', '.tsv', '.txt']
                     for root, dirs, fnames in os.walk(folder_path):
@@ -17294,24 +17516,22 @@ if _GUI_AVAILABLE:
                                 files.append(os.path.join(root, fname))
                     
                     if not files:
-                        self._log(f'✗ No training files found in {folder_path}')
+                        self._log(f'??No training files found in {folder_path}')
                         return
                     
                     self._log(f'Found {len(files)} file(s)')
                     total_count = 0
                     
                     # Check for Plastic Brain Adapter
-                    adapter = getattr(self.core, 'llm_adapter', None)
-                    is_plastic = hasattr(adapter, 'model') and type(adapter.model).__name__ == "M3PlasticPolicy"
-                    is_plastic_wrapper = hasattr(adapter, 'learn') # Wrapper check
+                    adapter = attr_get_optional(self.core, 'llm_adapter', None)
+                    is_plastic = attr_has(adapter, 'model') and type(adapter.model).__name__ == "M3PlasticPolicy"
+                    is_plastic_wrapper = attr_has(adapter, 'learn') # Wrapper check
                     
                     if is_plastic or is_plastic_wrapper:
                         self._log("Detected 1.58-bit Plastic Brain. Using Hebbian Learning Mode.")
                         
                         for i, fpath in enumerate(files):
-                            try:
-                                # Simple text reading for plastic brain (for now)
-                                # TODO: Handle structured JSONL specifically if needed
+                            with guard_context(ctx='m3/m3_core.py:17531', catch_base=False) as __m3_guard_17502_28:
                                 with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
                                     text_content = f.read()
                                 
@@ -17337,14 +17557,15 @@ if _GUI_AVAILABLE:
                                         adapter.model.sleep()
                                     else:
                                         adapter.model.sleep()
-                                        
-                            except Exception as e:
+
+                            if __m3_guard_17502_28.error is not None:
+                                e = __m3_guard_17502_28.error
                                 self._log(f"Error reading {fpath}: {e}")
                                 
                         # Final consolidation
                         self._log("Final Sleep Consolidation...")
                         adapter.model.sleep()
-                        self._log(f"✓ Hebbian Learning Complete. Processed {total_count} files.")
+                        self._log(f"??Hebbian Learning Complete. Processed {total_count} files.")
                         return
 
                     # === Conventional Training Fallback (Original Code) ===
@@ -17365,20 +17586,21 @@ if _GUI_AVAILABLE:
                         nonlocal total_count
                         # Basic validation
                         if not prompt or not response:
-                            try:
+                            with guard_context(ctx='m3/m3_core.py:17560', catch_base=False) as __m3_guard_17558_28:
                                 self._log(f"[BATCH SKIP] {fname} empty prompt/response (prompt_len={len(str(prompt))}, resp_len={len(str(response))})")
-                            except Exception:
-                                pass
+
+                            if __m3_guard_17558_28.error is not None:
+                                logging.getLogger(__name__).exception("Swallowed exception")
                             return
 
                         # Append and debug-log a short preview (avoid huge logs)
                         batch_buffer.append((prompt, response))
-                        try:
+                        with guard_context(ctx='m3/m3_core.py:17570', catch_base=False) as __m3_guard_17566_24:
                             p_preview = (str(prompt)[:160].replace('\n', ' '))
                             r_preview = (str(response)[:160].replace('\n', ' '))
-                            # self._log(f"[BATCH ADD] {os.path.basename(file_path)} buffer={len(batch_buffer)}/{BATCH_SIZE} prompt={p_preview!r} -> resp={r_preview!r}")
-                        except Exception:
-                            pass
+
+                        if __m3_guard_17566_24.error is not None:
+                            logging.getLogger(__name__).exception("Swallowed exception")
 
                         if len(batch_buffer) >= BATCH_SIZE:
                             try:
@@ -17401,12 +17623,12 @@ if _GUI_AVAILABLE:
                             finally:
                                 batch_buffer.clear()
 
-                    # Legal Case Corpus: Map.txt 로드 (카테고리 매핑)
+                    # Legal Case Corpus: Map.txt 濡쒕뱶 (移댄뀒怨좊━ 留ㅽ븨)
                     legal_map = {}
-                    try:
+                    with guard_context(ctx='m3/m3_core.py:17616', catch_base=False) as __m3_guard_17596_20:
                         map_path = os.path.join(folder_path, 'Map.txt')
                         if not os.path.exists(map_path):
-                            # 하위 디렉토리에서 찾기
+                            # ?섏쐞 ?붾젆?좊━?먯꽌 李얘린
                             for root, dirs, fnames in os.walk(folder_path):
                                 if 'Map.txt' in fnames:
                                     map_path = os.path.join(root, 'Map.txt')
@@ -17423,8 +17645,10 @@ if _GUI_AVAILABLE:
                                         legal_map[parts[0]] = parts[1]
                             if legal_map:
                                 self._log(f'Loaded legal category map: {len(legal_map)} categories')
-                    except Exception as e:
-                        pass  # Map.txt 없으면 무시
+
+                    if __m3_guard_17596_20.error is not None:
+                        e = __m3_guard_17596_20.error
+                        logging.getLogger(__name__).exception("Swallowed exception (%s)", e)
 
                     from contextlib import contextmanager
 
@@ -17442,10 +17666,11 @@ if _GUI_AVAILABLE:
                                     # Test read
                                     f.read(1)
                                     f.seek(0)
-                                    try:
+                                    with guard_context(ctx='m3/m3_core.py:17637', catch_base=False) as __m3_guard_17635_36:
                                         self._log(f'Opened {os.path.basename(path)} with encoding {enc}')
-                                    except Exception:
-                                        pass
+
+                                    if __m3_guard_17635_36.error is not None:
+                                        logging.getLogger(__name__).exception("Swallowed exception")
                                     yield f
                                     return
                                 except (UnicodeDecodeError, UnicodeError):
@@ -17460,10 +17685,11 @@ if _GUI_AVAILABLE:
 
                             # last resort: open with latin-1 and replace errors
                             f = open(path, 'r', encoding='latin-1', errors='replace')
-                            try:
+                            with guard_context(ctx='m3/m3_core.py:17655', catch_base=False) as __m3_guard_17653_28:
                                 self._log(f'Opened {os.path.basename(path)} with fallback latin-1 (errors replaced)')
-                            except Exception:
-                                pass
+
+                            if __m3_guard_17653_28.error is not None:
+                                logging.getLogger(__name__).exception("Swallowed exception")
                             yield f
                         finally:
                             if f:
@@ -17472,28 +17698,28 @@ if _GUI_AVAILABLE:
                     def process_one_file(file_path):
                         try:
                             fname = os.path.basename(file_path)
-                            # 설정 파일 무시
+                            # ?ㅼ젙 ?뚯씪 臾댁떆
                             if fname in ['hitproperties.json', 'hittypeproperties.json']:
                                 return
                                 
                             count = 0
                             error_count = 0
                             
-                            # JSONL/JSON 파일 처리
+                            # JSONL/JSON ?뚯씪 泥섎━
                             if file_path.endswith('.jsonl') or file_path.endswith('.json'):
                                 with open_with_fallback(file_path) as f:
                                     content = f.read().strip()
                                     
-                                    # JSON 처리 로직 (재사용)
+                                    # JSON 泥섎━ 濡쒖쭅 (?ъ궗??
                                     def process_json_item(data):
                                         nonlocal count, error_count
                                         try:
                                             if isinstance(data, dict):
-                                                # Debug: 첫 번째 아이템의 키 확인
+                                                # Debug: 泥?踰덉㎏ ?꾩씠?쒖쓽 ???뺤씤
                                                 if count == 0 and error_count == 0:
                                                     self._log(f"Debug: First item keys in {fname}: {list(data.keys())}")
 
-                                                # SLURP 데이터셋 (sentence -> intent/action)
+                                                # SLURP ?곗씠?곗뀑 (sentence -> intent/action)
                                                 if 'sentence' in data and 'intent' in data:
                                                     prompt = f"Intent: {data['intent']}\nSentence: {data['sentence']}"
                                                     response = data.get('sentence_annotation', data['sentence'])
@@ -17590,7 +17816,7 @@ if _GUI_AVAILABLE:
                                                             add_to_batch(f"Generate a question about {domain}", q.strip())
                                                             count += 1
 
-                                                # 일반적인 키 쌍 찾기
+                                                # ?쇰컲?곸씤 ????李얘린
                                                 elif 'prompt' in data and 'response' in data:
                                                     add_to_batch(data['prompt'], data['response'])
                                                     count += 1
@@ -17603,11 +17829,11 @@ if _GUI_AVAILABLE:
                                                 elif 'question' in data and 'answer' in data:
                                                     add_to_batch(data['question'], data['answer'])
                                                     count += 1
-                                                # ZEST 형식: description + examples[{text, label}]
+                                                # ZEST ?뺤떇: description + examples[{text, label}]
                                                 elif 'description' in data and isinstance(data.get('examples'), list):
                                                     desc = str(data.get('description', '')).strip()
                                                     for ex in data.get('examples', []):
-                                                        try:
+                                                        with guard_context(ctx='m3/m3_core.py:17808', catch_base=True) as __m3_guard_17800_56:
                                                             if isinstance(ex, dict):
                                                                 text = str(ex.get('text', '')).strip()
                                                                 label = str(ex.get('label', '')).strip()
@@ -17615,18 +17841,20 @@ if _GUI_AVAILABLE:
                                                                     prompt = f"{desc}\nText: {text}"
                                                                     add_to_batch(prompt, label)
                                                                     count += 1
-                                                        except:
+
+                                                        if __m3_guard_17800_56.error is not None:
                                                             continue
-                                                # Chat 형식: messages/conversations
+                                                # Chat ?뺤떇: messages/conversations
                                                 elif 'messages' in data or 'conversations' in data:
                                                     msgs = data.get('messages') or data.get('conversations')
                                                     if isinstance(msgs, list) and msgs:
                                                         last_user = None
                                                         for m in msgs:
-                                                            try:
+                                                            with guard_context(ctx='m3/m3_core.py:17819', catch_base=True) as __m3_guard_17816_60:
                                                                 role = str(m.get('role') or m.get('from') or '').lower()
                                                                 content = str(m.get('content') or m.get('value') or '')
-                                                            except:
+
+                                                            if __m3_guard_17816_60.error is not None:
                                                                 continue
                                                             if role in ('user', 'human'):
                                                                 last_user = content
@@ -17634,7 +17862,7 @@ if _GUI_AVAILABLE:
                                                                 add_to_batch(last_user, content)
                                                                 count += 1
                                                                 last_user = None
-                                                # Alpaca 형식: instruction + input + output
+                                                # Alpaca ?뺤떇: instruction + input + output
                                                 elif 'instruction' in data and 'output' in data:
                                                     instruction = str(data.get('instruction', '')).strip()
                                                     inp = str(data.get('input', '')).strip()
@@ -17643,25 +17871,26 @@ if _GUI_AVAILABLE:
                                                         prompt = f"{instruction}\n{inp}" if inp else instruction
                                                         add_to_batch(prompt, output)
                                                         count += 1
-                                                # ZEST MTurk Template 형식 (input_paragraph[], q_to_label[])
+                                                # ZEST MTurk Template ?뺤떇 (input_paragraph[], q_to_label[])
                                                 elif 'input_paragraph' in data and 'q_to_label' in data:
                                                     inputs = data.get('input_paragraph')
                                                     questions = data.get('q_to_label')
                                                     if isinstance(inputs, list) and isinstance(questions, list):
                                                         for i in range(min(len(inputs), len(questions))):
-                                                            try:
+                                                            with guard_context(ctx='m3/m3_core.py:17852', catch_base=True) as __m3_guard_17842_60:
                                                                 text = str(inputs[i]).strip()
                                                                 q = str(questions[i]).strip()
                                                                 if text and q:
-                                                                    # 질문 생성 태스크로 학습
+                                                                    # 吏덈Ц ?앹꽦 ?쒖뒪?щ줈 ?숈뒿
                                                                     add_to_batch(
                                                                         f"Generate a question for this text:\n{text}",
                                                                         q
                                                                     )
                                                                     count += 1
-                                                            except:
+
+                                                            if __m3_guard_17842_60.error is not None:
                                                                 continue
-                                            # 리스트 형태 (2개 요소)
+                                            # 由ъ뒪???뺥깭 (2媛??붿냼)
                                             elif isinstance(data, list) and len(data) == 2:
                                                 add_to_batch(str(data[0]), str(data[1]))
                                                 count += 1
@@ -17670,7 +17899,7 @@ if _GUI_AVAILABLE:
                                                 self._log(f"Error processing JSON item in {fname}: {e}")
                                                 error_count += 1
 
-                                    # 1. 전체를 하나의 JSON으로 파싱 시도 (List or Dict)
+                                    # 1. ?꾩껜瑜??섎굹??JSON?쇰줈 ?뚯떛 ?쒕룄 (List or Dict)
                                     parsed_as_whole = False
                                     try:
                                         data_whole = json.loads(content)
@@ -17681,34 +17910,36 @@ if _GUI_AVAILABLE:
                                         elif isinstance(data_whole, dict):
                                             process_json_item(data_whole)
                                     except json.JSONDecodeError:
-                                        pass # JSONL 처리로 넘어감
+                                        pass # JSONL 泥섎━濡??섏뼱媛?
                                     except Exception as e:
                                         if error_count < 3:
                                             self._log(f"Error parsing JSON file {fname}: {e}")
                                             error_count += 1
 
-                                    # 2. JSONL 처리 (전체 파싱 실패 시)
+                                    # 2. JSONL 泥섎━ (?꾩껜 ?뚯떛 ?ㅽ뙣 ??
                                     if not parsed_as_whole:
                                         lines = content.split('\n')
                                         for line in tqdm(lines, desc=f"JSONL {fname}", leave=False):
-                                            try:
+                                            with guard_context(ctx='m3/m3_core.py:17889', catch_base=False) as __m3_guard_17884_44:
                                                 if not line.strip():
                                                     continue
                                                 data = json.loads(line.strip())
                                                 process_json_item(data)
-                                            except Exception as e:
+
+                                            if __m3_guard_17884_44.error is not None:
+                                                e = __m3_guard_17884_44.error
                                                 if error_count < 3:
                                                     self._log(f"Error parsing JSONL line in {fname}: {e}")
                                                     error_count += 1
                                                 continue
                             
-                            # TSV/TXT 파일 처리
+                            # TSV/TXT ?뚯씪 泥섎━
                             elif file_path.endswith('.tsv') or file_path.endswith('.txt'):
                                 with open_with_fallback(file_path) as f:
                                     # MIND news.tsv
                                     if 'news.tsv' in fname:
                                         for line in f:
-                                            try:
+                                            with guard_context(ctx='m3/m3_core.py:17914', catch_base=False) as __m3_guard_17901_44:
                                                 parts = line.strip().split('\t')
                                                 if count == 0 and error_count == 0:
                                                     self._log(f"Debug: Parsing news.tsv line 1: {parts} (len={len(parts)})")
@@ -17721,7 +17952,9 @@ if _GUI_AVAILABLE:
                                                     prompt = f"Category: {category}\nTitle: {title}"
                                                     add_to_batch(prompt, abstract)
                                                     count += 1
-                                            except Exception as e:
+
+                                            if __m3_guard_17901_44.error is not None:
+                                                e = __m3_guard_17901_44.error
                                                 if error_count < 3:
                                                     self._log(f"Error parsing news.tsv line: {e}")
                                                     error_count += 1
@@ -17730,7 +17963,7 @@ if _GUI_AVAILABLE:
                                     # MIND behaviors.tsv (User History -> Next Click)
                                     elif 'behaviors.tsv' in fname:
                                         for line in f:
-                                            try:
+                                            with guard_context(ctx='m3/m3_core.py:17938', catch_base=False) as __m3_guard_17923_44:
                                                 parts = line.strip().split('\t')
                                                 if count == 0 and error_count == 0:
                                                     self._log(f"Debug: Parsing behaviors.tsv line 1: {parts} (len={len(parts)})")
@@ -17738,14 +17971,16 @@ if _GUI_AVAILABLE:
                                                 if len(parts) >= 4:
                                                     history = parts[3]
                                                     impressions = parts[4] if len(parts) > 4 else ""
-                                                    # 긍정적 클릭(1)만 추출
+                                                    # 湲띿젙???대┃(1)留?異붿텧
                                                     clicks = [x.split('-')[0] for x in impressions.split() if x.endswith('-1')]
                                                     if history and clicks:
                                                         prompt = f"User History: {history}"
                                                         response = f"Next Clicks: {' '.join(clicks)}"
                                                         add_to_batch(prompt, response)
                                                         count += 1
-                                            except Exception as e:
+
+                                            if __m3_guard_17923_44.error is not None:
+                                                e = __m3_guard_17923_44.error
                                                 if error_count < 3:
                                                     self._log(f"Error parsing behaviors.tsv line: {e}")
                                                     error_count += 1
@@ -17761,14 +17996,16 @@ if _GUI_AVAILABLE:
 
                                                 if len(parts) == 3:
                                                     s, r, o = parts
-                                                    # 양방향 학습
-                                                    try:
+                                                    # ?묐갑???숈뒿
+                                                    with guard_context(ctx='m3/m3_core.py:17961', catch_base=False) as __m3_guard_17955_52:
                                                         add_to_batch(f"{s} {r}", o)
                                                         add_to_batch(f"{o} inverse_{r}", s)
                                                         count += 1
                                                         if count == 1:
                                                             self._log(f"Debug: Successfully trained first KG example in {fname}")
-                                                    except Exception as train_err:
+
+                                                    if __m3_guard_17955_52.error is not None:
+                                                        train_err = __m3_guard_17955_52.error
                                                         self._log(f"CRITICAL ERROR in train_on_example for {fname}: {train_err}")
                                                         import traceback
                                                         traceback.print_exc()
@@ -17779,11 +18016,11 @@ if _GUI_AVAILABLE:
                                                     error_count += 1
                                                 continue
                                     
-                                    # Legal Case Corpus (Map.txt는 위에서 처리됨, 여기서는 일반 텍스트)
+                                    # Legal Case Corpus (Map.txt???꾩뿉??泥섎━?? ?ш린?쒕뒗 ?쇰컲 ?띿뒪??
                                     elif 'Map.txt' not in fname:
-                                        try:
+                                        with guard_context(ctx='m3/m3_core.py:17990', catch_base=False) as __m3_guard_17974_40:
                                             content = f.read()
-                                            # 파일명에서 카테고리 유추
+                                            # ?뚯씪紐낆뿉??移댄뀒怨좊━ ?좎텛
                                             category = None
                                             for cat_id, cat_name in legal_map.items():
                                                 if cat_id in fname:
@@ -17791,44 +18028,48 @@ if _GUI_AVAILABLE:
                                                     break
                                             
                                             if category:
-                                                # 앞부분을 프롬프트로, 뒷부분을 응답으로 (간단한 방식)
+                                                # ?욌?遺꾩쓣 ?꾨＼?꾪듃濡? ?룸?遺꾩쓣 ?묐떟?쇰줈 (媛꾨떒??諛⑹떇)
                                                 mid = len(content) // 2
                                                 prompt = f"Legal Case ({category}):\n{content[:min(mid, 500)]}..."
                                                 response = content[min(mid, 500):min(mid+500, len(content))]
                                                 add_to_batch(prompt, response)
                                                 count += 1
-                                        except Exception as e:
+
+                                        if __m3_guard_17974_40.error is not None:
+                                            e = __m3_guard_17974_40.error
                                             self._log(f"Error parsing Legal Case {fname}: {e}")
                                             pass
                             
-                            # CSV 파일 처리
+                            # CSV ?뚯씪 泥섎━
                             elif file_path.endswith('.csv'):
                                 with open_with_fallback(file_path) as f:
-                                    # 첫 줄 확인 (헤더 체크)
+                                    # 泥?以??뺤씤 (?ㅻ뜑 泥댄겕)
                                     first_line = f.readline().strip()
                                     f.seek(0)
                                     
-                                    # 헤더가 있는 경우
+                                    # ?ㅻ뜑媛 ?덈뒗 寃쎌슦
                                     if any(k in first_line.lower() for k in ['prompt', 'user', 'input', 'question', 'response', 'assistant', 'output', 'answer']):
                                         reader = csv.DictReader(f)
                                         for row in tqdm(reader, desc=f"CSV {fname}", leave=False):
-                                            try:
+                                            with guard_context(ctx='m3/m3_core.py:18011', catch_base=False) as __m3_guard_18005_44:
                                                 prompt = row.get('prompt') or row.get('user') or row.get('input') or row.get('question')
                                                 response = row.get('response') or row.get('assistant') or row.get('output') or row.get('answer')
                                                 if prompt and response:
                                                     add_to_batch(prompt, response)
                                                     count += 1
-                                            except Exception as e:
+
+                                            if __m3_guard_18005_44.error is not None:
+                                                e = __m3_guard_18005_44.error
                                                 if error_count < 3:
                                                     self._log(f"Error parsing CSV row in {fname}: {e}")
                                                     error_count += 1
                                                 continue
                                     else:
-                                        # 헤더 없는 경우 (쉼표로 구분된 데이터)
+                                        # ?ㅻ뜑 ?녿뒗 寃쎌슦 (?쇳몴濡?援щ텇???곗씠??
                                         reader = csv.reader(f)
                                         for row in tqdm(reader, desc=f"CSV {fname}", leave=False):
                                             try:
-                                                # Word2vec 결과 형식 감지: token:score 형식 여러 개
+                                                # Word2vec 寃곌낵 ?뺤떇 媛먯?: token:score ?뺤떇 ?щ윭 媛?
                                                 def _is_w2v_tok(x: str) -> bool:
                                                     x = str(x).strip()
                                                     if ':' not in x:
@@ -17836,26 +18077,28 @@ if _GUI_AVAILABLE:
                                                     parts = x.split(':', 1)
                                                     if len(parts) != 2:
                                                         return False
-                                                    try:
+                                                    with guard_context(ctx='m3/m3_core.py:18032', catch_base=True) as __m3_guard_18029_52:
                                                         float(parts[1])
                                                         return len(parts[0].strip()) > 0
-                                                    except:
+
+                                                    if __m3_guard_18029_52.error is not None:
                                                         return False
                                                 
                                                 w2v_like = sum(1 for c in row if _is_w2v_tok(c)) >= max(2, int(0.6 * len(row)))
                                                 
                                                 if w2v_like:
-                                                    # Word2vec 결과: token:score 쌍들
-                                                    # 헤드 토큰과 유사 토큰으로 관련성 질문 생성
+                                                    # Word2vec 寃곌낵: token:score ?띾뱾
+                                                    # ?ㅻ뱶 ?좏겙怨??좎궗 ?좏겙?쇰줈 愿?⑥꽦 吏덈Ц ?앹꽦
                                                     pairs = []
                                                     for c in row:
                                                         s = str(c).strip()
                                                         if not _is_w2v_tok(s):
                                                             continue
                                                         term, score = s.split(':', 1)
-                                                        try:
+                                                        with guard_context(ctx='m3/m3_core.py:18048', catch_base=True) as __m3_guard_18046_56:
                                                             pairs.append((term.strip(), float(score)))
-                                                        except:
+
+                                                        if __m3_guard_18046_56.error is not None:
                                                             continue
                                                     
                                                     if len(pairs) >= 2:
@@ -17876,20 +18119,20 @@ if _GUI_AVAILABLE:
                                                     add_to_batch(row[0], row[1])
                                                     count += 1
                                                 elif len(row) == 3:
-                                                    # 지식 그래프 트리플
+                                                    # 吏??洹몃옒???몃━??
                                                     subject, relation, obj = row[0], row[1], row[2]
                                                     prompt = f"What is the {relation.replace('_', ' ')} of {subject.replace('_', ' ')}"
                                                     response = obj.replace('_', ' ')
                                                     add_to_batch(prompt, response)
                                                     count += 1
                                                 elif len(row) > 2:
-                                                    # GoldenStandard 형식: 카테고리 + 동의어들
+                                                    # GoldenStandard ?뺤떇: 移댄뀒怨좊━ + ?숈쓽?대뱾
                                                     category = str(row[0]).strip()
                                                     for term in row[1:]:
                                                         t = str(term).strip()
                                                         if not t:
                                                             continue
-                                                        # 카테고리 분류 학습
+                                                        # 移댄뀒怨좊━ 遺꾨쪟 ?숈뒿
                                                         prompt = f"What category does '{t}' belong to"
                                                         add_to_batch(prompt, category)
                                                         count += 1
@@ -17899,48 +18142,50 @@ if _GUI_AVAILABLE:
                                                     error_count += 1
                                                 continue
                             
-                            # TSV 파일 처리
+                            # TSV ?뚯씪 泥섎━
                             elif file_path.endswith('.tsv'):
                                 with open_with_fallback(file_path) as f:
-                                    # 첫 줄 확인 (헤더가 있는지 체크)
+                                    # 泥?以??뺤씤 (?ㅻ뜑媛 ?덈뒗吏 泥댄겕)
                                     first_line = f.readline().strip()
                                     f.seek(0)
                                     
-                                    # 헤더가 있는 경우 (prompt, response 등의 컬럼명 포함)
+                                    # ?ㅻ뜑媛 ?덈뒗 寃쎌슦 (prompt, response ?깆쓽 而щ읆紐??ы븿)
                                     if '\t' in first_line and any(k in first_line.lower() for k in ['prompt', 'user', 'input', 'question', 'response', 'assistant']):
                                         reader = csv.DictReader(f, delimiter='\t')
                                         for row in tqdm(reader, desc=f"TSV {fname}", leave=False):
-                                            try:
+                                            with guard_context(ctx='m3/m3_core.py:18109', catch_base=False) as __m3_guard_18103_44:
                                                 prompt = row.get('prompt') or row.get('user') or row.get('input') or row.get('question')
                                                 response = row.get('response') or row.get('assistant') or row.get('output') or row.get('answer')
                                                 if prompt and response:
                                                     add_to_batch(prompt, response)
                                                     count += 1
-                                            except Exception as e:
+
+                                            if __m3_guard_18103_44.error is not None:
+                                                e = __m3_guard_18103_44.error
                                                 if error_count < 3:
                                                     self._log(f"Error parsing TSV row in {fname}: {e}")
                                                     error_count += 1
                                                 continue
                                     else:
-                                        # 헤더 없는 지식 그래프 트리플 (subject relation object)
+                                        # ?ㅻ뜑 ?녿뒗 吏??洹몃옒???몃━??(subject relation object)
                                         for line in f:
-                                            try:
+                                            with guard_context(ctx='m3/m3_core.py:18170', catch_base=False) as __m3_guard_18117_44:
                                                 parts = line.strip().split('\t')
                                                 if len(parts) >= 2:
-                                                    # 2컬럼: prompt response
+                                                    # 2而щ읆: prompt response
                                                     if len(parts) == 2:
                                                         add_to_batch(parts[0], parts[1])
                                                         count += 1
-                                                    # 3컬럼: subject relation object -> 자연어 QA로 변환
+                                                    # 3而щ읆: subject relation object -> ?먯뿰??QA濡?蹂??
                                                     elif len(parts) == 3:
                                                         subject, relation, obj = parts[0], parts[1], parts[2]
                                                         
-                                                        # 관계명을 자연어로 변환
+                                                        # 愿怨꾨챸???먯뿰?대줈 蹂??
                                                         rel_clean = relation.replace('_', ' ').replace('.', ' ')
                                                         subj_clean = subject.replace('_', ' ').replace('.n.', ' (noun)').replace('.v.', ' (verb)')
                                                         obj_clean = obj.replace('_', ' ').replace('.n.', ' (noun)').replace('.v.', ' (verb)')
                                                         
-                                                        # 다양한 질문 형식 생성
+                                                        # ?ㅼ뼇??吏덈Ц ?뺤떇 ?앹꽦
                                                         import random
                                                         templates = [
                                                             (f"What is the {rel_clean} of {subj_clean}", obj_clean),
@@ -17952,7 +18197,7 @@ if _GUI_AVAILABLE:
                                                         prompt, response = random.choice(templates)
                                                         add_to_batch(prompt, response)
                                                         count += 1
-                                                    # MIND 뉴스 형식 (여러 컬럼)
+                                                    # MIND ?댁뒪 ?뺤떇 (?щ윭 而щ읆)
                                                     elif len(parts) > 5:
                                                         # news.tsv: ID, category, subcategory, title, abstract, url, entities, ...
                                                         try:
@@ -17961,14 +18206,14 @@ if _GUI_AVAILABLE:
                                                             category = parts[1] if len(parts) > 1 else ''
                                                             
                                                             if title and abstract:
-                                                                # 제목 -> 요약
+                                                                # ?쒕ぉ -> ?붿빟
                                                                 add_to_batch(
                                                                     f"Summarize this article: {title}",
                                                                     abstract
                                                                 )
                                                                 count += 1
                                                                 
-                                                                # 카테고리 분류
+                                                                # 移댄뀒怨좊━ 遺꾨쪟
                                                                 if category:
                                                                     add_to_batch(
                                                                         f"What category is this article: {title}",
@@ -17977,23 +18222,25 @@ if _GUI_AVAILABLE:
                                                                     count += 1
                                                         except:
                                                             pass
-                                            except Exception as e:
+
+                                            if __m3_guard_18117_44.error is not None:
+                                                e = __m3_guard_18117_44.error
                                                 if error_count < 3:
                                                     self._log(f"Error parsing TSV line (no header) in {fname}: {e}")
                                                     error_count += 1
                                                 continue
                             
-                            # TXT 파일 처리
+                            # TXT ?뚯씪 泥섎━
                             elif file_path.endswith('.txt'):
-                                # Legal Case Corpus 감지: preprocessed_cases/raw_cases 구조
+                                # Legal Case Corpus 媛먯?: preprocessed_cases/raw_cases 援ъ“
                                 norm_path = file_path.replace('\\', '/')
                                 is_legal_case = ('preprocessed_cases' in norm_path or 'raw_cases' in norm_path) and legal_map
                                 
                                 if is_legal_case:
-                                    # Legal Case: 디렉토리명이 카테고리 ID
-                                    try:
+                                    # Legal Case: ?붾젆?좊━紐낆씠 移댄뀒怨좊━ ID
+                                    with guard_context(ctx='m3/m3_core.py:18207', catch_base=False) as __m3_guard_18184_36:
                                         parts = norm_path.split('/')
-                                        # preprocessed_cases/.../<category_id>/case*.txt 구조
+                                        # preprocessed_cases/.../<category_id>/case*.txt 援ъ“
                                         cat_id = None
                                         for i, part in enumerate(parts):
                                             if 'preprocessed_cases' in part or 'raw_cases' in part:
@@ -18006,19 +18253,21 @@ if _GUI_AVAILABLE:
                                             with open_with_fallback(file_path) as f:
                                                 text = f.read().strip()
                                                 if text:
-                                                    # 법률 케이스 분류 학습
-                                                    # 텍스트 앞부분만 사용 (너무 길면 truncate)
+                                                    # 踰뺣쪧 耳?댁뒪 遺꾨쪟 ?숈뒿
+                                                    # ?띿뒪???욌?遺꾨쭔 ?ъ슜 (?덈Т 湲몃㈃ truncate)
                                                     text_preview = text[:500] if len(text) > 500 else text
                                                     add_to_batch(
                                                         f"Classify this legal case: {text_preview}",
                                                         category
                                                     )
                                                     count += 1
-                                    except Exception as e:
+
+                                    if __m3_guard_18184_36.error is not None:
+                                        e = __m3_guard_18184_36.error
                                         self._log(f"Error parsing Legal Case TXT {fname}: {e}")
                                         pass
                                 else:
-                                    # 일반 TXT: 라인별 prompt/response 쌍
+                                    # ?쇰컲 TXT: ?쇱씤蹂?prompt/response ??
                                     with open_with_fallback(file_path) as f:
                                         lines = [l.strip() for l in f.readlines() if l.strip()]
                                         for i in tqdm(range(0, len(lines) - 1, 2), desc=f"TXT {fname}", leave=False):
@@ -18034,7 +18283,7 @@ if _GUI_AVAILABLE:
                             if count > 0:
                                 self._log(f'  {fname}: {count} examples')
                         except Exception as e:
-                            self._log(f'  ✗ Error in {os.path.basename(file_path)}: {e}')
+                            self._log(f'  ??Error in {os.path.basename(file_path)}: {e}')
 
                     import random
                     NUM_EPOCHS = 5
@@ -18049,7 +18298,7 @@ if _GUI_AVAILABLE:
                         
                         # Process remaining batch at end of epoch
                         if batch_buffer:
-                            try:
+                            with guard_context(ctx='m3/m3_core.py:18253', catch_base=False) as __m3_guard_18242_28:
                                 ret = adapter.train_batch(batch_buffer)
                                 if isinstance(ret, tuple):
                                     c, l = ret
@@ -18060,119 +18309,133 @@ if _GUI_AVAILABLE:
                                     total_count += ret
                                     self._log(f"[EPOCH FINAL] trained {ret}")
                                 batch_buffer.clear()
-                            except Exception as e:
+
+                            if __m3_guard_18242_28.error is not None:
+                                e = __m3_guard_18242_28.error
                                 self._log(f"Error in final batch: {e}")
                         
                         avg_epoch_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0.0
                         self._log(f"=== Epoch {epoch+1} Completed. Avg Loss: {avg_epoch_loss:.4f} ===")
 
-                    self._log(f'✓ Total trained: {total_count} examples from {len(files)} files')
+                    self._log(f'??Total trained: {total_count} examples from {len(files)} files')
                 except Exception as e:
-                    self._log(f'✗ Folder training error: {e}')
+                    self._log(f'??Folder training error: {e}')
             
             _threading.Thread(target=_train_thread, daemon=True).start()
         
         def _train_llm_dpo(self):
-            """DPO(Direct Preference Optimization) 학습"""
-            adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
+            """DPO(Direct Preference Optimization) ?숈뒿"""
+            adapter = attr_get_optional(self.core, 'llm_adapter', None) or attr_get_optional(self.core, 'llm', None)
             if adapter is None:
-                self._log('✗ LLM adapter not available - check console for errors')
+                self._log('??LLM adapter not available - check console for errors')
                 return
             
             def _train_thread():
-                try:
+                with guard_context(ctx='m3/m3_core.py:18277', catch_base=False) as __m3_guard_18273_16:
                     self._log('Training LLM with DPO...')
                     result = adapter.train_dpo_from_dir(epochs=2, beta=0.1)
-                    self._log(f"✓ DPO: loss={result.get('avg_loss', 0):.4f}, samples={result.get('num_samples', 0)}")
-                except Exception as e:
-                    self._log(f'✗ DPO training error: {e}')
+                    self._log(f"??DPO: loss={result.get('avg_loss', 0):.4f}, samples={result.get('num_samples', 0)}")
+ 
+
+                if __m3_guard_18273_16.error is not None:
+                    e = __m3_guard_18273_16.error
+                    self._log(f'??DPO training error: {e}')
             
             _threading.Thread(target=_train_thread, daemon=True).start()
         
         def _clear_chat(self):
-            """채팅 히스토리 지우기"""
+            """梨꾪똿 ?덉뒪?좊━ 吏?곌린"""
             self.chat.delete('1.0', _tk.END)
-            if hasattr(self.core, '_chat_history'):
+            if attr_has(self.core, '_chat_history'):
                 self.core._chat_history.clear()
             self._log('Chat history cleared')
         
         def _train_llm(self):
-            """LLM 대화 데이터로 학습 (레거시)"""
+            """LLM ????곗씠?곕줈 ?숈뒿 (?덇굅??"""
             self._train_llm_chat()
         
         def _clear_knn_memory(self, parent_win):
-            """kNN 메모리 클리어"""
-            adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
+            """Clear kNN memory."""
+            adapter = attr_get_optional(self.core, 'llm_adapter', None) or attr_get_optional(self.core, 'llm', None)
             if adapter is None:
                 return
             
-            try:
-                knn = getattr(adapter, '_knn', None)
+            with guard_context(ctx='m3/m3_core.py:18310', catch_base=False) as __m3_guard_18299_12:
+                knn = attr_get_optional(adapter, '_knn', None)
                 if knn:
                     knn._keys.clear()
                     knn._vals.clear()
                     knn._access_counts.clear()
                     knn._total_queries = 0
-                    self._log('✓ kNN memory cleared')
+                    self._log('??kNN memory cleared')
                     parent_win.destroy()
                 else:
-                    self._log('✗ kNN not available')
-            except Exception as e:
-                self._log(f'✗ Clear kNN error: {e}')
+                    self._log('??kNN not available')
+ 
+
+            if __m3_guard_18299_12.error is not None:
+                e = __m3_guard_18299_12.error
+                self._log(f'??Clear kNN error: {e}')
         
         def _reset_knn_tau(self, parent_win, new_tau):
             """kNN"""
-            adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
+            adapter = attr_get_optional(self.core, 'llm_adapter', None) or attr_get_optional(self.core, 'llm', None)
             if adapter is None:
                 return
             
-            try:
-                knn = getattr(adapter, '_knn', None)
+            with guard_context(ctx='m3/m3_core.py:18327', catch_base=False) as __m3_guard_18319_12:
+                knn = attr_get_optional(adapter, '_knn', None)
                 if knn:
                     knn.tau = float(new_tau)
-                    self._log(f'✓ kNN tau reset to {new_tau}')
+                    self._log(f'??kNN tau reset to {new_tau}')
                     parent_win.destroy()
                 else:
-                    self._log('✗ kNN not available')
-            except Exception as e:
-                self._log(f'✗ Reset tau error: {e}')
+                    self._log('??kNN not available')
+ 
+
+            if __m3_guard_18319_12.error is not None:
+                e = __m3_guard_18319_12.error
+                self._log(f'??Reset tau error: {e}')
         
         def _save_llm(self):
-            """LLM 모델 저장"""
-            adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
+            """Save LLM checkpoint."""
+            adapter = attr_get_optional(self.core, 'llm_adapter', None) or attr_get_optional(self.core, 'llm', None)
             if adapter is None:
-                self._log('✗ LLM adapter not available - check console for errors')
+                self._log('??LLM adapter not available - check console for errors')
                 return
             
             def _save_thread():
-                try:
+                with guard_context(ctx='m3/m3_core.py:18352', catch_base=False) as __m3_guard_18338_16:
                     save_path = os.path.join(self.core.outdir, 'llm_checkpoint.pt')
-                    if hasattr(adapter, 'save_model'):
-                        if getattr(adapter, '_hf_circuit_open', False):
-                            self.after(0, lambda: self._log('⚠ Skipped LLM save: HF circuit breaker is open'))
+                    if attr_has(adapter, 'save_model'):
+                        if attr_get_optional(adapter, '_hf_circuit_open', False):
+                            self.after(0, lambda: self._log('??Skipped LLM save: HF circuit breaker is open'))
                         else:
                             adapter.save_model(save_path)
-                            self.after(0, lambda: self._log(f'✓ Model saved: {save_path}'))
-                    elif hasattr(adapter, 'conv_policy'):
+                            self.after(0, lambda: self._log(f'??Model saved: {save_path}'))
+                    elif attr_has(adapter, 'conv_policy'):
                         import torch
                         torch.save(adapter.conv_policy.model.state_dict(), save_path)
-                        self.after(0, lambda: self._log(f'✓ Model saved (legacy): {save_path}'))
+                        self.after(0, lambda: self._log(f'??Model saved (legacy): {save_path}'))
                     else:
-                        self.after(0, lambda: self._log('✓ Model auto-saved (numpy policy)'))
-                except Exception as e:
-                    self.after(0, lambda: self._log(f'✗ Save error: {e}'))
+                        self.after(0, lambda: self._log('??Model auto-saved (numpy policy)'))
+ 
+
+                if __m3_guard_18338_16.error is not None:
+                    e = __m3_guard_18338_16.error
+                    self.after(0, lambda: self._log(f'??Save error: {e}'))
             
             _threading.Thread(target=_save_thread, daemon=True).start()
         
         def _toggle_autonomy(self):
-            """Autonomy loop 토글"""
-            adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
+            """Autonomy loop ?좉?"""
+            adapter = attr_get_optional(self.core, 'llm_adapter', None) or attr_get_optional(self.core, 'llm', None)
             if adapter is None:
-                self._log('✗ LLM adapter not available')
+                self._log('??LLM adapter not available')
                 return
             
-            try:
-                if hasattr(adapter, '_auto_running') and adapter._auto_running:
+            with guard_context(ctx='m3/m3_core.py:18373', catch_base=False) as __m3_guard_18364_12:
+                if attr_has(adapter, '_auto_running') and adapter._auto_running:
                     adapter.stop_autonomy_loop()
                     self.autonomy_btn.config(text='Autonomy Off', bg='#00aa88')
                     self._log('Autonomy loop stopped')
@@ -18180,17 +18443,19 @@ if _GUI_AVAILABLE:
                     adapter.start_autonomy_loop()
                     self.autonomy_btn.config(text='Autonomy On', bg='#00ff88')
                     self._log('Autonomy loop started')
-            except Exception as e:
-                self._log(f'✗ Autonomy toggle error: {e}')
+
+            if __m3_guard_18364_12.error is not None:
+                e = __m3_guard_18364_12.error
+                self._log(f'??Autonomy toggle error: {e}')
         
         def _knn_settings(self):
-            """kNN 설정 창 열기"""
-            adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
+            """kNN ?ㅼ젙 李??닿린"""
+            adapter = attr_get_optional(self.core, 'llm_adapter', None) or attr_get_optional(self.core, 'llm', None)
             if adapter is None:
-                self._log('✗ LLM adapter not available')
+                self._log('??LLM adapter not available')
                 return
             
-            # 설정 창 생성
+            # ?ㅼ젙 李??앹꽦
             settings_win = _tk.Toplevel(self)
             settings_win.title('kNN-LM Settings')
             settings_win.geometry('400x300')
@@ -18199,26 +18464,30 @@ if _GUI_AVAILABLE:
             _tk.Label(settings_win, text='kNN-LM Configuration', bg='#0a0a0a', fg='#e0e0e0',
                      font=('Consolas', 12, 'bold')).pack(pady=10)
             
-            # 현재 설정 표시
-            try:
-                knn = getattr(adapter, '_knn', None)
+            # ?꾩옱 ?ㅼ젙 ?쒖떆
+            with guard_context(ctx='m3/m3_core.py:18407', catch_base=False) as __m3_guard_18393_12:
+                knn = attr_get_optional(adapter, '_knn', None)
                 if knn:
-                    info_text = f"""Current Settings:
-Tau: {knn.tau:.4f}
-Max Items: {knn.max_items:,}
-Key Dim: {knn.key_dim}
-Total Queries: {knn._total_queries:,}
-Items Stored: {len(knn._keys)}"""
+                    info_text = (
+                        f"Current Settings:\n"
+                        f"Tau: {knn.tau:.4f}\n"
+                        f"Max Items: {knn.max_items:,}\n"
+                        f"Key Dim: {knn.key_dim}\n"
+                        f"Total Queries: {knn._total_queries:,}\n"
+                        f"Items Stored: {len(knn._keys)}"
+                    )
                 else:
                     info_text = "kNN not initialized"
                 
                 _tk.Label(settings_win, text=info_text, bg='#0a0a0a', fg='#707070',
                          font=('Consolas', 9), justify=_tk.LEFT).pack(pady=10)
-            except Exception as e:
+
+            if __m3_guard_18393_12.error is not None:
+                e = __m3_guard_18393_12.error
                 _tk.Label(settings_win, text=f"Error getting settings: {e}", bg='#0a0a0a', fg='#ff4444',
                          font=('Consolas', 9)).pack(pady=10)
             
-            # 설정 변경 버튼들
+            # ?ㅼ젙 蹂寃?踰꾪듉??
             btn_frame = _tk.Frame(settings_win, bg='#0a0a0a')
             btn_frame.pack(pady=20)
             
@@ -18235,76 +18504,82 @@ Items Stored: {len(knn._keys)}"""
                       bd=0, cursor='hand2').pack(side=_tk.LEFT, padx=5)
         
         def _toggle_m3_integration(self):
-            """M3 integration 토글"""
-            adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
+            """M3 integration ?좉?"""
+            adapter = attr_get_optional(self.core, 'llm_adapter', None) or attr_get_optional(self.core, 'llm', None)
             if adapter is None:
-                self._log('✗ LLM adapter not available')
+                self._log('??LLM adapter not available')
                 return
             
-            try:
-                if hasattr(adapter.model, 'use_m3_integration') and adapter.model.use_m3_integration:
+            with guard_context(ctx='m3/m3_core.py:18446', catch_base=False) as __m3_guard_18434_12:
+                if attr_has(adapter.model, 'use_m3_integration') and adapter.model.use_m3_integration:
                     adapter.model.use_m3_integration = False
                     self.m3_integration_btn.config(text='M3 Int Off', bg='#888800')
                     self._log('M3 integration disabled')
                 else:
-                    if hasattr(adapter.model, 'enable_m3_integration'):
+                    if attr_has(adapter.model, 'enable_m3_integration'):
                         adapter.model.enable_m3_integration()
                         self.m3_integration_btn.config(text='M3 Int On', bg='#ffff00')
                         self._log('M3 integration enabled')
                     else:
-                        self._log('✗ M3 integration not supported')
-            except Exception as e:
-                self._log(f'✗ M3 integration toggle error: {e}')
+                        self._log('??M3 integration not supported')
+ 
+
+            if __m3_guard_18434_12.error is not None:
+                e = __m3_guard_18434_12.error
+                self._log(f'??M3 integration toggle error: {e}')
         
         def _trigger_sleep(self):
             """Deep Sleep: Consolidate Traces -> Weights"""
-            adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
+            adapter = attr_get_optional(self.core, 'llm_adapter', None) or attr_get_optional(self.core, 'llm', None)
             if adapter is None:
-                self._log('✗ LLM adapter not available')
+                self._log('??LLM adapter not available')
                 return
             
             # Check for PlasticBrainPolicy (M3-Binary Brain)
-            if hasattr(adapter, 'model') and hasattr(adapter.model, 'sleep'):
+            if attr_has(adapter, 'model') and attr_has(adapter.model, 'sleep'):
                 try:
                     self._log('Initiating Deep Sleep (Memory Consolidation)...')
                     
                     def _sleep_task():
-                        try:
+                        with guard_context(ctx='m3/m3_core.py:18465', catch_base=False) as __m3_guard_18462_24:
                             adapter.model.sleep()
-                            self.after(0, lambda: self._log('✓ Deep Sleep Complete: Memories Consolidated.'))
-                        except Exception as e:
-                            self.after(0, lambda: self._log(f'✗ Sleep Error: {e}'))
+                            self.after(0, lambda: self._log('??Deep Sleep Complete: Memories Consolidated.'))
+ 
+
+                        if __m3_guard_18462_24.error is not None:
+                            e = __m3_guard_18462_24.error
+                            self.after(0, lambda: self._log(f'??Sleep Error: {e}'))
                     
                     # Run in thread to allow UI updates
                     import threading
                     threading.Thread(target=_sleep_task, daemon=True).start()
                     
                 except Exception as e:
-                    self._log(f'✗ Failed to start sleep cycle: {e}')
+                    self._log(f'??Failed to start sleep cycle: {e}')
             else:
-                self._log('✗ Deep Sleep requires PlasticBrainPolicy (1.58-bit)')
+                self._log('??Deep Sleep requires PlasticBrainPolicy (1.58-bit)')
 
         def _update_button_states(self):
-            """버튼 상태 업데이트"""
-            try:
-                adapter = getattr(self.core, 'llm_adapter', None) or getattr(self.core, 'llm', None)
+            # Update button states in GUI.
+            with guard_context(ctx='m3/m3_core.py:18496', catch_base=False) as __m3_guard_18479_12:
+                adapter = attr_get_optional(self.core, 'llm_adapter', None) or attr_get_optional(self.core, 'llm', None)
                 if adapter is None:
                     return
                 
-                # Autonomy 상태
-                if hasattr(adapter, '_auto_running') and adapter._auto_running:
+                # Autonomy ?곹깭
+                if attr_has(adapter, '_auto_running') and adapter._auto_running:
                     self.autonomy_btn.config(text='Autonomy On', bg='#00ff88')
                 else:
                     self.autonomy_btn.config(text='Autonomy Off', bg='#00aa88')
                 
-                # M3 Integration 상태
-                if hasattr(adapter.model, 'use_m3_integration') and adapter.model.use_m3_integration:
+                # M3 Integration ?곹깭
+                if attr_has(adapter.model, 'use_m3_integration') and adapter.model.use_m3_integration:
                     self.m3_integration_btn.config(text='M3 Int On', bg='#ffff00')
                 else:
                     self.m3_integration_btn.config(text='M3 Int Off', bg='#888800')
-                    
-            except Exception:
-                pass
+
+            if __m3_guard_18479_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         
         def _on_close(self):
             if self.running:
@@ -18330,3 +18605,4 @@ __all__ = [
     'build_parser',
     'main',
 ]
+

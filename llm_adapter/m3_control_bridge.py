@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from m3.attr_contract import attr_del, attr_get_optional, attr_get_required, attr_has, attr_set, guard_context, guard_eval, guard_step
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 import os
@@ -73,11 +74,12 @@ class M3ControlBridge(nn.Module):
         except Exception:
             return
         for name in ("prefix_head", "gate_head", "logit_coeff"):
-            try:
-                mod = getattr(self, name, None)
+            with guard_context(ctx='llm_adapter/m3_control_bridge.py:80', catch_base=False) as __m3_guard_76_12:
+                mod = attr_get_optional(self, name, None)
                 if isinstance(mod, nn.Linear):
-                    setattr(self, name, spectral_norm(mod))
-            except Exception:
+                    attr_set(self, name, spectral_norm(mod))
+
+            if __m3_guard_76_12.error is not None:
                 continue
 
     def _prepare_state(self, z_m3: torch.Tensor | np.ndarray | Sequence[float]) -> torch.Tensor:
@@ -162,26 +164,31 @@ def _to_module_list(obj: Any) -> Optional[List[nn.Module]]:
 def find_decoder_layers(model: nn.Module) -> List[nn.Module]:
     """Best-effort layer discovery across common decoder architectures."""
     candidates: List[Any] = []
-    try:
-        candidates.append(getattr(getattr(model, "model", None), "layers", None))
-    except Exception:
-        pass
-    try:
-        candidates.append(getattr(getattr(model, "transformer", None), "h", None))
-    except Exception:
-        pass
-    try:
-        candidates.append(getattr(getattr(model, "gpt_neox", None), "layers", None))
-    except Exception:
-        pass
-    try:
-        candidates.append(getattr(getattr(getattr(model, "model", None), "decoder", None), "layers", None))
-    except Exception:
-        pass
-    try:
-        candidates.append(getattr(model, "layers", None))
-    except Exception:
-        pass
+    with guard_context(ctx='llm_adapter/m3_control_bridge.py:167', catch_base=False) as __m3_guard_165_4:
+        candidates.append(attr_get_optional(attr_get_optional(model, "model", None), "layers", None))
+
+    if __m3_guard_165_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
+    with guard_context(ctx='llm_adapter/m3_control_bridge.py:171', catch_base=False) as __m3_guard_169_4:
+        candidates.append(attr_get_optional(attr_get_optional(model, "transformer", None), "h", None))
+
+    if __m3_guard_169_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
+    with guard_context(ctx='llm_adapter/m3_control_bridge.py:175', catch_base=False) as __m3_guard_173_4:
+        candidates.append(attr_get_optional(attr_get_optional(model, "gpt_neox", None), "layers", None))
+
+    if __m3_guard_173_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
+    with guard_context(ctx='llm_adapter/m3_control_bridge.py:179', catch_base=False) as __m3_guard_177_4:
+        candidates.append(attr_get_optional(attr_get_optional(attr_get_optional(model, "model", None), "decoder", None), "layers", None))
+
+    if __m3_guard_177_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
+    with guard_context(ctx='llm_adapter/m3_control_bridge.py:183', catch_base=False) as __m3_guard_181_4:
+        candidates.append(attr_get_optional(model, "layers", None))
+
+    if __m3_guard_181_4.error is not None:
+        logging.getLogger(__name__).exception("Swallowed exception")
 
     for c in candidates:
         out = _to_module_list(c)
@@ -203,10 +210,11 @@ class LayerGateRuntime:
 
     def close(self) -> None:
         for h in self._hooks:
-            try:
+            with guard_context(ctx='llm_adapter/m3_control_bridge.py:208', catch_base=False) as __m3_guard_206_12:
                 h.remove()
-            except Exception:
-                pass
+
+            if __m3_guard_206_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         self._hooks = []
 
     def apply(self, gates: torch.Tensor | np.ndarray | Sequence[float]) -> None:
@@ -571,11 +579,12 @@ class NeuroModulator(nn.Module):
         except Exception:
             return
         for name in ("gain_head", "bias_down", "logit_down"):
-            try:
-                mod = getattr(self, name, None)
+            with guard_context(ctx='llm_adapter/m3_control_bridge.py:578', catch_base=False) as __m3_guard_574_12:
+                mod = attr_get_optional(self, name, None)
                 if isinstance(mod, nn.Linear):
-                    setattr(self, name, spectral_norm(mod))
-            except Exception:
+                    attr_set(self, name, spectral_norm(mod))
+
+            if __m3_guard_574_12.error is not None:
                 continue
 
 
@@ -641,8 +650,9 @@ class NeuroModulatorRuntime:
 
     def close(self) -> None:
         for h in self._hooks:
-            try:
+            with guard_context(ctx='llm_adapter/m3_control_bridge.py:646', catch_base=False) as __m3_guard_644_12:
                 h.remove()
-            except Exception:
-                pass
+
+            if __m3_guard_644_12.error is not None:
+                logging.getLogger(__name__).exception("Swallowed exception")
         self._hooks = []
