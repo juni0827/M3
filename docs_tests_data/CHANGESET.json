@@ -1,374 +1,78 @@
 {
-  "base_sha": "391a2fb94c00a6495dab02f02f4807774bbef8f9",
+  "base_sha": "0d84ab4640efcbe2a7f23bd4cac082f358484484",
   "changes": [
     {
-      "added": 149352,
-      "churn": 149352,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/tokenizer.json",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 18608,
-      "churn": 18608,
-      "deleted": 0,
-      "path": "M3-main/m3/m3_core.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 9516,
-      "churn": 9516,
-      "deleted": 0,
-      "path": "M3-main/llm_adapter/llm_core.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 952,
-      "churn": 952,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/tests/build_status_packet.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 884,
-      "churn": 884,
-      "deleted": 0,
-      "path": "M3-main/llm_adapter/memory.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 834,
-      "churn": 834,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/tests/test_m3_plan_features.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 754,
-      "churn": 754,
-      "deleted": 0,
-      "path": "M3-main/run_llm_adapter.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 750,
-      "churn": 750,
-      "deleted": 0,
-      "path": "M3-main/m3/meaning_pipeline.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 704,
-      "churn": 704,
-      "deleted": 0,
-      "path": "M3-main/m3/torch_policy.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 696,
-      "churn": 696,
-      "deleted": 0,
-      "path": "M3-main/llm_adapter/config.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 658,
-      "churn": 658,
-      "deleted": 0,
-      "path": "M3-main/llm_adapter/m3_control_bridge.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 623,
-      "churn": 623,
-      "deleted": 0,
-      "path": "M3-main/m3/reward.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 533,
-      "churn": 533,
-      "deleted": 0,
-      "path": "M3-main/llm_adapter/tokenization.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 446,
-      "churn": 446,
-      "deleted": 0,
-      "path": "M3-main/llm_adapter/semantic_scorer.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 404,
+      "added": 350,
       "churn": 404,
-      "deleted": 0,
-      "path": "M3-main/llm_adapter/remote.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 310,
-      "churn": 310,
-      "deleted": 0,
-      "path": "M3-main/m3/features.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 273,
-      "churn": 273,
-      "deleted": 0,
-      "path": "M3-main/llm_adapter/m3_plastic_policy.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 228,
-      "churn": 228,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/tests/test_fail_fast_featurebank_hf_logging.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 198,
-      "churn": 198,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/tests/replay_runtime_kpis.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 196,
-      "churn": 196,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/tests/test_neuro_modulator.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 155,
-      "churn": 155,
-      "deleted": 0,
-      "path": "M3-main/m3/attr_contract.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 154,
-      "churn": 154,
-      "deleted": 0,
-      "path": "M3-main/llm_adapter/control_plane.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 135,
-      "churn": 135,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/tests/test_control_plane_prep.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 133,
-      "churn": 133,
-      "deleted": 0,
-      "path": "M3-main/llm_adapter/layers.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 129,
-      "churn": 129,
-      "deleted": 0,
-      "path": "M3-main/README.md",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 129,
-      "churn": 129,
-      "deleted": 0,
-      "path": "M3-main/m3/device.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 109,
-      "churn": 109,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/tests/validate_bus_jsonl.py",
-      "status": "A",
-      "status_raw": "A"
+      "deleted": 54,
+      "path": "docs_tests_data/CHANGESET.json",
+      "status": "M",
+      "status_raw": "M"
     },
     {
       "added": 95,
-      "churn": 95,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/STATUS_PACKET.md",
-      "status": "A",
-      "status_raw": "A"
+      "churn": 160,
+      "deleted": 65,
+      "path": "docs_tests_data/VISUAL_MAP.svg",
+      "status": "M",
+      "status_raw": "M"
     },
     {
-      "added": 74,
-      "churn": 74,
-      "deleted": 0,
-      "path": "M3-main/.github/workflows/status_packet.yml",
-      "status": "A",
-      "status_raw": "A"
+      "added": 51,
+      "churn": 65,
+      "deleted": 14,
+      "path": "docs_tests_data/CHANGE_REPORT.md",
+      "status": "M",
+      "status_raw": "M"
     },
     {
-      "added": 73,
-      "churn": 73,
-      "deleted": 0,
-      "path": "M3-main/m3/__init__.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 68,
-      "churn": 68,
-      "deleted": 0,
-      "path": "M3-main/llm_adapter/__init__.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 66,
-      "churn": 66,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/VISUAL_MAP.svg",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 66,
-      "churn": 66,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/tests/build_exception_report.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 62,
-      "churn": 62,
-      "deleted": 0,
-      "path": "M3-main/config/m3_config.example.json",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 60,
-      "churn": 60,
-      "deleted": 0,
-      "path": "M3-main/m3/io/jsonl_writer.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 57,
-      "churn": 57,
-      "deleted": 0,
-      "path": "M3-main/m3/config.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 27,
-      "churn": 27,
-      "deleted": 0,
-      "path": "M3-main/llm_adapter/meaning_pipeline.py",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 16,
-      "churn": 16,
-      "deleted": 0,
-      "path": "M3-main/.gitignore",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 14,
+      "added": 7,
       "churn": 14,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/env_profiles/env.balanced",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 8,
-      "churn": 8,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/source_revision.json",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 8,
-      "churn": 8,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/tests/fixtures/replay_chat_history.jsonl",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 6,
-      "churn": 6,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/baseline_metrics.json",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 6,
-      "churn": 6,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/replay_metrics.json",
-      "status": "A",
-      "status_raw": "A"
-    },
-    {
-      "added": 5,
-      "churn": 5,
-      "deleted": 0,
-      "path": "M3-main/m3/io/__init__.py",
-      "status": "A",
-      "status_raw": "A"
+      "deleted": 7,
+      "path": "docs_tests_data/STATUS.md",
+      "status": "M",
+      "status_raw": "M"
     },
     {
       "added": 2,
-      "churn": 2,
-      "deleted": 0,
-      "path": "M3-main/docs_tests_data/pytest.ini",
-      "status": "A",
-      "status_raw": "A"
+      "churn": 4,
+      "deleted": 2,
+      "path": "docs_tests_data/ARCHITECTURE_STATE.md",
+      "status": "M",
+      "status_raw": "M"
     },
     {
-      "added": 1,
-      "churn": 1,
-      "deleted": 0,
-      "path": "M3-git",
-      "status": "A",
-      "status_raw": "A"
+      "added": 2,
+      "churn": 4,
+      "deleted": 2,
+      "path": "docs_tests_data/BACKLOG.md",
+      "status": "M",
+      "status_raw": "M"
+    },
+    {
+      "added": 2,
+      "churn": 4,
+      "deleted": 2,
+      "path": "docs_tests_data/CLASS_CATALOG.md",
+      "status": "M",
+      "status_raw": "M"
+    },
+    {
+      "added": 2,
+      "churn": 4,
+      "deleted": 2,
+      "path": "docs_tests_data/RUNBOOK.md",
+      "status": "M",
+      "status_raw": "M"
+    },
+    {
+      "added": 2,
+      "churn": 4,
+      "deleted": 2,
+      "path": "docs_tests_data/VISUAL_MAP.md",
+      "status": "M",
+      "status_raw": "M"
     }
   ],
-  "head_sha": "0d84ab4640efcbe2a7f23bd4cac082f358484484"
+  "head_sha": "e36b8e68f0c97c8cf440d0e0a6a8baf516304fa2"
 }
