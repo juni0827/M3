@@ -13,8 +13,8 @@
 <g font-family="Inter, Arial, sans-serif">
 <rect x="24" y="24" width="1412" height="72" rx="16" fill="#111827" fill-opacity="0.94" stroke="#334155" stroke-width="1" filter="url(#cardShadow)"/>
 <text x="48" y="66" fill="#f1f5f9" font-size="30" font-weight="700">M3 Architecture Visual Dashboard</text>
-<text x="48" y="95" fill="#94a3b8" font-size="14">Generated: 2026-03-05T01:04:13+00:00  |  Commit: e36b8e68f0c9  |  Branch: main</text>
-<text x="48" y="113" fill="#94a3b8" font-size="12">Base: 0d84ab4640efcbe2a7f23bd4cac082f358484484  |  Head: e36b8e68f0c97c8cf440d0e0a6a8baf516304fa2</text>
+<text x="48" y="95" fill="#94a3b8" font-size="14">Generated: 2026-03-06T01:08:29+00:00  |  Commit: fea729f9775f  |  Branch: main</text>
+<text x="48" y="113" fill="#94a3b8" font-size="12">Base: e36b8e68f0c97c8cf440d0e0a6a8baf516304fa2  |  Head: fea729f9775ffe723252ed4cf6a642802d8426cf</text>
 <rect x="24" y="122" width="456" height="180" rx="14" fill="#17223a" fill-opacity="0.94" stroke="#334155" filter="url(#cardShadow)"/>
 <text x="44" y="148" fill="#cbd5e1" font-size="16" font-weight="600">Module graph</text>
 <text x="44" y="170" fill="#9ca3af" font-size="12">0 dependencies visualized</text>
@@ -49,13 +49,13 @@
 <text x="988" y="238" fill="#9ca3af" font-size="10">1.</text>
 <rect x="1008" y="229" width="620" height="12" fill="#22c55e" opacity="0.9"/>
 <text x="1008" y="245" fill="#e2e8f0" font-size="10">docs_tests_data/CHANGESET.json</text>
-<text x="1450" y="245" fill="#cbd5e1" font-size="10" text-anchor="end">404</text>
+<text x="1450" y="245" fill="#cbd5e1" font-size="10" text-anchor="end">400</text>
 <text x="988" y="262" fill="#9ca3af" font-size="10">2.</text>
-<rect x="1008" y="253" width="245" height="12" fill="#22c55e" opacity="0.9"/>
+<rect x="1008" y="253" width="241" height="12" fill="#22c55e" opacity="0.9"/>
 <text x="1008" y="269" fill="#e2e8f0" font-size="10">docs_tests_data/VISUAL_MAP.svg</text>
-<text x="1450" y="269" fill="#cbd5e1" font-size="10" text-anchor="end">160</text>
+<text x="1450" y="269" fill="#cbd5e1" font-size="10" text-anchor="end">156</text>
 <text x="988" y="286" fill="#9ca3af" font-size="10">3.</text>
-<rect x="1008" y="277" width="99" height="12" fill="#22c55e" opacity="0.9"/>
+<rect x="1008" y="277" width="100" height="12" fill="#22c55e" opacity="0.9"/>
 <text x="1008" y="293" fill="#e2e8f0" font-size="10">docs_tests_data/CHANGE_REPORT.md</text>
 <text x="1450" y="293" fill="#cbd5e1" font-size="10" text-anchor="end">65</text>
 <text x="988" y="310" fill="#9ca3af" font-size="10">4.</text>
@@ -75,20 +75,20 @@
 <text x="44" y="372" fill="#9ca3af" font-size="12">status  |  file  | + lines  | - lines  | churn</text>
 <text x="44" y="398" fill="#94a3b8" font-size="11"> M</text>
 <text x="86" y="398" fill="#bfdbfe" font-size="11" text-anchor="start">docs_tests_data/CHANGESET.json</text>
-<text x="1160" y="398" fill="#cbd5e1" font-size="11" text-anchor="end">  350</text>
-<text x="1248" y="398" fill="#f9fafb" font-size="11" text-anchor="end">   54</text>
-<text x="1360" y="398" fill="#86efac" font-size="11" text-anchor="end">   404</text>
+<text x="1160" y="398" fill="#cbd5e1" font-size="11" text-anchor="end">   52</text>
+<text x="1248" y="398" fill="#f9fafb" font-size="11" text-anchor="end">  348</text>
+<text x="1360" y="398" fill="#86efac" font-size="11" text-anchor="end">   400</text>
 <line x1="44" y1="402" x2="1432" y2="402" stroke="#1f2937" stroke-width="1"/>
 <text x="44" y="418" fill="#94a3b8" font-size="11"> M</text>
 <text x="86" y="418" fill="#bfdbfe" font-size="11" text-anchor="start">docs_tests_data/VISUAL_MAP.svg</text>
-<text x="1160" y="418" fill="#cbd5e1" font-size="11" text-anchor="end">   95</text>
-<text x="1248" y="418" fill="#f9fafb" font-size="11" text-anchor="end">   65</text>
-<text x="1360" y="418" fill="#86efac" font-size="11" text-anchor="end">   160</text>
+<text x="1160" y="418" fill="#cbd5e1" font-size="11" text-anchor="end">   63</text>
+<text x="1248" y="418" fill="#f9fafb" font-size="11" text-anchor="end">   93</text>
+<text x="1360" y="418" fill="#86efac" font-size="11" text-anchor="end">   156</text>
 <line x1="44" y1="422" x2="1432" y2="422" stroke="#1f2937" stroke-width="1"/>
 <text x="44" y="438" fill="#94a3b8" font-size="11"> M</text>
 <text x="86" y="438" fill="#bfdbfe" font-size="11" text-anchor="start">docs_tests_data/CHANGE_REPORT.md</text>
-<text x="1160" y="438" fill="#cbd5e1" font-size="11" text-anchor="end">   51</text>
-<text x="1248" y="438" fill="#f9fafb" font-size="11" text-anchor="end">   14</text>
+<text x="1160" y="438" fill="#cbd5e1" font-size="11" text-anchor="end">   14</text>
+<text x="1248" y="438" fill="#f9fafb" font-size="11" text-anchor="end">   51</text>
 <text x="1360" y="438" fill="#86efac" font-size="11" text-anchor="end">    65</text>
 <line x1="44" y1="442" x2="1432" y2="442" stroke="#1f2937" stroke-width="1"/>
 <text x="44" y="458" fill="#94a3b8" font-size="11"> M</text>

@@ -1,26 +1,26 @@
 {
-  "base_sha": "0d84ab4640efcbe2a7f23bd4cac082f358484484",
+  "base_sha": "e36b8e68f0c97c8cf440d0e0a6a8baf516304fa2",
   "changes": [
     {
-      "added": 350,
-      "churn": 404,
-      "deleted": 54,
+      "added": 52,
+      "churn": 400,
+      "deleted": 348,
       "path": "docs_tests_data/CHANGESET.json",
       "status": "M",
       "status_raw": "M"
     },
     {
-      "added": 95,
-      "churn": 160,
-      "deleted": 65,
+      "added": 63,
+      "churn": 156,
+      "deleted": 93,
       "path": "docs_tests_data/VISUAL_MAP.svg",
       "status": "M",
       "status_raw": "M"
     },
     {
-      "added": 51,
+      "added": 14,
       "churn": 65,
-      "deleted": 14,
+      "deleted": 51,
       "path": "docs_tests_data/CHANGE_REPORT.md",
       "status": "M",
       "status_raw": "M"
@@ -74,5 +74,5 @@
       "status_raw": "M"
     }
   ],
-  "head_sha": "e36b8e68f0c97c8cf440d0e0a6a8baf516304fa2"
+  "head_sha": "fea729f9775ffe723252ed4cf6a642802d8426cf"
 }
