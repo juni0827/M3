@@ -1,35 +1,19 @@
 {
-  "base_sha": "5ba5b05512d1428403f97d8560f05dd186964888",
+  "base_sha": "68b157828f3149911af388ceec83975bff815712",
   "changes": [
-    {
-      "added": 38,
-      "churn": 76,
-      "deleted": 38,
-      "path": "docs_tests_data/VISUAL_MAP.svg",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 23,
-      "churn": 46,
-      "deleted": 23,
-      "path": "docs_tests_data/CHANGESET.json",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 7,
-      "churn": 14,
-      "deleted": 7,
-      "path": "docs_tests_data/CHANGE_REPORT.md",
-      "status": "M",
-      "status_raw": "M"
-    },
     {
       "added": 6,
       "churn": 12,
       "deleted": 6,
       "path": "docs_tests_data/STATUS.md",
+      "status": "M",
+      "status_raw": "M"
+    },
+    {
+      "added": 4,
+      "churn": 8,
+      "deleted": 4,
+      "path": "docs_tests_data/CHANGE_REPORT.md",
       "status": "M",
       "status_raw": "M"
     },
@@ -46,6 +30,14 @@
       "churn": 4,
       "deleted": 2,
       "path": "docs_tests_data/BACKLOG.md",
+      "status": "M",
+      "status_raw": "M"
+    },
+    {
+      "added": 2,
+      "churn": 4,
+      "deleted": 2,
+      "path": "docs_tests_data/CHANGESET.json",
       "status": "M",
       "status_raw": "M"
     },
@@ -72,7 +64,15 @@
       "path": "docs_tests_data/VISUAL_MAP.md",
       "status": "M",
       "status_raw": "M"
+    },
+    {
+      "added": 2,
+      "churn": 4,
+      "deleted": 2,
+      "path": "docs_tests_data/VISUAL_MAP.svg",
+      "status": "M",
+      "status_raw": "M"
     }
   ],
-  "head_sha": "68b157828f3149911af388ceec83975bff815712"
+  "head_sha": "7a1b0bddb426d23f21bcac64e174c8b8f43a4d15"
 }
