@@ -1,7 +1,7 @@
 # ARCHITECTURE_STATE
 
-- Generated: 2026-05-30T01:53:10+00:00
-- Commit: `aa2479b763275370a46c88147232e6545c616ab5`
+- Generated: 2026-05-31T02:07:03+00:00
+- Commit: `8c19753a00080dd75932a85b204dc169b674ab88`
 - Branch: `main`
 - Repro seed/config: deterministic (no randomness used in generator)
 
