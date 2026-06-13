@@ -1,7 +1,7 @@
 # RUNBOOK
 
-- Generated: 2026-06-12T02:12:15+00:00
-- Commit: `c6602b461b4c50c0cb24bdc00558e783d67eeabc`
+- Generated: 2026-06-13T02:04:45+00:00
+- Commit: `b244a938176ff403079c198e7bafe42f8813df8a`
 - Branch: `main`
 - Repro seed/config: deterministic (no randomness used in generator)
 
