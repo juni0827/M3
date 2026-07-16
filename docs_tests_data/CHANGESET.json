@@ -1,19 +1,35 @@
 {
-  "base_sha": "b1f6a412a01da4be55b4c247e5ba57df986ec146",
+  "base_sha": "1e76cf0bfca29b5a8f3674d00aaca30cea6882a6",
   "changes": [
+    {
+      "added": 38,
+      "churn": 76,
+      "deleted": 38,
+      "path": "docs_tests_data/VISUAL_MAP.svg",
+      "status": "M",
+      "status_raw": "M"
+    },
+    {
+      "added": 23,
+      "churn": 46,
+      "deleted": 23,
+      "path": "docs_tests_data/CHANGESET.json",
+      "status": "M",
+      "status_raw": "M"
+    },
+    {
+      "added": 7,
+      "churn": 14,
+      "deleted": 7,
+      "path": "docs_tests_data/CHANGE_REPORT.md",
+      "status": "M",
+      "status_raw": "M"
+    },
     {
       "added": 6,
       "churn": 12,
       "deleted": 6,
       "path": "docs_tests_data/STATUS.md",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 4,
-      "churn": 8,
-      "deleted": 4,
-      "path": "docs_tests_data/CHANGE_REPORT.md",
       "status": "M",
       "status_raw": "M"
     },
@@ -30,14 +46,6 @@
       "churn": 4,
       "deleted": 2,
       "path": "docs_tests_data/BACKLOG.md",
-      "status": "M",
-      "status_raw": "M"
-    },
-    {
-      "added": 2,
-      "churn": 4,
-      "deleted": 2,
-      "path": "docs_tests_data/CHANGESET.json",
       "status": "M",
       "status_raw": "M"
     },
@@ -64,15 +72,7 @@
       "path": "docs_tests_data/VISUAL_MAP.md",
       "status": "M",
       "status_raw": "M"
-    },
-    {
-      "added": 2,
-      "churn": 4,
-      "deleted": 2,
-      "path": "docs_tests_data/VISUAL_MAP.svg",
-      "status": "M",
-      "status_raw": "M"
     }
   ],
-  "head_sha": "1e76cf0bfca29b5a8f3674d00aaca30cea6882a6"
+  "head_sha": "1d8f598a0f449c126a84d8f7ecc05c41bcdb1767"
 }
