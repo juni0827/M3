@@ -13,8 +13,8 @@
 <g font-family="Inter, Arial, sans-serif">
 <rect x="24" y="24" width="1412" height="72" rx="16" fill="#111827" fill-opacity="0.94" stroke="#334155" stroke-width="1" filter="url(#cardShadow)"/>
 <text x="48" y="66" fill="#f1f5f9" font-size="30" font-weight="700">M3 Architecture Visual Dashboard</text>
-<text x="48" y="95" fill="#94a3b8" font-size="14">Generated: 2026-07-22T01:20:39+00:00  |  Commit: 4bb3bd4594c4  |  Branch: main</text>
-<text x="48" y="113" fill="#94a3b8" font-size="12">Base: 192a3fcca4defb3be81ffd13a0d2b7ed1aab2bf5  |  Head: 4bb3bd4594c4e119a397a88185b1f1662589500d</text>
+<text x="48" y="95" fill="#94a3b8" font-size="14">Generated: 2026-07-23T01:27:50+00:00  |  Commit: a71f3452e236  |  Branch: main</text>
+<text x="48" y="113" fill="#94a3b8" font-size="12">Base: 4bb3bd4594c4e119a397a88185b1f1662589500d  |  Head: a71f3452e236220e7fd9f5712a329aaf6a559f35</text>
 <rect x="24" y="122" width="456" height="180" rx="14" fill="#17223a" fill-opacity="0.94" stroke="#334155" filter="url(#cardShadow)"/>
 <text x="44" y="148" fill="#cbd5e1" font-size="16" font-weight="600">Module graph</text>
 <text x="44" y="170" fill="#9ca3af" font-size="12">0 dependencies visualized</text>
