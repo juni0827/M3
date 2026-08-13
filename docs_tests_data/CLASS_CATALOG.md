@@ -1,7 +1,7 @@
 # CLASS_CATALOG
 
-- Generated: 2026-08-12T00:54:14+00:00
-- Commit: `d04a9fe5274c3c6de6f3b0800180334481ff38f7`
+- Generated: 2026-08-13T00:55:44+00:00
+- Commit: `036fc4c622e21aea1bb9c8b6438066dd749451a8`
 - Branch: `main`
 - Repro seed/config: deterministic (no randomness used in generator)
 
