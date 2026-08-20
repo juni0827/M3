@@ -1,7 +1,7 @@
 # VISUAL_MAP
 
-- Generated: 2026-08-19T00:31:19+00:00
-- Commit: `cd42bf625ccc212dc35df1018a44621667efaeb4`
+- Generated: 2026-08-20T00:31:11+00:00
+- Commit: `4070af732af1bff224306f3813b0202d72bf725c`
 - Branch: `main`
 - Repro seed/config: deterministic (no randomness used in generator)
 
