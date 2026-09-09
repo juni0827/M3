@@ -1,5 +1,5 @@
 {
-  "base_sha": "566e27d85468324e23f43aeecae1fc0b9a72994d",
+  "base_sha": "39da19067f4e2dccd852494ccd5d3298656fc80b",
   "changes": [
     {
       "added": 38,
@@ -74,5 +74,5 @@
       "status_raw": "M"
     }
   ],
-  "head_sha": "39da19067f4e2dccd852494ccd5d3298656fc80b"
+  "head_sha": "a592ea2f2850e0dc008c70ce4fd7880cad5e9edd"
 }
