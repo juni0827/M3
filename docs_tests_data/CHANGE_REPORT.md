@@ -1,14 +1,14 @@
 # CHANGE_REPORT
 
-- Generated: 2026-10-26T02:02:30+00:00
-- Commit: `277a9c3fbb7aa9f55d51645f573fe675aaae77ed`
+- Generated: 2026-10-27T02:39:52+00:00
+- Commit: `17d4388d30e7ba7f64e7c2407dc14c73a36d18d7`
 - Branch: `main`
 - Repro seed/config: deterministic (no randomness used in generator)
 
 ## Diff Context
 
-- Base SHA: `c64022f2b30286a2514f6fe9bdc502b2ba6dacf7`
-- Head SHA: `277a9c3fbb7aa9f55d51645f573fe675aaae77ed`
+- Base SHA: `277a9c3fbb7aa9f55d51645f573fe675aaae77ed`
+- Head SHA: `17d4388d30e7ba7f64e7c2407dc14c73a36d18d7`
 - Changed files: `9`
 
 ## Changed Files
