@@ -1,26 +1,26 @@
 # CHANGE_REPORT
 
-- Generated: 2026-11-20T04:38:53+00:00
-- Commit: `45d479bb28d5da8cdcf69fe881a16ffffbfb4cba`
+- Generated: 2026-11-21T04:32:49+00:00
+- Commit: `76ee3615df4fd9a122a91a278c3baa8f726167a6`
 - Branch: `main`
 - Repro seed/config: deterministic (no randomness used in generator)
 
 ## Diff Context
 
-- Base SHA: `7d26a492b90ec3a4354191e67dc75d4736745ac8`
-- Head SHA: `45d479bb28d5da8cdcf69fe881a16ffffbfb4cba`
+- Base SHA: `45d479bb28d5da8cdcf69fe881a16ffffbfb4cba`
+- Head SHA: `76ee3615df4fd9a122a91a278c3baa8f726167a6`
 - Changed files: `9`
 
 ## Changed Files
 
 | Status | File | + | - | Churn |
 |---|---|---:|---:|---:|
-| `M` | `docs_tests_data/VISUAL_MAP.svg` | 38 | 38 | 76 |
-| `M` | `docs_tests_data/CHANGESET.json` | 23 | 23 | 46 |
-| `M` | `docs_tests_data/CHANGE_REPORT.md` | 7 | 7 | 14 |
 | `M` | `docs_tests_data/STATUS.md` | 6 | 6 | 12 |
+| `M` | `docs_tests_data/CHANGE_REPORT.md` | 4 | 4 | 8 |
 | `M` | `docs_tests_data/ARCHITECTURE_STATE.md` | 2 | 2 | 4 |
 | `M` | `docs_tests_data/BACKLOG.md` | 2 | 2 | 4 |
+| `M` | `docs_tests_data/CHANGESET.json` | 2 | 2 | 4 |
 | `M` | `docs_tests_data/CLASS_CATALOG.md` | 2 | 2 | 4 |
 | `M` | `docs_tests_data/RUNBOOK.md` | 2 | 2 | 4 |
 | `M` | `docs_tests_data/VISUAL_MAP.md` | 2 | 2 | 4 |
+| `M` | `docs_tests_data/VISUAL_MAP.svg` | 2 | 2 | 4 |
